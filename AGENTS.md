@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `roigada/template-go` using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in GitHub Issues for `roigada/payment-gateway` using the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
