@@ -1,0 +1,3 @@
+# Payment gateway package layout
+
+The payment gateway keeps the template's small layer-first hexagonal layout while replacing the sample Task domain with Payment language: `cmd/paymentgateway` wires startup, `internal/domain` owns Payment invariants and state transitions, `internal/app` owns use cases and ports, `internal/httpapi` exposes the public gateway API, `internal/postgres` persists Payments and public idempotency records, `internal/mockbank` implements the outbound Mock Bank HTTP adapter, and `internal/uuidgen` generates gateway-owned Payment IDs and bank operation keys. This preserves the template's dependency direction while making the mock bank a real project adapter instead of a sample notification integration.

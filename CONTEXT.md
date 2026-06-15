@@ -1,48 +1,116 @@
-# Task Management
+# Payment Gateway
 
-This context models a minimal task list used to demonstrate a reusable CRUD service template.
+This context models a payment gateway between an e-commerce order service and a mock bank.
 
 ## Language
 
-**Task**:
-A unit of work that can be tracked until completion.
-_Avoid_: Item, todo
+**Payment**:
+The gateway-owned record of an attempt to collect money for an order through the mock bank.
+_Avoid_: Transaction, charge, payment request
 
-**Task ID**:
-The stable identity of a **Task**. It is compared as an opaque identity, not interpreted as a meaningful format.
-_Avoid_: ID string, database ID
+**Payment ID**:
+The stable gateway-owned identity of a **Payment**. It uses the `pay_<uuid>` form and is distinct from the **Order ID** and from any identity returned by the **Mock Bank**.
+_Avoid_: Transaction ID, order ID, bank ID
 
-**Title**:
-The required short name of a **Task**.
-_Avoid_: Name, summary
+**Pending**:
+A **Payment** whose authorization outcome is not yet known because the **Mock Bank** did not return a definitive approval or decline.
+_Avoid_: Failed, processing
 
-**Reopen**:
-To return a completed **Task** to an incomplete state.
-_Avoid_: Mark incomplete
+**Authorized**:
+A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and can be captured or voided.
+_Avoid_: Approved, held
+
+**Declined**:
+A **Payment** whose authorization was refused by the **Mock Bank**.
+_Avoid_: Rejected, failed
+
+**Decline Reason**:
+A gateway-owned explanation for a **Declined** **Payment**.
+_Avoid_: Bank error, failure reason
+
+**Captured**:
+A **Payment** whose full authorized **Amount** has been collected.
+_Avoid_: Settled, charged
+
+**Voided**:
+A **Payment** whose authorization was cancelled before capture.
+_Avoid_: Cancelled, deleted
+
+**Refunded**:
+A **Payment** whose full captured **Amount** has been returned.
+_Avoid_: Reversed, reimbursed
+
+**Payment Status**:
+The current lifecycle position of a **Payment**.
+_Avoid_: State
+
+**Order ID**:
+The identity of the order that a **Payment** belongs to. The payment gateway treats it as an external reference owned by the order service.
+_Avoid_: Order, purchase ID
+
+**Customer ID**:
+The identity of the customer whose mock bank account funds a **Payment**. The payment gateway treats it as an external reference.
+_Avoid_: User ID, account ID
+
+**Amount**:
+The US-dollar value of a **Payment**, expressed in cents. A **Payment** has exactly one **Amount**.
+_Avoid_: Price, total, money
+
+**Currency**:
+The monetary unit for a **Payment**. The payment gateway only uses US dollars.
+_Avoid_: Currency code, settlement currency
+
+**Card Details**:
+The card number, CVV, and expiry values supplied for authorizing a **Payment** with the **Mock Bank**.
+_Avoid_: Payment token, card account
+
+**Mock Bank**:
+The single fictional bank that approves, declines, captures, voids, and refunds payments.
+_Avoid_: Card network, issuer, acquirer
+
+**Bank Reference**:
+An identity assigned by the **Mock Bank** to one of its payment operations. Bank references are used to continue communication with the **Mock Bank**, but they are not **Payment IDs**.
+_Avoid_: Payment ID, public ID
+
+**Authorize**:
+To ask the **Mock Bank** to reserve the full **Amount** for a **Payment**.
+_Avoid_: Charge, pay
+
+**Authorization Retry**:
+An attempt to resolve a **Pending** **Payment** by asking the **Mock Bank** again for the authorization outcome.
+_Avoid_: Recreate payment, duplicate authorization
+
+**Authorization Fingerprint**:
+A non-reversible value used to check whether an **Authorization Retry** matches the original card and amount.
+_Avoid_: Stored card, card token
+
+**Capture**:
+To collect the full authorized **Amount** for a **Payment**.
+_Avoid_: Settle, complete
+
+**Void**:
+To cancel an authorized **Payment** before it is captured.
+_Avoid_: Cancel, delete
+
+**Refund**:
+To return the full captured **Amount** for a **Payment**.
+_Avoid_: Reimburse, reverse
+
+**Idempotency Key**:
+A caller-provided operation identity used to make retried payment operations produce one result.
+_Avoid_: Request ID, correlation ID
+
+**Bank Operation Key**:
+A gateway-generated operation identity sent to the **Mock Bank** so retried bank calls produce one bank result.
+_Avoid_: Idempotency Key, request ID
 
 ## Relationships
 
-- A **Task** has one completion state.
-- A **Task** has exactly one **Task ID**.
-- A **Task** has exactly one **Title**.
-- A **Title** cannot be empty.
-- A completed **Task** can be reopened.
-- Deleting a **Task** removes it; deletion is not a completion state.
-
-## Example dialogue
-
-> **Dev:** "When a **Task** is marked complete, should it disappear from the list?"
-> **Domain expert:** "No - completion changes the **Task** state; deletion is a separate action."
->
-> **Dev:** "If a **Task** was completed by mistake, can it be reopened?"
-> **Domain expert:** "Yes - a completed **Task** can be reopened."
->
-> **Dev:** "Is a deleted **Task** still part of the task list with a deleted status?"
-> **Domain expert:** "No - deleting a **Task** removes it from the task list."
->
-> **Dev:** "Can we create a **Task** without a **Title** and fill it in later?"
-> **Domain expert:** "No - every **Task** needs a non-empty **Title**."
-
-## Flagged ambiguities
-
-- "object" and "item" were used as placeholders - resolved: the canonical domain term is **Task**.
+- A **Payment** has exactly one **Payment ID**.
+- A **Payment** references exactly one **Order ID**.
+- A **Payment** references exactly one **Customer ID**.
+- A **Payment** has exactly one **Amount**.
+- A **Payment** has exactly one **Currency**.
+- A **Payment** has exactly one **Payment Status**.
+- Multiple **Payments** may reference the same **Order ID**.
+- Public **Payment Status** values are `pending`, `authorized`, `declined`, `captured`, `voided`, and `refunded`.
