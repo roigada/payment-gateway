@@ -1,0 +1,3 @@
+# Task repository separates create and update
+
+The application repository port exposes `Create(ctx, task)` and `Update(ctx, task)` rather than a single `Save(ctx, task)`. Creation requires the Task ID to be absent, but duplicate generated IDs are treated as unexpected infrastructure failures rather than a named application outcome. Update requires the Task to exist and returns `ErrTaskNotFound` when it does not. The Postgres adapter uses separate `INSERT` and `UPDATE` statements instead of an upsert so duplicate generated IDs are not silently converted into overwrites, while optimistic locking remains out of scope for the starter template.

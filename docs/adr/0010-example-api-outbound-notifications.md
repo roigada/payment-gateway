@@ -1,0 +1,3 @@
+# Example API outbound notifications
+
+Task creation and completion use an app-owned `TaskNotifier` port implemented by an `internal/exampleapi` outbound HTTP adapter. The application depends on task notification capabilities rather than a broad provider-shaped client, while the adapter can keep a reusable provider client internally for future Example API requests. Notifications are sent synchronously after the local Task has been persisted, use Bearer token authentication against a configurable Example API endpoint, and remain an internal side effect of the existing Task HTTP API rather than becoming a public notification-status contract.
