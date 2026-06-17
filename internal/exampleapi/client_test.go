@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/roigada/template-go/internal/app"
-	"github.com/roigada/template-go/internal/exampleapi"
+	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/exampleapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

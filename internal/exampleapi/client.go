@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/roigada/template-go/internal/app"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 const defaultTimeout = 5 * time.Second

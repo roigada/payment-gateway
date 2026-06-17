@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/roigada/template-go/internal/app"
-	"github.com/roigada/template-go/internal/domain"
-	"github.com/roigada/template-go/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
+	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,6 +36,24 @@ func TestHealthzReturnsNoContent(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body.String())
 	assert.Empty(t, rec.Body.String())
+}
+
+func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
+	api := newTaskAPITest(t)
+	rec := api.request(t, http.MethodGet, "/readyz", "")
+
+	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body.String())
+	assert.Empty(t, rec.Body.String())
+	assert.True(t, api.readiness.checked)
+}
+
+func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
+	api := newTaskAPITest(t)
+	api.readiness.err = errors.New("postgres unavailable")
+	rec := api.request(t, http.MethodGet, "/readyz", "")
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "service_unavailable", "Service Unavailable")
 }
 
 func TestUnversionedTaskRoutesAreNotRegistered(t *testing.T) {
@@ -182,18 +201,21 @@ func TestDeleteTaskReturnsNotFound(t *testing.T) {
 }
 
 type taskAPITest struct {
-	tasks   *taskUseCasesFake
-	handler http.Handler
+	tasks     *taskUseCasesFake
+	readiness *readinessCheckerFake
+	handler   http.Handler
 }
 
 func newTaskAPITest(t *testing.T) *taskAPITest {
 	t.Helper()
 
 	tasks := &taskUseCasesFake{}
+	readiness := &readinessCheckerFake{}
 
 	return &taskAPITest{
-		tasks:   tasks,
-		handler: httpapi.NewServer(tasks, discardLogger()),
+		tasks:     tasks,
+		readiness: readiness,
+		handler:   httpapi.NewServer(tasks, readiness, discardLogger()),
 	}
 }
 
@@ -263,6 +285,16 @@ type taskUseCasesFake struct {
 
 	deleteTaskID  string
 	deleteTaskErr error
+}
+
+type readinessCheckerFake struct {
+	checked bool
+	err     error
+}
+
+func (f *readinessCheckerFake) CheckReady(context.Context) error {
+	f.checked = true
+	return f.err
 }
 
 func (f *taskUseCasesFake) CreateTask(_ context.Context, title string) (app.TaskResult, error) {

@@ -3,7 +3,7 @@ package app
 import (
 	"errors"
 
-	"github.com/roigada/template-go/internal/domain"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type TaskErrorKind string

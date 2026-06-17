@@ -5,13 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/roigada/template-go/internal/app"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 type Server struct {
-	handler     http.Handler
-	logger      *slog.Logger
-	taskService taskUseCases
+	handler   http.Handler
+	logger    *slog.Logger
+	tasks     taskUseCases
+	readiness readinessChecker
 }
 
 type taskUseCases interface {
@@ -23,14 +24,19 @@ type taskUseCases interface {
 	DeleteTask(ctx context.Context, id string) error
 }
 
-func NewServer(taskService taskUseCases, logger *slog.Logger) *Server {
+type readinessChecker interface {
+	CheckReady(ctx context.Context) error
+}
+
+func NewServer(tasks taskUseCases, readiness readinessChecker, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	server := &Server{
-		logger:      logger,
-		taskService: taskService,
+		logger:    logger,
+		tasks:     tasks,
+		readiness: readiness,
 	}
 	server.handler = server.routes()
 	return server
@@ -44,6 +50,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /v1/tasks", s.createTask)
 	mux.HandleFunc("GET /v1/tasks", s.listTasks)
 	mux.HandleFunc("GET /v1/tasks/{task_id}", s.getTask)
@@ -55,5 +62,18 @@ func (s *Server) routes() http.Handler {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if s.readiness == nil {
+		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
+		return
+	}
+	if err := s.readiness.CheckReady(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }

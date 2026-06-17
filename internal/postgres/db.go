@@ -20,3 +20,19 @@ func Connect(ctx context.Context, databaseURL string) (*sql.DB, error) {
 
 	return db, nil
 }
+
+func Open(databaseURL string) (*sql.DB, error) {
+	return sql.Open("pgx", databaseURL)
+}
+
+type ReadinessChecker struct {
+	db *sql.DB
+}
+
+func NewReadinessChecker(db *sql.DB) ReadinessChecker {
+	return ReadinessChecker{db: db}
+}
+
+func (c ReadinessChecker) CheckReady(ctx context.Context) error {
+	return c.db.PingContext(ctx)
+}
