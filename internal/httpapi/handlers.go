@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/roigada/template-go/internal/app"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 const (

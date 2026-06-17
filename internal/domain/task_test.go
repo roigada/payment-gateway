@@ -3,7 +3,7 @@ package domain_test
 import (
 	"testing"
 
-	"github.com/roigada/template-go/internal/domain"
+	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/roigada/template-go/internal/domain"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 var ErrTaskNotFound = errors.New("task not found")

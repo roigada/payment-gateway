@@ -5,13 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/roigada/template-go/internal/app"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 type Server struct {
-	handler     http.Handler
-	logger      *slog.Logger
-	taskService taskUseCases
+	handler          http.Handler
+	logger           *slog.Logger
+	taskService      taskUseCases
+	readinessChecker readinessChecker
 }
 
 type taskUseCases interface {
@@ -23,14 +24,26 @@ type taskUseCases interface {
 	DeleteTask(ctx context.Context, id string) error
 }
 
+type readinessChecker interface {
+	PingContext(ctx context.Context) error
+}
+
 func NewServer(taskService taskUseCases, logger *slog.Logger) *Server {
+	return NewServerWithReadiness(taskService, logger, alwaysReady{})
+}
+
+func NewServerWithReadiness(taskService taskUseCases, logger *slog.Logger, readinessChecker readinessChecker) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if readinessChecker == nil {
+		readinessChecker = alwaysReady{}
+	}
 
 	server := &Server{
-		logger:      logger,
-		taskService: taskService,
+		logger:           logger,
+		taskService:      taskService,
+		readinessChecker: readinessChecker,
 	}
 	server.handler = server.routes()
 	return server
@@ -44,6 +57,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /v1/tasks", s.createTask)
 	mux.HandleFunc("GET /v1/tasks", s.listTasks)
 	mux.HandleFunc("GET /v1/tasks/{task_id}", s.getTask)
@@ -56,4 +70,19 @@ func (s *Server) routes() http.Handler {
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if err := s.readinessChecker.PingContext(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "database unavailable")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type alwaysReady struct{}
+
+func (alwaysReady) PingContext(context.Context) error {
+	return nil
 }
