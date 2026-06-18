@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/roigada/template-go/internal/app"
-	"github.com/roigada/template-go/internal/domain"
-	"github.com/roigada/template-go/internal/testsupport"
+	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
+	"github.com/roigada/payment-gateway/internal/testsupport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

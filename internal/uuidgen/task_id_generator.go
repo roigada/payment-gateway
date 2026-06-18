@@ -2,7 +2,7 @@ package uuidgen
 
 import (
 	"github.com/google/uuid"
-	"github.com/roigada/template-go/internal/domain"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type TaskIDGenerator struct{}

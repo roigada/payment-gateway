@@ -5,14 +5,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/roigada/template-go/internal/app"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 const (
-	errorCodeInternalServer   = "internal_server_error"
-	errorCodeInvalidJSONBody  = "invalid_json_body"
-	errorCodeInvalidTaskTitle = "invalid_task_title"
-	errorCodeTaskNotFound     = "task_not_found"
+	errorCodeInternalServer     = "internal_server_error"
+	errorCodeInvalidJSONBody    = "invalid_json_body"
+	errorCodeServiceUnavailable = "service_unavailable"
+	errorCodeInvalidTaskTitle   = "invalid_task_title"
+	errorCodeTaskNotFound       = "task_not_found"
 )
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +30,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskService.CreateTask(r.Context(), request.Title)
+	task, err := s.tasks.CreateTask(r.Context(), request.Title)
 	if err != nil {
 		writeTaskServiceError(w, err)
 		return
@@ -40,7 +41,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := s.taskService.ListTasks(r.Context())
+	tasks, err := s.tasks.ListTasks(r.Context())
 	if err != nil {
 		writeTaskServiceError(w, err)
 		return
@@ -50,7 +51,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.taskService.GetTask(r.Context(), r.PathValue("task_id"))
+	task, err := s.tasks.GetTask(r.Context(), r.PathValue("task_id"))
 	if err != nil {
 		writeTaskServiceError(w, err)
 		return
@@ -60,7 +61,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.taskService.CompleteTask(r.Context(), r.PathValue("task_id"))
+	task, err := s.tasks.CompleteTask(r.Context(), r.PathValue("task_id"))
 	if err != nil {
 		writeTaskServiceError(w, err)
 		return
@@ -70,7 +71,7 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reopenTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.taskService.ReopenTask(r.Context(), r.PathValue("task_id"))
+	task, err := s.tasks.ReopenTask(r.Context(), r.PathValue("task_id"))
 	if err != nil {
 		writeTaskServiceError(w, err)
 		return
@@ -80,7 +81,7 @@ func (s *Server) reopenTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
-	if err := s.taskService.DeleteTask(r.Context(), r.PathValue("task_id")); err != nil {
+	if err := s.tasks.DeleteTask(r.Context(), r.PathValue("task_id")); err != nil {
 		writeTaskServiceError(w, err)
 		return
 	}

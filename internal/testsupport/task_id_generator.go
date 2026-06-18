@@ -1,6 +1,6 @@
 package testsupport
 
-import "github.com/roigada/template-go/internal/domain"
+import "github.com/roigada/payment-gateway/internal/domain"
 
 type FixedTaskIDGenerator struct {
 	ID domain.TaskID

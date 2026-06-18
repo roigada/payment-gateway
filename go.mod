@@ -1,4 +1,4 @@
-module github.com/roigada/template-go
+module github.com/roigada/payment-gateway
 
 go 1.26.1
 
