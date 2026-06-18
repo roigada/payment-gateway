@@ -34,21 +34,16 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(authorizationRequest{
-		OrderID:     request.OrderID,
-		CustomerID:  request.CustomerID,
+		CardNumber:  request.Card.Number,
+		CVV:         request.Card.CVV,
+		ExpiryMonth: request.Card.ExpiryMonth,
+		ExpiryYear:  request.Card.ExpiryYear,
 		AmountCents: request.AmountCents,
-		Currency:    request.Currency,
-		Card: cardRequest{
-			Number:      request.Card.Number,
-			CVV:         request.Card.CVV,
-			ExpiryMonth: request.Card.ExpiryMonth,
-			ExpiryYear:  request.Card.ExpiryYear,
-		},
 	}); err != nil {
 		return app.BankAuthorizationResult{}, err
 	}
 
-	endpoint := c.baseURL.JoinPath("/v1/authorizations")
+	endpoint := c.baseURL.JoinPath("/api/v1/authorizations")
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
 		return app.BankAuthorizationResult{}, err
@@ -70,28 +65,21 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return app.BankAuthorizationResult{}, err
 	}
-	if strings.TrimSpace(payload.AuthorizationReference) == "" {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization reference")
+	if strings.TrimSpace(payload.AuthorizationID) == "" {
+		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
 	}
 
-	return app.BankAuthorizationResult{AuthorizationReference: payload.AuthorizationReference}, nil
+	return app.BankAuthorizationResult{AuthorizationReference: payload.AuthorizationID}, nil
 }
 
 type authorizationRequest struct {
-	OrderID     string      `json:"order_id"`
-	CustomerID  string      `json:"customer_id"`
-	AmountCents int64       `json:"amount"`
-	Currency    string      `json:"currency"`
-	Card        cardRequest `json:"card"`
-}
-
-type cardRequest struct {
-	Number      string `json:"number"`
+	CardNumber  string `json:"card_number"`
 	CVV         string `json:"cvv"`
 	ExpiryMonth int    `json:"expiry_month"`
 	ExpiryYear  int    `json:"expiry_year"`
+	AmountCents int64  `json:"amount"`
 }
 
 type authorizationResponse struct {
-	AuthorizationReference string `json:"authorization_reference"`
+	AuthorizationID string `json:"authorization_id"`
 }

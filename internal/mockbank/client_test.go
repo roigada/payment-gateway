@@ -23,8 +23,15 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"authorization_reference":"bank-auth-1"}`))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
+			"status": "approved",
+			"amount": 1299,
+			"currency": "USD",
+			"expires_at": "2026-06-18T16:00:00Z",
+			"created_at": "2026-06-18T15:00:00Z"
+		}`))
 	}))
 	defer server.Close()
 
@@ -46,27 +53,22 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, app.BankAuthorizationResult{AuthorizationReference: "bank-auth-1"}, result)
-	assert.Equal(t, "/v1/authorizations", gotPath)
+	assert.Equal(t, app.BankAuthorizationResult{AuthorizationReference: "auth_550e8400-e29b-41d4-a716-446655440000"}, result)
+	assert.Equal(t, "/api/v1/authorizations", gotPath)
 	assert.Equal(t, "bok_123", gotIdempotencyKey)
 	assert.Equal(t, map[string]any{
-		"order_id":    "order-1",
-		"customer_id": "customer-1",
-		"amount":      float64(1299),
-		"currency":    "USD",
-		"card": map[string]any{
-			"number":       "4111111111111111",
-			"cvv":          "123",
-			"expiry_month": float64(12),
-			"expiry_year":  float64(2030),
-		},
+		"card_number":  "4111111111111111",
+		"cvv":          "123",
+		"expiry_month": float64(12),
+		"expiry_year":  float64(2030),
+		"amount":       float64(1299),
 	}, gotBody)
 }
 
 func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"authorization_reference":""}`))
+		_, _ = w.Write([]byte(`{"authorization_id":""}`))
 	}))
 	defer server.Close()
 
