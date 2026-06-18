@@ -69,7 +69,7 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.AmountCents(),
 		payment.Currency(),
 		payment.Status(),
-		payment.AuthorizationBankReference(),
+		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),

@@ -61,7 +61,7 @@ type BankAuthorizationRequest struct {
 }
 
 type BankAuthorizationResult struct {
-	AuthorizationReference string
+	BankAuthorizationID string
 }
 
 type PaymentService struct {
@@ -124,7 +124,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		command.OrderID,
 		command.CustomerID,
 		command.AmountCents,
-		bankResult.AuthorizationReference,
+		bankResult.BankAuthorizationID,
 		bankOperationKey,
 		s.clock.Now(),
 	)

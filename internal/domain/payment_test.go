@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankReference(t *testing.T) {
+func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
 	payment, err := domain.NewAuthorizedPayment(
@@ -17,7 +17,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankReference(t *testing.T
 		" order-1 ",
 		" customer-1 ",
 		1299,
-		" bank-auth-1 ",
+		" bank-auth-id-1 ",
 		" bok-1 ",
 		now,
 	)
@@ -29,7 +29,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankReference(t *testing.T
 	assert.Equal(t, int64(1299), payment.AmountCents())
 	assert.Equal(t, domain.CurrencyUSD, payment.Currency())
 	assert.Equal(t, domain.PaymentStatusAuthorized, payment.Status())
-	assert.Equal(t, "bank-auth-1", payment.AuthorizationBankReference())
+	assert.Equal(t, "bank-auth-id-1", payment.BankAuthorizationID())
 	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
 	assert.Equal(t, now, payment.CreatedAt())
 	assert.Equal(t, now, payment.UpdatedAt())
@@ -39,28 +39,28 @@ func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name     string
-		id       domain.PaymentID
-		orderID  string
-		customer string
-		amount   int64
-		bankRef  string
-		bok      string
-		now      time.Time
-		wantErr  error
+		name                string
+		id                  domain.PaymentID
+		orderID             string
+		customer            string
+		amount              int64
+		bankAuthorizationID string
+		bok                 string
+		now                 time.Time
+		wantErr             error
 	}{
-		{name: "payment id", id: "123", orderID: "order-1", customer: "customer-1", amount: 100, bankRef: "bank-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "order id", id: "pay_123", orderID: " ", customer: "customer-1", amount: 100, bankRef: "bank-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidOrderID},
-		{name: "customer id", id: "pay_123", orderID: "order-1", customer: " ", amount: 100, bankRef: "bank-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidCustomerID},
-		{name: "amount", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 0, bankRef: "bank-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidAmount},
-		{name: "bank reference", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankRef: " ", bok: "bok-1", now: now, wantErr: domain.ErrInvalidBankReference},
-		{name: "bank operation key", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankRef: "bank-1", bok: " ", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "timestamp", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankRef: "bank-1", bok: "bok-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{name: "payment id", id: "123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "order id", id: "pay_123", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidOrderID},
+		{name: "customer id", id: "pay_123", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidCustomerID},
+		{name: "amount", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidAmount},
+		{name: "bank authorization id", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", bok: "bok-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
+		{name: "bank operation key", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: " ", now: now, wantErr: domain.ErrInvalidBankOperationKey},
+		{name: "timestamp", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := domain.NewAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankRef, tt.bok, tt.now)
+			_, err := domain.NewAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankAuthorizationID, tt.bok, tt.now)
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}

@@ -23,7 +23,7 @@ func TestPaymentRepositoryCreatePersistsAuthorizedPaymentWithPrivateBankFields(t
 		"order-1",
 		"customer-1",
 		1299,
-		"bank-auth-1",
+		"bank-auth-id-1",
 		"bok_123",
 		now,
 	)
@@ -36,7 +36,7 @@ func TestPaymentRepositoryCreatePersistsAuthorizedPaymentWithPrivateBankFields(t
 		     amount_cents,
 		     currency,
 		     status,
-		     authorization_bank_reference,
+		     bank_authorization_id,
 		     authorization_bank_operation_key,
 		     created_at,
 		     updated_at
@@ -49,7 +49,7 @@ func TestPaymentRepositoryCreatePersistsAuthorizedPaymentWithPrivateBankFields(t
 			int64(1299),
 			"USD",
 			domain.PaymentStatusAuthorized,
-			"bank-auth-1",
+			"bank-auth-id-1",
 			"bok_123",
 			now,
 			now,

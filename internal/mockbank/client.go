@@ -69,7 +69,7 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
 	}
 
-	return app.BankAuthorizationResult{AuthorizationReference: payload.AuthorizationID}, nil
+	return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
 }
 
 type authorizationRequest struct {

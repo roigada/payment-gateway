@@ -53,7 +53,7 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, app.BankAuthorizationResult{AuthorizationReference: "auth_550e8400-e29b-41d4-a716-446655440000"}, result)
+	assert.Equal(t, app.BankAuthorizationResult{BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000"}, result)
 	assert.Equal(t, "/api/v1/authorizations", gotPath)
 	assert.Equal(t, "bok_123", gotIdempotencyKey)
 	assert.Equal(t, map[string]any{

@@ -9,13 +9,13 @@ import (
 const CurrencyUSD = "USD"
 
 var (
-	ErrInvalidPaymentID        = errors.New("invalid payment id")
-	ErrInvalidOrderID          = errors.New("invalid order id")
-	ErrInvalidCustomerID       = errors.New("invalid customer id")
-	ErrInvalidAmount           = errors.New("invalid amount")
-	ErrInvalidBankReference    = errors.New("invalid bank reference")
-	ErrInvalidBankOperationKey = errors.New("invalid bank operation key")
-	ErrInvalidPaymentTimestamp = errors.New("invalid payment timestamp")
+	ErrInvalidPaymentID           = errors.New("invalid payment id")
+	ErrInvalidOrderID             = errors.New("invalid order id")
+	ErrInvalidCustomerID          = errors.New("invalid customer id")
+	ErrInvalidAmount              = errors.New("invalid amount")
+	ErrInvalidBankAuthorizationID = errors.New("invalid bank authorization id")
+	ErrInvalidBankOperationKey    = errors.New("invalid bank operation key")
+	ErrInvalidPaymentTimestamp    = errors.New("invalid payment timestamp")
 )
 
 type PaymentID string
@@ -33,7 +33,7 @@ type Payment struct {
 	amountCents                   int64
 	currency                      string
 	status                        PaymentStatus
-	authorizationBankReference    string
+	bankAuthorizationID           string
 	authorizationBankOperationKey string
 	createdAt                     time.Time
 	updatedAt                     time.Time
@@ -44,7 +44,7 @@ func NewAuthorizedPayment(
 	orderID string,
 	customerID string,
 	amountCents int64,
-	authorizationBankReference string,
+	bankAuthorizationID string,
 	authorizationBankOperationKey string,
 	now time.Time,
 ) (*Payment, error) {
@@ -62,7 +62,7 @@ func NewAuthorizedPayment(
 	if amountCents <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	authorizationBankReference, err = normalizeRequired(authorizationBankReference, ErrInvalidBankReference)
+	bankAuthorizationID, err = normalizeRequired(bankAuthorizationID, ErrInvalidBankAuthorizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func NewAuthorizedPayment(
 		amountCents:                   amountCents,
 		currency:                      CurrencyUSD,
 		status:                        PaymentStatusAuthorized,
-		authorizationBankReference:    authorizationBankReference,
+		bankAuthorizationID:           bankAuthorizationID,
 		authorizationBankOperationKey: authorizationBankOperationKey,
 		createdAt:                     now,
 		updatedAt:                     now,
@@ -95,7 +95,7 @@ func LoadPayment(
 	amountCents int64,
 	currency string,
 	status PaymentStatus,
-	authorizationBankReference string,
+	bankAuthorizationID string,
 	authorizationBankOperationKey string,
 	createdAt time.Time,
 	updatedAt time.Time,
@@ -106,7 +106,7 @@ func LoadPayment(
 	if status != PaymentStatusAuthorized {
 		return nil, ErrInvalidPaymentID
 	}
-	payment, err := NewAuthorizedPayment(id, orderID, customerID, amountCents, authorizationBankReference, authorizationBankOperationKey, createdAt)
+	payment, err := NewAuthorizedPayment(id, orderID, customerID, amountCents, bankAuthorizationID, authorizationBankOperationKey, createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (p *Payment) CustomerID() string                    { return p.customerID }
 func (p *Payment) AmountCents() int64                    { return p.amountCents }
 func (p *Payment) Currency() string                      { return p.currency }
 func (p *Payment) Status() PaymentStatus                 { return p.status }
-func (p *Payment) AuthorizationBankReference() string    { return p.authorizationBankReference }
+func (p *Payment) BankAuthorizationID() string           { return p.bankAuthorizationID }
 func (p *Payment) AuthorizationBankOperationKey() string { return p.authorizationBankOperationKey }
 func (p *Payment) CreatedAt() time.Time                  { return p.createdAt }
 func (p *Payment) UpdatedAt() time.Time                  { return p.updatedAt }

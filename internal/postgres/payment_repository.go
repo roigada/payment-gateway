@@ -27,7 +27,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     amount_cents,
 		     currency,
 		     status,
-		     authorization_bank_reference,
+		     bank_authorization_id,
 		     authorization_bank_operation_key,
 		     created_at,
 		     updated_at
@@ -39,7 +39,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.AmountCents(),
 		payment.Currency(),
 		payment.Status(),
-		payment.AuthorizationBankReference(),
+		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
@@ -54,7 +54,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents                   int64
 		currency                      string
 		status                        domain.PaymentStatus
-		authorizationBankReference    string
+		bankAuthorizationID           string
 		authorizationBankOperationKey string
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -66,7 +66,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        amount_cents,
 		        currency,
 		        status,
-		        authorization_bank_reference,
+		        bank_authorization_id,
 		        authorization_bank_operation_key,
 		        created_at,
 		        updated_at
@@ -79,7 +79,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&amountCents,
 		&currency,
 		&status,
-		&authorizationBankReference,
+		&bankAuthorizationID,
 		&authorizationBankOperationKey,
 		&createdAt,
 		&updatedAt,
@@ -98,7 +98,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents,
 		currency,
 		status,
-		authorizationBankReference,
+		bankAuthorizationID,
 		authorizationBankOperationKey,
 		createdAt.Time,
 		updatedAt.Time,

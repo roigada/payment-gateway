@@ -15,7 +15,7 @@ import (
 
 func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{AuthorizationReference: "bank-auth-1"}}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
 
@@ -48,12 +48,12 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_123"))
 	require.NoError(t, err)
-	assert.Equal(t, "bank-auth-1", saved.AuthorizationBankReference())
+	assert.Equal(t, "bank-auth-id-1", saved.BankAuthorizationID())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
 func TestAuthorizePaymentRequiresIdempotencyKeyBeforeCallingBank(t *testing.T) {
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{AuthorizationReference: "bank-auth-1"}}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := newPaymentService(testsupport.NewPaymentRepository(), bank, time.Now())
 	command := validAuthorizeCommand()
 	command.IdempotencyKey = ""
@@ -81,7 +81,7 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{AuthorizationReference: "bank-auth-1"}}
+			bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 			service := newPaymentService(testsupport.NewPaymentRepository(), bank, time.Now())
 			command := validAuthorizeCommand()
 			tt.mutate(&command)
