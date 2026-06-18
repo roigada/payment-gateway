@@ -12,19 +12,19 @@ var (
 	ErrPaymentNotFound       = errors.New("payment not found")
 )
 
-type PaymentErrorKind string
+type PaymentErrorCategory string
 
 const (
-	PaymentErrorInvalidOrderID        PaymentErrorKind = "invalid_order_id"
-	PaymentErrorInvalidCustomerID     PaymentErrorKind = "invalid_customer_id"
-	PaymentErrorInvalidAmount         PaymentErrorKind = "invalid_amount"
-	PaymentErrorInvalidCardDetails    PaymentErrorKind = "invalid_card_details"
-	PaymentErrorMissingIdempotencyKey PaymentErrorKind = "missing_idempotency_key"
-	PaymentErrorNotFound              PaymentErrorKind = "not_found"
-	PaymentErrorUnknown               PaymentErrorKind = "unknown"
+	PaymentErrorInvalidOrderID        PaymentErrorCategory = "invalid_order_id"
+	PaymentErrorInvalidCustomerID     PaymentErrorCategory = "invalid_customer_id"
+	PaymentErrorInvalidAmount         PaymentErrorCategory = "invalid_amount"
+	PaymentErrorInvalidCardDetails    PaymentErrorCategory = "invalid_card_details"
+	PaymentErrorMissingIdempotencyKey PaymentErrorCategory = "missing_idempotency_key"
+	PaymentErrorNotFound              PaymentErrorCategory = "not_found"
+	PaymentErrorUnknown               PaymentErrorCategory = "unknown"
 )
 
-func ClassifyPaymentError(err error) PaymentErrorKind {
+func ClassifyPaymentError(err error) PaymentErrorCategory {
 	switch {
 	case errors.Is(err, ErrMissingIdempotencyKey):
 		return PaymentErrorMissingIdempotencyKey
