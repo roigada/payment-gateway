@@ -14,9 +14,8 @@ import (
 
 func main() {
 	logger := newLogger()
-	slog.SetDefault(logger)
 
-	if err := run(); err != nil {
+	if err := run(logger); err != nil {
 		logger.Error("payment-gateway stopped", "error", err)
 		os.Exit(1)
 	}
@@ -63,8 +62,7 @@ func (cfg config) validate() error {
 	return nil
 }
 
-func run() error {
-	logger := slog.Default()
+func run(logger *slog.Logger) error {
 	cfg := loadConfig()
 	if err := cfg.validate(); err != nil {
 		return err
