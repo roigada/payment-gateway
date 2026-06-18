@@ -15,7 +15,10 @@ const (
 	errorCodeInvalidJSONBody       = "invalid_json_body"
 	errorCodeUnsupportedMediaType  = "unsupported_media_type"
 	errorCodeServiceUnavailable    = "service_unavailable"
-	errorCodeInvalidPaymentCommand = "invalid_payment_command"
+	errorCodeInvalidOrderID        = "invalid_order_id"
+	errorCodeInvalidCustomerID     = "invalid_customer_id"
+	errorCodeInvalidAmount         = "invalid_amount"
+	errorCodeInvalidCardDetails    = "invalid_card_details"
 	errorCodeMissingIdempotencyKey = "missing_idempotency_key"
 	errorCodePaymentNotFound       = "payment_not_found"
 )
@@ -127,8 +130,14 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 
 func writePaymentServiceError(w http.ResponseWriter, err error) {
 	switch app.ClassifyPaymentError(err) {
-	case app.PaymentErrorInvalidCommand:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidPaymentCommand, "invalid payment command")
+	case app.PaymentErrorInvalidOrderID:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidOrderID, "invalid order id")
+	case app.PaymentErrorInvalidCustomerID:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCustomerID, "invalid customer id")
+	case app.PaymentErrorInvalidAmount:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidAmount, "invalid amount")
+	case app.PaymentErrorInvalidCardDetails:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCardDetails, "invalid card details")
 	case app.PaymentErrorMissingIdempotencyKey:
 		writeError(w, http.StatusUnprocessableEntity, errorCodeMissingIdempotencyKey, app.ErrMissingIdempotencyKey.Error())
 	case app.PaymentErrorNotFound:

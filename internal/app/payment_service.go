@@ -65,7 +65,7 @@ type BankAuthorizationResult struct {
 }
 
 type PaymentService struct {
-	payments          PaymentRepository
+	paymentRepository PaymentRepository
 	paymentIDs        PaymentIDGenerator
 	bankOperationKeys BankOperationKeyGenerator
 	bank              BankAuthorizer
@@ -73,14 +73,14 @@ type PaymentService struct {
 }
 
 func NewPaymentService(
-	payments PaymentRepository,
+	paymentRepository PaymentRepository,
 	paymentIDs PaymentIDGenerator,
 	bankOperationKeys BankOperationKeyGenerator,
 	bank BankAuthorizer,
 	clock Clock,
 ) *PaymentService {
 	return &PaymentService{
-		payments:          payments,
+		paymentRepository: paymentRepository,
 		paymentIDs:        paymentIDs,
 		bankOperationKeys: bankOperationKeys,
 		bank:              bank,
@@ -131,7 +131,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	if err != nil {
 		return PaymentResult{}, err
 	}
-	if err := s.payments.Create(ctx, payment); err != nil {
+	if err := s.paymentRepository.Create(ctx, payment); err != nil {
 		return PaymentResult{}, err
 	}
 
@@ -139,7 +139,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, id string) (PaymentResult, error) {
-	payment, err := s.payments.FindByID(ctx, domain.PaymentID(id))
+	payment, err := s.paymentRepository.FindByID(ctx, domain.PaymentID(id))
 	if err != nil {
 		return PaymentResult{}, err
 	}

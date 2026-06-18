@@ -15,7 +15,10 @@ var (
 type PaymentErrorKind string
 
 const (
-	PaymentErrorInvalidCommand        PaymentErrorKind = "invalid_command"
+	PaymentErrorInvalidOrderID        PaymentErrorKind = "invalid_order_id"
+	PaymentErrorInvalidCustomerID     PaymentErrorKind = "invalid_customer_id"
+	PaymentErrorInvalidAmount         PaymentErrorKind = "invalid_amount"
+	PaymentErrorInvalidCardDetails    PaymentErrorKind = "invalid_card_details"
 	PaymentErrorMissingIdempotencyKey PaymentErrorKind = "missing_idempotency_key"
 	PaymentErrorNotFound              PaymentErrorKind = "not_found"
 	PaymentErrorUnknown               PaymentErrorKind = "unknown"
@@ -27,15 +30,14 @@ func ClassifyPaymentError(err error) PaymentErrorKind {
 		return PaymentErrorMissingIdempotencyKey
 	case errors.Is(err, ErrPaymentNotFound):
 		return PaymentErrorNotFound
-	case errors.Is(err, ErrInvalidCardDetails),
-		errors.Is(err, domain.ErrInvalidPaymentID),
-		errors.Is(err, domain.ErrInvalidOrderID),
-		errors.Is(err, domain.ErrInvalidCustomerID),
-		errors.Is(err, domain.ErrInvalidAmount),
-		errors.Is(err, domain.ErrInvalidBankReference),
-		errors.Is(err, domain.ErrInvalidBankOperationKey),
-		errors.Is(err, domain.ErrInvalidPaymentTimestamp):
-		return PaymentErrorInvalidCommand
+	case errors.Is(err, domain.ErrInvalidOrderID):
+		return PaymentErrorInvalidOrderID
+	case errors.Is(err, domain.ErrInvalidCustomerID):
+		return PaymentErrorInvalidCustomerID
+	case errors.Is(err, domain.ErrInvalidAmount):
+		return PaymentErrorInvalidAmount
+	case errors.Is(err, ErrInvalidCardDetails):
+		return PaymentErrorInvalidCardDetails
 	default:
 		return PaymentErrorUnknown
 	}

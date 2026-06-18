@@ -68,12 +68,15 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*app.AuthorizePaymentCommand)
+		kind   app.PaymentErrorKind
 	}{
-		{name: "amount", mutate: func(c *app.AuthorizePaymentCommand) { c.AmountCents = 0 }},
-		{name: "card number", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.Number = "4111x" }},
-		{name: "cvv", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.CVV = "12x" }},
-		{name: "expiry month", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryMonth = 13 }},
-		{name: "expiry year", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryYear = 0 }},
+		{name: "order id", mutate: func(c *app.AuthorizePaymentCommand) { c.OrderID = "" }, kind: app.PaymentErrorInvalidOrderID},
+		{name: "customer id", mutate: func(c *app.AuthorizePaymentCommand) { c.CustomerID = "" }, kind: app.PaymentErrorInvalidCustomerID},
+		{name: "amount", mutate: func(c *app.AuthorizePaymentCommand) { c.AmountCents = 0 }, kind: app.PaymentErrorInvalidAmount},
+		{name: "card number", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.Number = "4111x" }, kind: app.PaymentErrorInvalidCardDetails},
+		{name: "cvv", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.CVV = "12x" }, kind: app.PaymentErrorInvalidCardDetails},
+		{name: "expiry month", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryMonth = 13 }, kind: app.PaymentErrorInvalidCardDetails},
+		{name: "expiry year", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryYear = 0 }, kind: app.PaymentErrorInvalidCardDetails},
 	}
 
 	for _, tt := range tests {
@@ -85,7 +88,7 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 
 			_, err := service.AuthorizePayment(context.Background(), command)
 
-			assert.Equal(t, app.PaymentErrorInvalidCommand, app.ClassifyPaymentError(err))
+			assert.Equal(t, tt.kind, app.ClassifyPaymentError(err))
 			assert.Zero(t, bank.request)
 		})
 	}

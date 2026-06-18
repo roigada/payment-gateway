@@ -90,13 +90,17 @@ func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 
 func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	tests := []struct {
-		name   string
-		err    error
-		code   string
-		status int
+		name    string
+		err     error
+		code    string
+		message string
+		status  int
 	}{
-		{name: "invalid command", err: domain.ErrInvalidAmount, code: "invalid_payment_command", status: http.StatusUnprocessableEntity},
-		{name: "missing idempotency key", err: app.ErrMissingIdempotencyKey, code: "missing_idempotency_key", status: http.StatusUnprocessableEntity},
+		{name: "invalid order id", err: domain.ErrInvalidOrderID, code: "invalid_order_id", message: "invalid order id", status: http.StatusUnprocessableEntity},
+		{name: "invalid customer id", err: domain.ErrInvalidCustomerID, code: "invalid_customer_id", message: "invalid customer id", status: http.StatusUnprocessableEntity},
+		{name: "invalid amount", err: domain.ErrInvalidAmount, code: "invalid_amount", message: "invalid amount", status: http.StatusUnprocessableEntity},
+		{name: "invalid card details", err: app.ErrInvalidCardDetails, code: "invalid_card_details", message: "invalid card details", status: http.StatusUnprocessableEntity},
+		{name: "missing idempotency key", err: app.ErrMissingIdempotencyKey, code: "missing_idempotency_key", message: "missing idempotency key", status: http.StatusUnprocessableEntity},
 	}
 
 	for _, tt := range tests {
@@ -109,8 +113,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 			})
 
 			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
-			body := decodeJSON[errorResponse](t, rec)
-			assert.Equal(t, tt.code, body.Error.Code)
+			assertErrorResponse(t, rec, tt.code, tt.message)
 		})
 	}
 }
