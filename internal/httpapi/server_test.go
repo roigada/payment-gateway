@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/domain"
@@ -18,29 +19,126 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPostTasksCreatesTask(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.createTaskResult = newTask(t, "task-1", "Buy milk", false)
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":" Buy milk "}`)
+func TestPostPaymentsAuthorizesPayment(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.authorizePaymentResult = newPayment("pay_123")
+	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
 
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "/v1/tasks/task-1", rec.Header().Get("Location"))
-	assert.Equal(t, " Buy milk ", api.tasks.createTaskTitle)
+	assert.Equal(t, "/v1/payments/pay_123", rec.Header().Get("Location"))
+	assert.Equal(t, app.AuthorizePaymentCommand{
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		IdempotencyKey: "public-key-1",
+		Card: app.CardDetails{
+			Number:      "4111111111111111",
+			CVV:         "123",
+			ExpiryMonth: 12,
+			ExpiryYear:  2030,
+		},
+	}, api.payments.authorizePaymentCommand)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_123",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "authorized",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
 
-	assert.JSONEq(t, `{"task":{"id":"task-1","title":"Buy milk","completed":false}}`, rec.Body.String())
+func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+		"Idempotency-Key": "public-key-1",
+	})
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+}
+
+func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments", `{"order_id":`, map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
+}
+
+func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments", `{"order_id":"order-1","unexpected":true}`, map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
+}
+
+func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		code   string
+		status int
+	}{
+		{name: "invalid command", err: domain.ErrInvalidAmount, code: "invalid_payment_command", status: http.StatusUnprocessableEntity},
+		{name: "missing idempotency key", err: app.ErrMissingIdempotencyKey, code: "missing_idempotency_key", status: http.StatusUnprocessableEntity},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			api.payments.authorizePaymentErr = tt.err
+			rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+				"Content-Type":    "application/json",
+				"Idempotency-Key": "public-key-1",
+			})
+
+			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			body := decodeJSON[errorResponse](t, rec)
+			assert.Equal(t, tt.code, body.Error.Code)
+		})
+	}
+}
+
+func TestPostPaymentsRecoversPanic(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.authorizePaymentPanic = "database pool exploded"
+	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "close", rec.Header().Get("Connection"))
+	assertErrorResponse(t, rec, "internal_server_error", "Internal Server Error")
 }
 
 func TestHealthzReturnsNoContent(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodGet, "/healthz", "")
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodGet, "/healthz", "", nil)
 
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body.String())
 	assert.Empty(t, rec.Body.String())
 }
 
 func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodGet, "/readyz", "")
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodGet, "/readyz", "", nil)
 
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body.String())
 	assert.Empty(t, rec.Body.String())
@@ -48,178 +146,48 @@ func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
 }
 
 func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
-	api := newTaskAPITest(t)
+	api := newPaymentAPITest(t)
 	api.readiness.err = errors.New("postgres unavailable")
-	rec := api.request(t, http.MethodGet, "/readyz", "")
+	rec := api.request(t, http.MethodGet, "/readyz", "", nil)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "body: %s", rec.Body.String())
 	assertErrorResponse(t, rec, "service_unavailable", "Service Unavailable")
 }
 
-func TestUnversionedTaskRoutesAreNotRegistered(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodGet, "/tasks", "")
-
-	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
+func validAuthorizeBody() string {
+	return `{
+		"order_id": "order-1",
+		"customer_id": "customer-1",
+		"amount": 1299,
+		"card": {
+			"number": "4111111111111111",
+			"cvv": "123",
+			"expiry_month": 12,
+			"expiry_year": 2030
+		}
+	}`
 }
 
-func TestPostTasksRejectsEmptyTitle(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.createTaskErr = domain.ErrInvalidTaskTitle
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":"   "}`)
-
-	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "body: %s", rec.Body.String())
-
-	assert.JSONEq(t, `{"error":{"code":"invalid_task_title","message":"invalid task title"}}`, rec.Body.String())
-}
-
-func TestPostTasksRejectsMalformedJSON(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":`)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
-
-	assert.JSONEq(t, `{"error":{"code":"invalid_json_body","message":"invalid JSON body"}}`, rec.Body.String())
-}
-
-func TestPostTasksRejectsUnknownFields(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":"Buy milk","completed":true}`)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
-
-	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
-}
-
-func TestPostTasksRejectsTrailingContent(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":"Buy milk"} {"title":"Pay rent"}`)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
-
-	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
-}
-
-func TestPostTasksRejectsOversizedBody(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/tasks", `{"title":"`+strings.Repeat("a", 1<<20)+`"}`)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
-
-	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
-}
-
-func TestGetTasksListsTasks(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.listTasksResult = []app.TaskResult{
-		newTask(t, "task-1", "Buy milk", false),
-	}
-	rec := api.request(t, http.MethodGet, "/v1/tasks", "")
-
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-
-	assert.JSONEq(t, `{"tasks":[{"id":"task-1","title":"Buy milk","completed":false}]}`, rec.Body.String())
-}
-
-func TestGetTasksRecoversPanic(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.listTasksPanic = "database pool exploded"
-	rec := api.request(t, http.MethodGet, "/v1/tasks", "")
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "close", rec.Header().Get("Connection"))
-	assertErrorResponse(t, rec, "internal_server_error", "Internal Server Error")
-}
-
-func TestGetTaskReturnsTaskByID(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.getTaskResult = newTask(t, "task-1", "Buy milk", false)
-	rec := api.request(t, http.MethodGet, "/v1/tasks/task-1", "")
-
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "task-1", api.tasks.getTaskID)
-
-	assert.JSONEq(t, `{"task":{"id":"task-1","title":"Buy milk","completed":false}}`, rec.Body.String())
-}
-
-func TestGetTaskReturnsNotFound(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.getTaskErr = app.ErrTaskNotFound
-	rec := api.request(t, http.MethodGet, "/v1/tasks/missing", "")
-
-	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "task_not_found", "task not found")
-}
-
-func TestPostTaskCompleteCompletesTask(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.completeTaskResult = newTask(t, "task-1", "Buy milk", true)
-	rec := api.request(t, http.MethodPost, "/v1/tasks/task-1/complete", "")
-
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "task-1", api.tasks.completeTaskID)
-
-	assert.JSONEq(t, `{"task":{"id":"task-1","title":"Buy milk","completed":true}}`, rec.Body.String())
-}
-
-func TestPostTaskReopenReopensTask(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.reopenTaskResult = newTask(t, "task-1", "Buy milk", false)
-	rec := api.request(t, http.MethodPost, "/v1/tasks/task-1/reopen", "")
-
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "task-1", api.tasks.reopenTaskID)
-
-	assert.JSONEq(t, `{"task":{"id":"task-1","title":"Buy milk","completed":false}}`, rec.Body.String())
-}
-
-func TestPostTaskCompleteReturnsNotFound(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.completeTaskErr = app.ErrTaskNotFound
-	rec := api.request(t, http.MethodPost, "/v1/tasks/missing/complete", "")
-
-	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "task_not_found", "task not found")
-}
-
-func TestDeleteTaskRemovesTask(t *testing.T) {
-	api := newTaskAPITest(t)
-	rec := api.request(t, http.MethodDelete, "/v1/tasks/task-1", "")
-
-	require.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body.String())
-	assert.Empty(t, rec.Body.String())
-	assert.Equal(t, "task-1", api.tasks.deleteTaskID)
-}
-
-func TestDeleteTaskReturnsNotFound(t *testing.T) {
-	api := newTaskAPITest(t)
-	api.tasks.deleteTaskErr = app.ErrTaskNotFound
-	rec := api.request(t, http.MethodDelete, "/v1/tasks/missing", "")
-
-	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "task_not_found", "task not found")
-}
-
-type taskAPITest struct {
-	tasks     *taskUseCasesFake
+type paymentAPITest struct {
+	payments  *paymentUseCasesFake
 	readiness *readinessCheckerFake
 	handler   http.Handler
 }
 
-func newTaskAPITest(t *testing.T) *taskAPITest {
+func newPaymentAPITest(t *testing.T) *paymentAPITest {
 	t.Helper()
 
-	tasks := &taskUseCasesFake{}
+	payments := &paymentUseCasesFake{}
 	readiness := &readinessCheckerFake{}
 
-	return &taskAPITest{
-		tasks:     tasks,
+	return &paymentAPITest{
+		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewServer(tasks, readiness, discardLogger()),
+		handler:   httpapi.NewServer(payments, readiness, discardLogger()),
 	}
 }
 
-func (api *taskAPITest) request(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+func (api *paymentAPITest) request(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var reader io.Reader
@@ -228,6 +196,9 @@ func (api *taskAPITest) request(t *testing.T, method, path, body string) *httpte
 	}
 
 	req := httptest.NewRequest(method, path, reader)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	rec := httptest.NewRecorder()
 
 	api.handler.ServeHTTP(rec, req)
@@ -262,29 +233,11 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-type taskUseCasesFake struct {
-	createTaskTitle  string
-	createTaskResult app.TaskResult
-	createTaskErr    error
-
-	listTasksResult []app.TaskResult
-	listTasksErr    error
-	listTasksPanic  any
-
-	getTaskID     string
-	getTaskResult app.TaskResult
-	getTaskErr    error
-
-	completeTaskID     string
-	completeTaskResult app.TaskResult
-	completeTaskErr    error
-
-	reopenTaskID     string
-	reopenTaskResult app.TaskResult
-	reopenTaskErr    error
-
-	deleteTaskID  string
-	deleteTaskErr error
+type paymentUseCasesFake struct {
+	authorizePaymentCommand app.AuthorizePaymentCommand
+	authorizePaymentResult  app.PaymentResult
+	authorizePaymentErr     error
+	authorizePaymentPanic   any
 }
 
 type readinessCheckerFake struct {
@@ -297,44 +250,24 @@ func (f *readinessCheckerFake) CheckReady(context.Context) error {
 	return f.err
 }
 
-func (f *taskUseCasesFake) CreateTask(_ context.Context, title string) (app.TaskResult, error) {
-	f.createTaskTitle = title
-	return f.createTaskResult, f.createTaskErr
-}
-
-func (f *taskUseCasesFake) ListTasks(_ context.Context) ([]app.TaskResult, error) {
-	if f.listTasksPanic != nil {
-		panic(f.listTasksPanic)
+func (f *paymentUseCasesFake) AuthorizePayment(_ context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error) {
+	if f.authorizePaymentPanic != nil {
+		panic(f.authorizePaymentPanic)
 	}
-	return f.listTasksResult, f.listTasksErr
+	f.authorizePaymentCommand = command
+	return f.authorizePaymentResult, f.authorizePaymentErr
 }
 
-func (f *taskUseCasesFake) GetTask(_ context.Context, id string) (app.TaskResult, error) {
-	f.getTaskID = id
-	return f.getTaskResult, f.getTaskErr
-}
-
-func (f *taskUseCasesFake) CompleteTask(_ context.Context, id string) (app.TaskResult, error) {
-	f.completeTaskID = id
-	return f.completeTaskResult, f.completeTaskErr
-}
-
-func (f *taskUseCasesFake) ReopenTask(_ context.Context, id string) (app.TaskResult, error) {
-	f.reopenTaskID = id
-	return f.reopenTaskResult, f.reopenTaskErr
-}
-
-func (f *taskUseCasesFake) DeleteTask(_ context.Context, id string) error {
-	f.deleteTaskID = id
-	return f.deleteTaskErr
-}
-
-func newTask(t *testing.T, id, title string, completed bool) app.TaskResult {
-	t.Helper()
-
-	return app.TaskResult{
-		ID:        id,
-		Title:     title,
-		Completed: completed,
+func newPayment(id string) app.PaymentResult {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	return app.PaymentResult{
+		ID:          id,
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "authorized",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 }

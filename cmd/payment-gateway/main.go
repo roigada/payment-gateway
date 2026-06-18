@@ -10,6 +10,7 @@ import (
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/mockbank"
 	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/roigada/payment-gateway/internal/uuidgen"
 )
@@ -81,11 +82,17 @@ func run(logger *slog.Logger) error {
 	}
 	defer db.Close()
 
-	taskRepository := postgres.NewTaskRepository(db)
-	taskIDs := uuidgen.NewTaskIDGenerator()
-	taskService := app.NewTaskService(taskRepository, taskIDs, app.NoopTaskNotifier{})
+	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient)
+	if err != nil {
+		return err
+	}
+
+	paymentRepository := postgres.NewPaymentRepository(db)
+	paymentIDs := uuidgen.NewPaymentIDGenerator()
+	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
+	paymentService := app.NewPaymentService(paymentRepository, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{})
 	readiness := postgres.NewReadinessChecker(db)
-	server := httpapi.NewServer(taskService, readiness, logger)
+	server := httpapi.NewServer(paymentService, readiness, logger)
 
 	logger.Info("payment-gateway starting", "addr", cfg.Addr)
 	return http.ListenAndServe(cfg.Addr, server)
