@@ -13,13 +13,19 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	if err := run(logger); err != nil {
+	logger := newLogger()
+	slog.SetDefault(logger)
+
+	if err := run(); err != nil {
 		logger.Error("payment-gateway stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
 }
 
 type config struct {
@@ -29,32 +35,38 @@ type config struct {
 	AuthorizationFingerprintSecret string
 }
 
-func loadConfig(getenv func(string) string) (config, error) {
+func loadConfig() config {
 	cfg := config{
-		Addr:                           getenv("ADDR"),
-		DatabaseURL:                    getenv("DATABASE_URL"),
-		MockBankBaseURL:                getenv("MOCK_BANK_BASE_URL"),
-		AuthorizationFingerprintSecret: getenv("AUTHORIZATION_FINGERPRINT_SECRET"),
+		Addr:                           os.Getenv("ADDR"),
+		DatabaseURL:                    os.Getenv("DATABASE_URL"),
+		MockBankBaseURL:                os.Getenv("MOCK_BANK_BASE_URL"),
+		AuthorizationFingerprintSecret: os.Getenv("AUTHORIZATION_FINGERPRINT_SECRET"),
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	if cfg.DatabaseURL == "" {
-		return config{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	if cfg.MockBankBaseURL == "" {
-		return config{}, fmt.Errorf("MOCK_BANK_BASE_URL is required")
-	}
-	if cfg.AuthorizationFingerprintSecret == "" {
-		return config{}, fmt.Errorf("AUTHORIZATION_FINGERPRINT_SECRET is required")
-	}
 
-	return cfg, nil
+	return cfg
 }
 
-func run(logger *slog.Logger) error {
-	cfg, err := loadConfig(os.Getenv)
-	if err != nil {
+func (cfg config) validate() error {
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.MockBankBaseURL == "" {
+		return fmt.Errorf("MOCK_BANK_BASE_URL is required")
+	}
+	if cfg.AuthorizationFingerprintSecret == "" {
+		return fmt.Errorf("AUTHORIZATION_FINGERPRINT_SECRET is required")
+	}
+
+	return nil
+}
+
+func run() error {
+	logger := slog.Default()
+	cfg := loadConfig()
+	if err := cfg.validate(); err != nil {
 		return err
 	}
 

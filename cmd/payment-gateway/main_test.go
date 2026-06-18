@@ -7,29 +7,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadConfigRequiresPaymentGatewayConfiguration(t *testing.T) {
+func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
 	tests := []struct {
 		name    string
-		env     map[string]string
+		cfg     config
 		wantErr string
 	}{
 		{
 			name:    "database URL",
-			env:     map[string]string{},
+			cfg:     config{},
 			wantErr: "DATABASE_URL is required",
 		},
 		{
 			name: "mock bank base URL",
-			env: map[string]string{
-				"DATABASE_URL": "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
+			cfg: config{
+				DatabaseURL: "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
 			},
 			wantErr: "MOCK_BANK_BASE_URL is required",
 		},
 		{
 			name: "authorization fingerprint secret",
-			env: map[string]string{
-				"DATABASE_URL":       "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
-				"MOCK_BANK_BASE_URL": "http://localhost:9090",
+			cfg: config{
+				DatabaseURL:     "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
+				MockBankBaseURL: "http://localhost:9090",
 			},
 			wantErr: "AUTHORIZATION_FINGERPRINT_SECRET is required",
 		},
@@ -37,9 +37,7 @@ func TestLoadConfigRequiresPaymentGatewayConfiguration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := loadConfig(func(key string) string {
-				return tt.env[key]
-			})
+			err := tt.cfg.validate()
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
@@ -47,16 +45,22 @@ func TestLoadConfigRequiresPaymentGatewayConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigValidateAllowsPaymentGatewayConfiguration(t *testing.T) {
+	cfg := config{
+		DatabaseURL:                    "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
+		MockBankBaseURL:                "http://localhost:9090",
+		AuthorizationFingerprintSecret: "secret",
+	}
+
+	require.NoError(t, cfg.validate())
+}
+
 func TestLoadConfigUsesPaymentGatewayRuntimeDefaults(t *testing.T) {
-	cfg, err := loadConfig(func(key string) string {
-		values := map[string]string{
-			"DATABASE_URL":                     "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
-			"MOCK_BANK_BASE_URL":               "http://localhost:9090",
-			"AUTHORIZATION_FINGERPRINT_SECRET": "secret",
-		}
-		return values[key]
-	})
-	require.NoError(t, err)
+	t.Setenv("DATABASE_URL", "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable")
+	t.Setenv("MOCK_BANK_BASE_URL", "http://localhost:9090")
+	t.Setenv("AUTHORIZATION_FINGERPRINT_SECRET", "secret")
+
+	cfg := loadConfig()
 
 	assert.Equal(t, ":8080", cfg.Addr)
 	assert.Equal(t, "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable", cfg.DatabaseURL)
@@ -65,16 +69,8 @@ func TestLoadConfigUsesPaymentGatewayRuntimeDefaults(t *testing.T) {
 }
 
 func TestLoadConfigAllowsCustomListenAddress(t *testing.T) {
-	cfg, err := loadConfig(func(key string) string {
-		values := map[string]string{
-			"ADDR":                             ":9090",
-			"DATABASE_URL":                     "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable",
-			"MOCK_BANK_BASE_URL":               "http://localhost:9090",
-			"AUTHORIZATION_FINGERPRINT_SECRET": "secret",
-		}
-		return values[key]
-	})
-	require.NoError(t, err)
+	t.Setenv("ADDR", ":9090")
 
+	cfg := loadConfig()
 	assert.Equal(t, ":9090", cfg.Addr)
 }
