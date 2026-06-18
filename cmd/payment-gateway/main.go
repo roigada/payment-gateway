@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/roigada/payment-gateway/internal/uuidgen"
 )
+
+const postgresStartupTimeout = 5 * time.Second
 
 func main() {
 	logger := newLogger()
@@ -68,7 +72,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	db, err := postgres.Open(cfg.DatabaseURL)
+	dbCtx, cancel := context.WithTimeout(context.Background(), postgresStartupTimeout)
+	defer cancel()
+
+	db, err := postgres.Connect(dbCtx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
