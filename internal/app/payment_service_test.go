@@ -36,7 +36,7 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 		},
 	}, bank.request)
 	assert.Equal(t, app.PaymentResult{
-		ID:          "pay_123",
+		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
 		OrderID:     "order-1",
 		CustomerID:  "customer-1",
 		AmountCents: 1299,
@@ -46,7 +46,7 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 		UpdatedAt:   now,
 	}, payment)
 
-	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_123"))
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
 	require.NoError(t, err)
 	assert.Equal(t, "bank-auth-id-1", saved.BankAuthorizationID())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
@@ -102,7 +102,7 @@ func TestAuthorizePaymentReturnsBankErrorWithoutStoringPayment(t *testing.T) {
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 
 	assert.ErrorIs(t, err, bankErr)
-	_, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_123"))
+	_, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
 	assert.ErrorIs(t, findErr, app.ErrPaymentNotFound)
 }
 
@@ -124,7 +124,7 @@ func validAuthorizeCommand() app.AuthorizePaymentCommand {
 func newPaymentService(repo app.PaymentRepository, bank app.BankAuthorizer, now time.Time) *app.PaymentService {
 	return app.NewPaymentService(
 		repo,
-		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_123")},
+		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
 		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
 		bank,
 		testsupport.FixedClock{Time: now},

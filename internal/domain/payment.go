@@ -118,10 +118,36 @@ func LoadPayment(
 }
 
 func validatePaymentID(id PaymentID) error {
-	if !strings.HasPrefix(string(id), "pay_") || strings.TrimSpace(string(id)) != string(id) || len(id) <= len("pay_") {
+	uuidPart, ok := strings.CutPrefix(string(id), "pay_")
+	if !ok || !isDashedUUID(uuidPart) {
 		return ErrInvalidPaymentID
 	}
 	return nil
+}
+
+func isDashedUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !isHexDigit(r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') ||
+		(r >= 'a' && r <= 'f') ||
+		(r >= 'A' && r <= 'F')
 }
 
 func normalizeRequired(value string, err error) (string, error) {

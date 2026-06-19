@@ -21,14 +21,14 @@ import (
 
 func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
-	api.payments.authorizePaymentResult = newPayment("pay_123")
+	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
 	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
 
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "/v1/payments/pay_123", rec.Header().Get("Location"))
+	assert.Equal(t, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
 	assert.Equal(t, app.AuthorizePaymentCommand{
 		OrderID:        "order-1",
 		CustomerID:     "customer-1",
@@ -43,7 +43,7 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	}, api.payments.authorizePaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
-			"id": "pay_123",
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
 			"order_id": "order-1",
 			"customer_id": "customer-1",
 			"amount": 1299,

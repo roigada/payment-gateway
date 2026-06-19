@@ -68,9 +68,9 @@ _Avoid_: Payment token, card account
 The single fictional bank that approves, declines, captures, voids, and refunds payments.
 _Avoid_: Card network, issuer, acquirer
 
-**Bank Reference**:
-An identity assigned by the **Mock Bank** to one of its payment operations. Bank references are used to continue communication with the **Mock Bank**, but they are not **Payment IDs**.
-_Avoid_: Payment ID, public ID
+**Bank Authorization ID**:
+An identity assigned by the **Mock Bank** to an approved authorization. A Bank Authorization ID is used to continue authorization-related communication with the **Mock Bank**, but it is not a **Payment ID**.
+_Avoid_: Bank Reference, Payment ID, public ID
 
 **Authorize**:
 To ask the **Mock Bank** to reserve the full **Amount** for a **Payment**.

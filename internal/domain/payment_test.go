@@ -13,7 +13,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *tes
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
 	payment, err := domain.NewAuthorizedPayment(
-		domain.PaymentID("pay_123"),
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		" order-1 ",
 		" customer-1 ",
 		1299,
@@ -23,7 +23,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *tes
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, domain.PaymentID("pay_123"), payment.ID())
+	assert.Equal(t, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), payment.ID())
 	assert.Equal(t, "order-1", payment.OrderID())
 	assert.Equal(t, "customer-1", payment.CustomerID())
 	assert.Equal(t, int64(1299), payment.AmountCents())
@@ -49,13 +49,16 @@ func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 		now                 time.Time
 		wantErr             error
 	}{
-		{name: "payment id", id: "123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "order id", id: "pay_123", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidOrderID},
-		{name: "customer id", id: "pay_123", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidCustomerID},
-		{name: "amount", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidAmount},
-		{name: "bank authorization id", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", bok: "bok-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
-		{name: "bank operation key", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: " ", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "timestamp", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{name: "payment id without prefix", id: "550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id without uuid", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id with undashed uuid", id: "pay_550e8400e29b41d4a716446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id with urn uuid", id: "pay_urn:uuid:550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "order id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidOrderID},
+		{name: "customer id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidCustomerID},
+		{name: "amount", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: now, wantErr: domain.ErrInvalidAmount},
+		{name: "bank authorization id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", bok: "bok-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
+		{name: "bank operation key", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: " ", now: now, wantErr: domain.ErrInvalidBankOperationKey},
+		{name: "timestamp", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
 	}
 
 	for _, tt := range tests {
