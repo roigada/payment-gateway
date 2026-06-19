@@ -57,11 +57,14 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	assert.Equal(t, "/api/v1/authorizations", gotPath)
 	assert.Equal(t, "bok_123", gotIdempotencyKey)
 	assert.Equal(t, map[string]any{
+		"order_id":     "order-1",
+		"customer_id":  "customer-1",
 		"card_number":  "4111111111111111",
 		"cvv":          "123",
 		"expiry_month": float64(12),
 		"expiry_year":  float64(2030),
 		"amount":       float64(1299),
+		"currency":     "USD",
 	}, gotBody)
 }
 

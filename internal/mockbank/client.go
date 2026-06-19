@@ -34,11 +34,14 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(authorizationRequest{
+		OrderID:     request.OrderID,
+		CustomerID:  request.CustomerID,
 		CardNumber:  request.Card.Number,
 		CVV:         request.Card.CVV,
 		ExpiryMonth: request.Card.ExpiryMonth,
 		ExpiryYear:  request.Card.ExpiryYear,
 		AmountCents: request.AmountCents,
+		Currency:    request.Currency,
 	}); err != nil {
 		return app.BankAuthorizationResult{}, err
 	}
@@ -73,11 +76,14 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 }
 
 type authorizationRequest struct {
+	OrderID     string `json:"order_id"`
+	CustomerID  string `json:"customer_id"`
 	CardNumber  string `json:"card_number"`
 	CVV         string `json:"cvv"`
 	ExpiryMonth int    `json:"expiry_month"`
 	ExpiryYear  int    `json:"expiry_year"`
 	AmountCents int64  `json:"amount"`
+	Currency    string `json:"currency"`
 }
 
 type authorizationResponse struct {
