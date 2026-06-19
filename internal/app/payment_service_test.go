@@ -54,7 +54,7 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 
 func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInsufficientFunds}}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
 
@@ -83,7 +83,7 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 
 func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInvalidCard}}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
 
@@ -100,7 +100,7 @@ func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t
 
 func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInvalidCard}}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	first := validAuthorizeCommand()
 	_, err := service.AuthorizePayment(context.Background(), first)

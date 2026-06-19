@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/roigada/payment-gateway/internal/mockbank"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,43 +98,43 @@ func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
 		name       string
 		status     int
 		body       string
-		wantReason app.BankDeclineReason
+		wantReason domain.DeclineReason
 	}{
 		{
 			name:       "insufficient funds",
 			status:     http.StatusPaymentRequired,
 			body:       `{"error":"insufficient_funds","message":"not enough funds"}`,
-			wantReason: app.BankDeclineReasonInsufficientFunds,
+			wantReason: domain.DeclineReasonInsufficientFunds,
 		},
 		{
 			name:       "invalid card",
 			status:     http.StatusBadRequest,
 			body:       `{"error":"invalid_card","message":"invalid card"}`,
-			wantReason: app.BankDeclineReasonInvalidCard,
+			wantReason: domain.DeclineReasonInvalidCard,
 		},
 		{
 			name:       "invalid cvv",
 			status:     http.StatusBadRequest,
 			body:       `{"error":"invalid_cvv","message":"invalid cvv"}`,
-			wantReason: app.BankDeclineReasonInvalidCard,
+			wantReason: domain.DeclineReasonInvalidCard,
 		},
 		{
 			name:       "expired card",
 			status:     http.StatusBadRequest,
 			body:       `{"error":"card_expired","message":"expired card"}`,
-			wantReason: app.BankDeclineReasonExpiredCard,
+			wantReason: domain.DeclineReasonExpiredCard,
 		},
 		{
 			name:       "legacy nested error shape",
 			status:     http.StatusUnprocessableEntity,
 			body:       `{"error":{"code":"expired_card","message":"expired card"}}`,
-			wantReason: app.BankDeclineReasonExpiredCard,
+			wantReason: domain.DeclineReasonExpiredCard,
 		},
 		{
 			name:       "unknown definitive decline",
 			status:     http.StatusPaymentRequired,
 			body:       `{"error":"do_not_honor","message":"declined"}`,
-			wantReason: app.BankDeclineReasonUnknown,
+			wantReason: domain.DeclineReasonUnknown,
 		},
 	}
 

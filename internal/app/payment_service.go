@@ -81,17 +81,8 @@ type BankAuthorizationRequest struct {
 
 type BankAuthorizationResult struct {
 	BankAuthorizationID string
-	DeclineReason       BankDeclineReason
+	DeclineReason       domain.DeclineReason
 }
-
-type BankDeclineReason = domain.DeclineReason
-
-const (
-	BankDeclineReasonInsufficientFunds = domain.DeclineReasonInsufficientFunds
-	BankDeclineReasonInvalidCard       = domain.DeclineReasonInvalidCard
-	BankDeclineReasonExpiredCard       = domain.DeclineReasonExpiredCard
-	BankDeclineReasonUnknown           = domain.DeclineReasonUnknown
-)
 
 type PaymentService struct {
 	paymentRepository PaymentRepository
@@ -173,7 +164,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 			command.OrderID,
 			command.CustomerID,
 			command.AmountCents,
-			domain.DeclineReason(bankResult.DeclineReason),
+			bankResult.DeclineReason,
 			bankOperationKey,
 			now,
 		)

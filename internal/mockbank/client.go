@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type Client struct {
@@ -104,12 +105,12 @@ func decodeAuthorizationDecline(response *http.Response) (app.BankAuthorizationR
 	}
 
 	code := payload.declineCode()
-	reason, ok := mapBankDeclineReason(code)
+	reason, ok := mapDeclineReason(code)
 	if !ok {
 		if strings.TrimSpace(code) == "" || !isDefinitiveDeclineStatus(response.StatusCode) {
 			return app.BankAuthorizationResult{}, false
 		}
-		reason = app.BankDeclineReasonUnknown
+		reason = domain.DeclineReasonUnknown
 	}
 
 	return app.BankAuthorizationResult{DeclineReason: reason}, true
@@ -142,14 +143,14 @@ func rawErrorCode(raw json.RawMessage) string {
 	return payload.Code
 }
 
-func mapBankDeclineReason(code string) (app.BankDeclineReason, bool) {
+func mapDeclineReason(code string) (domain.DeclineReason, bool) {
 	switch strings.ToLower(strings.TrimSpace(code)) {
 	case "insufficient_funds":
-		return app.BankDeclineReasonInsufficientFunds, true
+		return domain.DeclineReasonInsufficientFunds, true
 	case "invalid_card", "invalid_card_number", "invalid_cvv":
-		return app.BankDeclineReasonInvalidCard, true
+		return domain.DeclineReasonInvalidCard, true
 	case "expired_card", "card_expired":
-		return app.BankDeclineReasonExpiredCard, true
+		return domain.DeclineReasonExpiredCard, true
 	default:
 		return "", false
 	}
