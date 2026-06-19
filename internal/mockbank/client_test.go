@@ -91,3 +91,77 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantReason app.BankDeclineReason
+	}{
+		{
+			name:       "insufficient funds",
+			status:     http.StatusPaymentRequired,
+			body:       `{"error":{"code":"insufficient_funds","message":"not enough funds"}}`,
+			wantReason: app.BankDeclineReasonInsufficientFunds,
+		},
+		{
+			name:       "invalid card",
+			status:     http.StatusUnprocessableEntity,
+			body:       `{"error":{"code":"invalid_card","message":"invalid card"}}`,
+			wantReason: app.BankDeclineReasonInvalidCard,
+		},
+		{
+			name:       "invalid cvv",
+			status:     http.StatusUnprocessableEntity,
+			body:       `{"error":{"code":"invalid_cvv","message":"invalid cvv"}}`,
+			wantReason: app.BankDeclineReasonInvalidCard,
+		},
+		{
+			name:       "expired card",
+			status:     http.StatusUnprocessableEntity,
+			body:       `{"error":{"code":"expired_card","message":"expired card"}}`,
+			wantReason: app.BankDeclineReasonExpiredCard,
+		},
+		{
+			name:       "unknown definitive decline",
+			status:     http.StatusPaymentRequired,
+			body:       `{"error":{"code":"do_not_honor","message":"declined"}}`,
+			wantReason: app.BankDeclineReasonUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+			require.NoError(t, err)
+
+			assert.Equal(t, app.BankAuthorizationResult{DeclineReason: tt.wantReason}, result)
+		})
+	}
+}
+
+func validAuthorizationRequest() app.BankAuthorizationRequest {
+	return app.BankAuthorizationRequest{
+		OperationKey: "bok_123",
+		OrderID:      "order-1",
+		CustomerID:   "customer-1",
+		AmountCents:  1299,
+		Currency:     "USD",
+		Card: app.CardDetails{
+			Number:      "4111111111111111",
+			CVV:         "123",
+			ExpiryMonth: 12,
+			ExpiryYear:  2030,
+		},
+	}
+}

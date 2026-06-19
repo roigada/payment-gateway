@@ -20,6 +20,7 @@ const (
 	errorCodeInvalidAmount         = "invalid_amount"
 	errorCodeInvalidCardDetails    = "invalid_card_details"
 	errorCodeMissingIdempotencyKey = "missing_idempotency_key"
+	errorCodeIdempotencyConflict   = "idempotency_conflict"
 	errorCodePaymentNotFound       = "payment_not_found"
 )
 
@@ -81,14 +82,15 @@ func isJSONRequest(r *http.Request) bool {
 }
 
 type paymentPayload struct {
-	ID          string `json:"id"`
-	OrderID     string `json:"order_id"`
-	CustomerID  string `json:"customer_id"`
-	AmountCents int64  `json:"amount"`
-	Currency    string `json:"currency"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID            string `json:"id"`
+	OrderID       string `json:"order_id"`
+	CustomerID    string `json:"customer_id"`
+	AmountCents   int64  `json:"amount"`
+	Currency      string `json:"currency"`
+	Status        string `json:"status"`
+	DeclineReason string `json:"decline_reason,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 type paymentEnvelope struct {
@@ -98,14 +100,15 @@ type paymentEnvelope struct {
 func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
 	return paymentEnvelope{
 		Payment: paymentPayload{
-			ID:          payment.ID,
-			OrderID:     payment.OrderID,
-			CustomerID:  payment.CustomerID,
-			AmountCents: payment.AmountCents,
-			Currency:    payment.Currency,
-			Status:      payment.Status,
-			CreatedAt:   payment.CreatedAt.UTC().Format(time.RFC3339Nano),
-			UpdatedAt:   payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			ID:            payment.ID,
+			OrderID:       payment.OrderID,
+			CustomerID:    payment.CustomerID,
+			AmountCents:   payment.AmountCents,
+			Currency:      payment.Currency,
+			Status:        payment.Status,
+			DeclineReason: payment.DeclineReason,
+			CreatedAt:     payment.CreatedAt.UTC().Format(time.RFC3339Nano),
+			UpdatedAt:     payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		},
 	}
 }
@@ -140,6 +143,8 @@ func writePaymentServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCardDetails, "invalid card details")
 	case app.PaymentErrorMissingIdempotencyKey:
 		writeError(w, http.StatusUnprocessableEntity, errorCodeMissingIdempotencyKey, app.ErrMissingIdempotencyKey.Error())
+	case app.PaymentErrorIdempotencyConflict:
+		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, app.ErrIdempotencyConflict.Error())
 	case app.PaymentErrorNotFound:
 		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, app.ErrPaymentNotFound.Error())
 	default:

@@ -52,6 +52,68 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
+func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInsufficientFunds}}
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, bank, now)
+
+	payment, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.PaymentResult{
+		ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:       "order-1",
+		CustomerID:    "customer-1",
+		AmountCents:   1299,
+		Currency:      "USD",
+		Status:        "declined",
+		DeclineReason: "insufficient_funds",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, payment)
+
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusDeclined, saved.Status())
+	assert.Equal(t, domain.DeclineReasonInsufficientFunds, saved.DeclineReason())
+	assert.Empty(t, saved.BankAuthorizationID())
+	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
+}
+
+func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInvalidCard}}
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, bank, now)
+
+	first, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	bank.result = app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-2"}
+
+	replayed, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	assert.Equal(t, first, replayed)
+	assert.Equal(t, 1, bank.calls)
+}
+
+func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: app.BankDeclineReasonInvalidCard}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	first := validAuthorizeCommand()
+	_, err := service.AuthorizePayment(context.Background(), first)
+	require.NoError(t, err)
+
+	second := validAuthorizeCommand()
+	second.AmountCents = 2599
+	_, err = service.AuthorizePayment(context.Background(), second)
+
+	assert.ErrorIs(t, err, app.ErrIdempotencyConflict)
+	assert.Equal(t, 1, bank.calls)
+}
+
 func TestAuthorizePaymentRequiresIdempotencyKeyBeforeCallingBank(t *testing.T) {
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := newPaymentService(testsupport.NewPaymentRepository(), bank, time.Now())
@@ -124,6 +186,7 @@ func validAuthorizeCommand() app.AuthorizePaymentCommand {
 func newPaymentService(repo app.PaymentRepository, bank app.BankAuthorizer, now time.Time) *app.PaymentService {
 	return app.NewPaymentService(
 		repo,
+		testsupport.NewIdempotencyRepository(),
 		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
 		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
 		bank,
@@ -135,9 +198,11 @@ type bankAuthorizerFake struct {
 	request app.BankAuthorizationRequest
 	result  app.BankAuthorizationResult
 	err     error
+	calls   int
 }
 
 func (f *bankAuthorizerFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
 	f.request = request
+	f.calls++
 	return f.result, f.err
 }

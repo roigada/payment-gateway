@@ -2,21 +2,28 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/domain"
 )
 
+const authorizePaymentOperation = "authorize_payment"
+
 type PaymentResult struct {
-	ID          string
-	OrderID     string
-	CustomerID  string
-	AmountCents int64
-	Currency    string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            string
+	OrderID       string
+	CustomerID    string
+	AmountCents   int64
+	Currency      string
+	Status        string
+	DeclineReason string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type AuthorizePaymentCommand struct {
@@ -37,6 +44,18 @@ type CardDetails struct {
 type PaymentRepository interface {
 	Create(ctx context.Context, payment *domain.Payment) error
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
+}
+
+type IdempotencyRepository interface {
+	FindCompleted(ctx context.Context, operation string, key string) (IdempotencyRecord, error)
+	SaveCompleted(ctx context.Context, record IdempotencyRecord) error
+}
+
+type IdempotencyRecord struct {
+	Operation          string
+	Key                string
+	RequestFingerprint string
+	Result             PaymentResult
 }
 
 type PaymentIDGenerator interface {
@@ -62,10 +81,21 @@ type BankAuthorizationRequest struct {
 
 type BankAuthorizationResult struct {
 	BankAuthorizationID string
+	DeclineReason       BankDeclineReason
 }
+
+type BankDeclineReason = domain.DeclineReason
+
+const (
+	BankDeclineReasonInsufficientFunds = domain.DeclineReasonInsufficientFunds
+	BankDeclineReasonInvalidCard       = domain.DeclineReasonInvalidCard
+	BankDeclineReasonExpiredCard       = domain.DeclineReasonExpiredCard
+	BankDeclineReasonUnknown           = domain.DeclineReasonUnknown
+)
 
 type PaymentService struct {
 	paymentRepository PaymentRepository
+	idempotency       IdempotencyRepository
 	paymentIDs        PaymentIDGenerator
 	bankOperationKeys BankOperationKeyGenerator
 	bank              BankAuthorizer
@@ -74,6 +104,7 @@ type PaymentService struct {
 
 func NewPaymentService(
 	paymentRepository PaymentRepository,
+	idempotency IdempotencyRepository,
 	paymentIDs PaymentIDGenerator,
 	bankOperationKeys BankOperationKeyGenerator,
 	bank BankAuthorizer,
@@ -81,6 +112,7 @@ func NewPaymentService(
 ) *PaymentService {
 	return &PaymentService{
 		paymentRepository: paymentRepository,
+		idempotency:       idempotency,
 		paymentIDs:        paymentIDs,
 		bankOperationKeys: bankOperationKeys,
 		bank:              bank,
@@ -105,6 +137,20 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentResult{}, err
 	}
 
+	fingerprint := authorizePaymentFingerprint(command)
+	if s.idempotency != nil {
+		record, err := s.idempotency.FindCompleted(ctx, authorizePaymentOperation, command.IdempotencyKey)
+		if err == nil {
+			if record.RequestFingerprint != fingerprint {
+				return PaymentResult{}, ErrIdempotencyConflict
+			}
+			return record.Result, nil
+		}
+		if !errors.Is(err, ErrIdempotencyNotFound) {
+			return PaymentResult{}, err
+		}
+	}
+
 	paymentID := s.paymentIDs.NewPaymentID()
 	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	bankResult, err := s.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
@@ -119,15 +165,29 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentResult{}, err
 	}
 
-	payment, err := domain.NewAuthorizedPayment(
-		paymentID,
-		command.OrderID,
-		command.CustomerID,
-		command.AmountCents,
-		bankResult.BankAuthorizationID,
-		bankOperationKey,
-		s.clock.Now(),
-	)
+	now := s.clock.Now()
+	var payment *domain.Payment
+	if bankResult.DeclineReason != "" {
+		payment, err = domain.NewDeclinedPayment(
+			paymentID,
+			command.OrderID,
+			command.CustomerID,
+			command.AmountCents,
+			domain.DeclineReason(bankResult.DeclineReason),
+			bankOperationKey,
+			now,
+		)
+	} else {
+		payment, err = domain.NewAuthorizedPayment(
+			paymentID,
+			command.OrderID,
+			command.CustomerID,
+			command.AmountCents,
+			bankResult.BankAuthorizationID,
+			bankOperationKey,
+			now,
+		)
+	}
 	if err != nil {
 		return PaymentResult{}, err
 	}
@@ -135,7 +195,19 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentResult{}, err
 	}
 
-	return newPaymentResult(payment), nil
+	result := newPaymentResult(payment)
+	if s.idempotency != nil {
+		if err := s.idempotency.SaveCompleted(ctx, IdempotencyRecord{
+			Operation:          authorizePaymentOperation,
+			Key:                command.IdempotencyKey,
+			RequestFingerprint: fingerprint,
+			Result:             result,
+		}); err != nil {
+			return PaymentResult{}, err
+		}
+	}
+
+	return result, nil
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, id string) (PaymentResult, error) {
@@ -174,15 +246,33 @@ func allDigits(value string) bool {
 	return true
 }
 
+func authorizePaymentFingerprint(command AuthorizePaymentCommand) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(
+		hash,
+		"%s\n%s\n%s\n%d\n%s\n%s\n%d\n%d",
+		authorizePaymentOperation,
+		strings.TrimSpace(command.OrderID),
+		strings.TrimSpace(command.CustomerID),
+		command.AmountCents,
+		strings.TrimSpace(command.Card.Number),
+		strings.TrimSpace(command.Card.CVV),
+		command.Card.ExpiryMonth,
+		command.Card.ExpiryYear,
+	)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 func newPaymentResult(payment *domain.Payment) PaymentResult {
 	return PaymentResult{
-		ID:          string(payment.ID()),
-		OrderID:     payment.OrderID(),
-		CustomerID:  payment.CustomerID(),
-		AmountCents: payment.AmountCents(),
-		Currency:    payment.Currency(),
-		Status:      string(payment.Status()),
-		CreatedAt:   payment.CreatedAt(),
-		UpdatedAt:   payment.UpdatedAt(),
+		ID:            string(payment.ID()),
+		OrderID:       payment.OrderID(),
+		CustomerID:    payment.CustomerID(),
+		AmountCents:   payment.AmountCents(),
+		Currency:      payment.Currency(),
+		Status:        string(payment.Status()),
+		DeclineReason: string(payment.DeclineReason()),
+		CreatedAt:     payment.CreatedAt(),
+		UpdatedAt:     payment.UpdatedAt(),
 	}
 }

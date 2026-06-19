@@ -13,8 +13,16 @@ type PaymentRepository struct {
 	db *sql.DB
 }
 
+type IdempotencyRepository struct {
+	db *sql.DB
+}
+
 func NewPaymentRepository(db *sql.DB) *PaymentRepository {
 	return &PaymentRepository{db: db}
+}
+
+func NewIdempotencyRepository(db *sql.DB) *IdempotencyRepository {
+	return &IdempotencyRepository{db: db}
 }
 
 func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment) error {
@@ -29,18 +37,20 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     status,
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
+		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
 		payment.AmountCents(),
 		payment.Currency(),
 		payment.Status(),
-		payment.BankAuthorizationID(),
+		nullableString(payment.BankAuthorizationID()),
 		payment.AuthorizationBankOperationKey(),
+		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
@@ -54,8 +64,9 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents                   int64
 		currency                      string
 		status                        domain.PaymentStatus
-		bankAuthorizationID           string
+		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
+		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
 	)
@@ -68,6 +79,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        status,
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
+		        decline_reason,
 		        created_at,
 		        updated_at
 		   FROM payments
@@ -81,6 +93,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&status,
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
+		&declineReason,
 		&createdAt,
 		&updatedAt,
 	)
@@ -98,9 +111,103 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents,
 		currency,
 		status,
-		bankAuthorizationID,
+		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
+		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
 	)
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullStringValue(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
+}
+
+func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation string, key string) (app.IdempotencyRecord, error) {
+	var record app.IdempotencyRecord
+	var declineReason sql.NullString
+	err := r.db.QueryRowContext(
+		ctx,
+		`SELECT request_fingerprint,
+		        payment_id,
+		        order_id,
+		        customer_id,
+		        amount_cents,
+		        currency,
+		        status,
+		        decline_reason,
+		        created_at,
+		        updated_at
+		   FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2`,
+		operation,
+		key,
+	).Scan(
+		&record.RequestFingerprint,
+		&record.Result.ID,
+		&record.Result.OrderID,
+		&record.Result.CustomerID,
+		&record.Result.AmountCents,
+		&record.Result.Currency,
+		&record.Result.Status,
+		&declineReason,
+		&record.Result.CreatedAt,
+		&record.Result.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return app.IdempotencyRecord{}, app.ErrIdempotencyNotFound
+		}
+		return app.IdempotencyRecord{}, err
+	}
+
+	record.Operation = operation
+	record.Key = key
+	record.Result.DeclineReason = nullStringValue(declineReason)
+	return record, nil
+}
+
+func (r *IdempotencyRepository) SaveCompleted(ctx context.Context, record app.IdempotencyRecord) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO idempotency_records (
+		     operation,
+		     key,
+		     request_fingerprint,
+		     payment_id,
+		     order_id,
+		     customer_id,
+		     amount_cents,
+		     currency,
+		     status,
+		     decline_reason,
+		     created_at,
+		     updated_at
+		 )
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		record.Operation,
+		record.Key,
+		record.RequestFingerprint,
+		record.Result.ID,
+		record.Result.OrderID,
+		record.Result.CustomerID,
+		record.Result.AmountCents,
+		record.Result.Currency,
+		record.Result.Status,
+		nullableString(record.Result.DeclineReason),
+		record.Result.CreatedAt,
+		record.Result.UpdatedAt,
+	)
+	return err
 }
