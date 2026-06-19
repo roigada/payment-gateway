@@ -90,3 +90,9 @@ curl -i http://localhost:8080/readyz
 ```sh
 go test ./...
 ```
+
+The default test suite includes Docker-backed integration tests. To run only fast tests:
+
+```sh
+go test -short ./...
+```

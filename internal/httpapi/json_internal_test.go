@@ -24,40 +24,40 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 		},
 		{
 			name:     "malformed body",
-			body:     `{"title":`,
+			body:     `{"order_id":`,
 			category: errMalformedJSONBody,
 		},
 		{
 			name:     "incorrect type",
-			body:     `{"title":1}`,
+			body:     `{"order_id":1}`,
 			category: errIncorrectJSONType,
 		},
 		{
 			name:     "unknown field",
-			body:     `{"title":"Buy milk","completed":true}`,
+			body:     `{"order_id":"order-1","unexpected":true}`,
 			category: errUnknownJSONField,
-			contains: `"completed"`,
+			contains: `"unexpected"`,
 		},
 		{
 			name:     "oversized body",
-			body:     `{"title":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`,
+			body:     `{"order_id":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`,
 			category: errOversizedJSONBody,
 		},
 		{
 			name:     "multiple values",
-			body:     `{"title":"Buy milk"} {"title":"Pay rent"}`,
+			body:     `{"order_id":"order-1"} {"order_id":"order-2"}`,
 			category: errMultipleJSONValues,
 		},
 		{
 			name:     "trailing junk",
-			body:     `{"title":"Buy milk"} garbage`,
+			body:     `{"order_id":"order-1"} garbage`,
 			category: errMalformedJSONBody,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := decodeTaskRequest(tt.body)
+			err := decodePaymentRequest(tt.body)
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, errInvalidJSONBody)
@@ -71,19 +71,19 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 
 func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"title":"Buy milk"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(`{"order_id":"order-1"}`))
 
 	assert.Panics(t, func() {
 		_ = decodeJSONRequest(rec, req, nil)
 	})
 }
 
-func decodeTaskRequest(body string) error {
+func decodePaymentRequest(body string) error {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(body))
 
 	var request struct {
-		Title string `json:"title"`
+		OrderID string `json:"order_id"`
 	}
 	return decodeJSONRequest(rec, req, &request)
 }
@@ -91,12 +91,12 @@ func decodeTaskRequest(body string) error {
 func TestWriteJSONWritesStatusContentTypeAndBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeJSON(rec, http.StatusCreated, map[string]string{"id": "task-1"})
+	writeJSON(rec, http.StatusCreated, map[string]string{"id": "pay_550e8400-e29b-41d4-a716-446655440000"})
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-	assert.JSONEq(t, `{"id":"task-1"}`, rec.Body.String())
-	assert.Equal(t, "{\"id\":\"task-1\"}\n", rec.Body.String())
+	assert.JSONEq(t, `{"id":"pay_550e8400-e29b-41d4-a716-446655440000"}`, rec.Body.String())
+	assert.Equal(t, "{\"id\":\"pay_550e8400-e29b-41d4-a716-446655440000\"}\n", rec.Body.String())
 }
 
 func TestWriteJSONReturnsInternalServerErrorWhenBodyCannotBeEncoded(t *testing.T) {

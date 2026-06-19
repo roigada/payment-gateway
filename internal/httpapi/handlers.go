@@ -4,21 +4,41 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 )
 
 const (
-	errorCodeInternalServer     = "internal_server_error"
-	errorCodeInvalidJSONBody    = "invalid_json_body"
-	errorCodeServiceUnavailable = "service_unavailable"
-	errorCodeInvalidTaskTitle   = "invalid_task_title"
-	errorCodeTaskNotFound       = "task_not_found"
+	errorCodeInternalServer        = "internal_server_error"
+	errorCodeInvalidJSONBody       = "invalid_json_body"
+	errorCodeUnsupportedMediaType  = "unsupported_media_type"
+	errorCodeServiceUnavailable    = "service_unavailable"
+	errorCodeInvalidOrderID        = "invalid_order_id"
+	errorCodeInvalidCustomerID     = "invalid_customer_id"
+	errorCodeInvalidAmount         = "invalid_amount"
+	errorCodeInvalidCardDetails    = "invalid_card_details"
+	errorCodeMissingIdempotencyKey = "missing_idempotency_key"
+	errorCodePaymentNotFound       = "payment_not_found"
 )
 
-func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
+	if !isJSONRequest(r) {
+		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
 	var request struct {
-		Title string `json:"title"`
+		OrderID     string `json:"order_id"`
+		CustomerID  string `json:"customer_id"`
+		AmountCents int64  `json:"amount"`
+		Card        struct {
+			Number      string `json:"number"`
+			CVV         string `json:"cvv"`
+			ExpiryMonth int    `json:"expiry_month"`
+			ExpiryYear  int    `json:"expiry_year"`
+		} `json:"card"`
 	}
 	if err := decodeJSONRequest(w, r, &request); err != nil {
 		if errors.Is(err, errInvalidJSONBody) {
@@ -30,99 +50,63 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.tasks.CreateTask(r.Context(), request.Title)
+	payment, err := s.payments.AuthorizePayment(r.Context(), app.AuthorizePaymentCommand{
+		OrderID:        request.OrderID,
+		CustomerID:     request.CustomerID,
+		AmountCents:    request.AmountCents,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		Card: app.CardDetails{
+			Number:      request.Card.Number,
+			CVV:         request.Card.CVV,
+			ExpiryMonth: request.Card.ExpiryMonth,
+			ExpiryYear:  request.Card.ExpiryYear,
+		},
+	})
 	if err != nil {
-		writeTaskServiceError(w, err)
+		writePaymentServiceError(w, err)
 		return
 	}
 
-	w.Header().Set("Location", "/v1/tasks/"+url.PathEscape(task.ID))
-	writeJSON(w, http.StatusCreated, newTaskEnvelope(task))
+	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(payment.ID))
+	writeJSON(w, http.StatusCreated, newPaymentEnvelope(payment))
 }
 
-func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := s.tasks.ListTasks(r.Context())
-	if err != nil {
-		writeTaskServiceError(w, err)
-		return
+func isJSONRequest(r *http.Request) bool {
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "" {
+		return false
 	}
-
-	writeJSON(w, http.StatusOK, newTasksEnvelope(tasks))
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	return strings.EqualFold(strings.TrimSpace(mediaType), "application/json")
 }
 
-func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.tasks.GetTask(r.Context(), r.PathValue("task_id"))
-	if err != nil {
-		writeTaskServiceError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, newTaskEnvelope(task))
+type paymentPayload struct {
+	ID          string `json:"id"`
+	OrderID     string `json:"order_id"`
+	CustomerID  string `json:"customer_id"`
+	AmountCents int64  `json:"amount"`
+	Currency    string `json:"currency"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
-func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.tasks.CompleteTask(r.Context(), r.PathValue("task_id"))
-	if err != nil {
-		writeTaskServiceError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, newTaskEnvelope(task))
+type paymentEnvelope struct {
+	Payment paymentPayload `json:"payment"`
 }
 
-func (s *Server) reopenTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.tasks.ReopenTask(r.Context(), r.PathValue("task_id"))
-	if err != nil {
-		writeTaskServiceError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, newTaskEnvelope(task))
-}
-
-func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.DeleteTask(r.Context(), r.PathValue("task_id")); err != nil {
-		writeTaskServiceError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-type taskPayload struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Completed bool   `json:"completed"`
-}
-
-type taskEnvelope struct {
-	Task taskPayload `json:"task"`
-}
-
-type tasksEnvelope struct {
-	Tasks []taskPayload `json:"tasks"`
-}
-
-func newTaskEnvelope(task app.TaskResult) taskEnvelope {
-	return taskEnvelope{
-		Task: newTaskPayload(task),
-	}
-}
-
-func newTasksEnvelope(tasks []app.TaskResult) tasksEnvelope {
-	payloads := make([]taskPayload, 0, len(tasks))
-	for _, task := range tasks {
-		payloads = append(payloads, newTaskPayload(task))
-	}
-
-	return tasksEnvelope{Tasks: payloads}
-}
-
-func newTaskPayload(task app.TaskResult) taskPayload {
-	return taskPayload{
-		ID:        task.ID,
-		Title:     task.Title,
-		Completed: task.Completed,
+func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
+	return paymentEnvelope{
+		Payment: paymentPayload{
+			ID:          payment.ID,
+			OrderID:     payment.OrderID,
+			CustomerID:  payment.CustomerID,
+			AmountCents: payment.AmountCents,
+			Currency:    payment.Currency,
+			Status:      payment.Status,
+			CreatedAt:   payment.CreatedAt.UTC().Format(time.RFC3339Nano),
+			UpdatedAt:   payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		},
 	}
 }
 
@@ -144,12 +128,20 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 	})
 }
 
-func writeTaskServiceError(w http.ResponseWriter, err error) {
-	switch app.ClassifyTaskError(err) {
-	case app.TaskErrorInvalidTitle:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidTaskTitle, "invalid task title")
-	case app.TaskErrorNotFound:
-		writeError(w, http.StatusNotFound, errorCodeTaskNotFound, app.ErrTaskNotFound.Error())
+func writePaymentServiceError(w http.ResponseWriter, err error) {
+	switch app.ClassifyPaymentError(err) {
+	case app.PaymentErrorInvalidOrderID:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidOrderID, "invalid order id")
+	case app.PaymentErrorInvalidCustomerID:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCustomerID, "invalid customer id")
+	case app.PaymentErrorInvalidAmount:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidAmount, "invalid amount")
+	case app.PaymentErrorInvalidCardDetails:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCardDetails, "invalid card details")
+	case app.PaymentErrorMissingIdempotencyKey:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeMissingIdempotencyKey, app.ErrMissingIdempotencyKey.Error())
+	case app.PaymentErrorNotFound:
+		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, app.ErrPaymentNotFound.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 	}

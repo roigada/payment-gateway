@@ -11,31 +11,26 @@ import (
 type Server struct {
 	handler   http.Handler
 	logger    *slog.Logger
-	tasks     taskUseCases
+	payments  paymentUseCases
 	readiness readinessChecker
 }
 
-type taskUseCases interface {
-	CreateTask(ctx context.Context, title string) (app.TaskResult, error)
-	ListTasks(ctx context.Context) ([]app.TaskResult, error)
-	GetTask(ctx context.Context, id string) (app.TaskResult, error)
-	CompleteTask(ctx context.Context, id string) (app.TaskResult, error)
-	ReopenTask(ctx context.Context, id string) (app.TaskResult, error)
-	DeleteTask(ctx context.Context, id string) error
+type paymentUseCases interface {
+	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error)
 }
 
 type readinessChecker interface {
 	CheckReady(ctx context.Context) error
 }
 
-func NewServer(tasks taskUseCases, readiness readinessChecker, logger *slog.Logger) *Server {
+func NewServer(payments paymentUseCases, readiness readinessChecker, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	server := &Server{
 		logger:    logger,
-		tasks:     tasks,
+		payments:  payments,
 		readiness: readiness,
 	}
 	server.handler = server.routes()
@@ -51,12 +46,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	mux.HandleFunc("POST /v1/tasks", s.createTask)
-	mux.HandleFunc("GET /v1/tasks", s.listTasks)
-	mux.HandleFunc("GET /v1/tasks/{task_id}", s.getTask)
-	mux.HandleFunc("POST /v1/tasks/{task_id}/complete", s.completeTask)
-	mux.HandleFunc("POST /v1/tasks/{task_id}/reopen", s.reopenTask)
-	mux.HandleFunc("DELETE /v1/tasks/{task_id}", s.deleteTask)
+	mux.HandleFunc("POST /v1/payments", s.authorizePayment)
 
 	return s.logRequest(s.recoverPanic(mux))
 }
