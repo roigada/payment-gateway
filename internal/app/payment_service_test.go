@@ -98,6 +98,23 @@ func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t
 	assert.Equal(t, 1, bank.calls)
 }
 
+func TestAuthorizePaymentReplaysWhenOnlyCVVDiffers(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	first := validAuthorizeCommand()
+	_, err := service.AuthorizePayment(context.Background(), first)
+	require.NoError(t, err)
+
+	second := validAuthorizeCommand()
+	second.Card.CVV = "999"
+	replayed, err := service.AuthorizePayment(context.Background(), second)
+
+	require.NoError(t, err)
+	assert.Equal(t, "declined", replayed.Status)
+	assert.Equal(t, 1, bank.calls)
+}
+
 func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
@@ -111,6 +128,33 @@ func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *test
 	_, err = service.AuthorizePayment(context.Background(), second)
 
 	assert.ErrorIs(t, err, app.ErrIdempotencyConflict)
+	assert.Equal(t, 1, bank.calls)
+}
+
+func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	command := validAuthorizeCommand()
+	command.IdempotencyKey = " public-key-1 "
+	command.OrderID = " order-1 "
+	command.CustomerID = " customer-1 "
+	command.Card.Number = " 4111111111111111 "
+	command.Card.CVV = " 123 "
+
+	payment, err := service.AuthorizePayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, "order-1", bank.request.OrderID)
+	assert.Equal(t, "customer-1", bank.request.CustomerID)
+	assert.Equal(t, "4111111111111111", bank.request.Card.Number)
+	assert.Equal(t, "123", bank.request.Card.CVV)
+	assert.Equal(t, "order-1", payment.OrderID)
+	assert.Equal(t, "customer-1", payment.CustomerID)
+
+	replayed, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	assert.Equal(t, payment, replayed)
 	assert.Equal(t, 1, bank.calls)
 }
 
@@ -168,6 +212,77 @@ func TestAuthorizePaymentReturnsBankErrorWithoutStoringPayment(t *testing.T) {
 	assert.ErrorIs(t, findErr, app.ErrPaymentNotFound)
 }
 
+func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
+	validPaymentRepository := testsupport.NewPaymentRepository()
+	validIdempotency := testsupport.NewIdempotencyRepository()
+	validPaymentIDs := testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")}
+	validBankOperationKeys := testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"}
+	validBank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	validClock := testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)}
+
+	tests := []struct {
+		name   string
+		build  func()
+		reason string
+	}{
+		{
+			name: "payment repository",
+			build: func() {
+				app.NewPaymentService(nil, validIdempotency, validPaymentIDs, validBankOperationKeys, validBank, validClock, "secret")
+			},
+			reason: "payment repository is required",
+		},
+		{
+			name: "idempotency repository",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, nil, validPaymentIDs, validBankOperationKeys, validBank, validClock, "secret")
+			},
+			reason: "idempotency repository is required",
+		},
+		{
+			name: "payment ID generator",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, validIdempotency, nil, validBankOperationKeys, validBank, validClock, "secret")
+			},
+			reason: "payment ID generator is required",
+		},
+		{
+			name: "bank operation key generator",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, validIdempotency, validPaymentIDs, nil, validBank, validClock, "secret")
+			},
+			reason: "bank operation key generator is required",
+		},
+		{
+			name: "bank authorizer",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, validIdempotency, validPaymentIDs, validBankOperationKeys, nil, validClock, "secret")
+			},
+			reason: "bank authorizer is required",
+		},
+		{
+			name: "clock",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, validIdempotency, validPaymentIDs, validBankOperationKeys, validBank, nil, "secret")
+			},
+			reason: "clock is required",
+		},
+		{
+			name: "fingerprint secret",
+			build: func() {
+				app.NewPaymentService(validPaymentRepository, validIdempotency, validPaymentIDs, validBankOperationKeys, validBank, validClock, " ")
+			},
+			reason: "authorization fingerprint secret is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.PanicsWithValue(t, tt.reason, tt.build)
+		})
+	}
+}
+
 func validAuthorizeCommand() app.AuthorizePaymentCommand {
 	return app.AuthorizePaymentCommand{
 		OrderID:        "order-1",
@@ -191,6 +306,7 @@ func newPaymentService(repo app.PaymentRepository, bank app.BankAuthorizer, now 
 		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
 		bank,
 		testsupport.FixedClock{Time: now},
+		"fingerprint-secret",
 	)
 }
 

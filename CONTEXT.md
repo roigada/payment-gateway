@@ -81,7 +81,7 @@ An attempt to resolve a **Pending** **Payment** by asking the **Mock Bank** agai
 _Avoid_: Recreate payment, duplicate authorization
 
 **Authorization Fingerprint**:
-A non-reversible value used to check whether an **Authorization Retry** matches the original card and amount.
+A non-reversible value used to check whether an **Authorization Retry** matches the original card and amount. It does not represent the card CVV.
 _Avoid_: Stored card, card token
 
 **Capture**:

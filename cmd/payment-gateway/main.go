@@ -91,7 +91,7 @@ func run(logger *slog.Logger) error {
 	idempotencyRepository := postgres.NewIdempotencyRepository(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentRepository, idempotencyRepository, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{})
+	paymentService := app.NewPaymentService(paymentRepository, idempotencyRepository, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.AuthorizationFingerprintSecret)
 	readiness := postgres.NewReadinessChecker(db)
 	server := httpapi.NewServer(paymentService, readiness, logger)
 
