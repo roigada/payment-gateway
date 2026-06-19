@@ -102,23 +102,29 @@ func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
 		{
 			name:       "insufficient funds",
 			status:     http.StatusPaymentRequired,
-			body:       `{"error":{"code":"insufficient_funds","message":"not enough funds"}}`,
+			body:       `{"error":"insufficient_funds","message":"not enough funds"}`,
 			wantReason: app.BankDeclineReasonInsufficientFunds,
 		},
 		{
 			name:       "invalid card",
-			status:     http.StatusUnprocessableEntity,
-			body:       `{"error":{"code":"invalid_card","message":"invalid card"}}`,
+			status:     http.StatusBadRequest,
+			body:       `{"error":"invalid_card","message":"invalid card"}`,
 			wantReason: app.BankDeclineReasonInvalidCard,
 		},
 		{
 			name:       "invalid cvv",
-			status:     http.StatusUnprocessableEntity,
-			body:       `{"error":{"code":"invalid_cvv","message":"invalid cvv"}}`,
+			status:     http.StatusBadRequest,
+			body:       `{"error":"invalid_cvv","message":"invalid cvv"}`,
 			wantReason: app.BankDeclineReasonInvalidCard,
 		},
 		{
 			name:       "expired card",
+			status:     http.StatusBadRequest,
+			body:       `{"error":"card_expired","message":"expired card"}`,
+			wantReason: app.BankDeclineReasonExpiredCard,
+		},
+		{
+			name:       "legacy nested error shape",
 			status:     http.StatusUnprocessableEntity,
 			body:       `{"error":{"code":"expired_card","message":"expired card"}}`,
 			wantReason: app.BankDeclineReasonExpiredCard,
@@ -126,7 +132,7 @@ func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
 		{
 			name:       "unknown definitive decline",
 			status:     http.StatusPaymentRequired,
-			body:       `{"error":{"code":"do_not_honor","message":"declined"}}`,
+			body:       `{"error":"do_not_honor","message":"declined"}`,
 			wantReason: app.BankDeclineReasonUnknown,
 		},
 	}

@@ -88,15 +88,13 @@ type authorizationResponse struct {
 }
 
 type bankErrorResponse struct {
-	Code      string `json:"code"`
-	ErrorCode string `json:"error_code"`
-	Error     struct {
-		Code string `json:"code"`
-	} `json:"error"`
+	Code      string          `json:"code"`
+	ErrorCode string          `json:"error_code"`
+	Error     json.RawMessage `json:"error"`
 }
 
 func decodeAuthorizationDecline(response *http.Response) (app.BankAuthorizationResult, bool) {
-	if !isDefinitiveDeclineStatus(response.StatusCode) {
+	if !isAuthorizationDeclineCandidateStatus(response.StatusCode) {
 		return app.BankAuthorizationResult{}, false
 	}
 
@@ -108,7 +106,7 @@ func decodeAuthorizationDecline(response *http.Response) (app.BankAuthorizationR
 	code := payload.declineCode()
 	reason, ok := mapBankDeclineReason(code)
 	if !ok {
-		if strings.TrimSpace(code) == "" {
+		if strings.TrimSpace(code) == "" || !isDefinitiveDeclineStatus(response.StatusCode) {
 			return app.BankAuthorizationResult{}, false
 		}
 		reason = app.BankDeclineReasonUnknown
@@ -118,14 +116,30 @@ func decodeAuthorizationDecline(response *http.Response) (app.BankAuthorizationR
 }
 
 func (r bankErrorResponse) declineCode() string {
+	errorCode := rawErrorCode(r.Error)
 	switch {
-	case strings.TrimSpace(r.Error.Code) != "":
-		return r.Error.Code
+	case strings.TrimSpace(errorCode) != "":
+		return errorCode
 	case strings.TrimSpace(r.Code) != "":
 		return r.Code
 	default:
 		return r.ErrorCode
 	}
+}
+
+func rawErrorCode(raw json.RawMessage) string {
+	var code string
+	if err := json.Unmarshal(raw, &code); err == nil {
+		return code
+	}
+
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	return payload.Code
 }
 
 func mapBankDeclineReason(code string) (app.BankDeclineReason, bool) {
@@ -134,11 +148,15 @@ func mapBankDeclineReason(code string) (app.BankDeclineReason, bool) {
 		return app.BankDeclineReasonInsufficientFunds, true
 	case "invalid_card", "invalid_card_number", "invalid_cvv":
 		return app.BankDeclineReasonInvalidCard, true
-	case "expired_card":
+	case "expired_card", "card_expired":
 		return app.BankDeclineReasonExpiredCard, true
 	default:
 		return "", false
 	}
+}
+
+func isAuthorizationDeclineCandidateStatus(status int) bool {
+	return status == http.StatusBadRequest || isDefinitiveDeclineStatus(status)
 }
 
 func isDefinitiveDeclineStatus(status int) bool {

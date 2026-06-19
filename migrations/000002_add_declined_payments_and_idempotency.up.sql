@@ -18,19 +18,7 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     operation text NOT NULL CHECK (length(trim(operation)) > 0),
     key text NOT NULL CHECK (length(trim(key)) > 0),
     request_fingerprint text NOT NULL CHECK (length(trim(request_fingerprint)) > 0),
-    payment_id text NOT NULL CHECK (payment_id ~ '^pay_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
-    order_id text NOT NULL CHECK (length(trim(order_id)) > 0),
-    customer_id text NOT NULL CHECK (length(trim(customer_id)) > 0),
-    amount_cents bigint NOT NULL CHECK (amount_cents > 0),
-    currency text NOT NULL CHECK (currency = 'USD'),
-    status text NOT NULL CHECK (status IN ('authorized', 'declined')),
-    decline_reason text CHECK (decline_reason IS NULL OR decline_reason IN ('insufficient_funds', 'invalid_card', 'expired_card', 'unknown')),
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL,
-    PRIMARY KEY (operation, key),
-    CHECK (
-        (status = 'authorized' AND decline_reason IS NULL)
-        OR
-        (status = 'declined' AND decline_reason IS NOT NULL)
-    )
+    response_body jsonb NOT NULL CHECK (jsonb_typeof(response_body) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (operation, key)
 );
