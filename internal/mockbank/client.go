@@ -58,22 +58,26 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
-		if result, ok := decodeAuthorizationDecline(response); ok {
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload authorizationResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankAuthorizationResult{}, err
+		}
+		if strings.TrimSpace(payload.AuthorizationID) == "" {
+			return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
+		}
+
+		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+	case http.StatusBadRequest:
+		if result, ok := decodeBadRequestDecline(response); ok {
 			return result, nil
 		}
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode)
+	case http.StatusPaymentRequired:
+		return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, nil
 	}
 
-	var payload authorizationResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return app.BankAuthorizationResult{}, err
-	}
-	if strings.TrimSpace(payload.AuthorizationID) == "" {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
-	}
-
-	return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+	return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode)
 }
 
 type authorizationRequest struct {
@@ -88,78 +92,27 @@ type authorizationResponse struct {
 	AuthorizationID string `json:"authorization_id"`
 }
 
-type bankErrorResponse struct {
-	Code      string          `json:"code"`
-	ErrorCode string          `json:"error_code"`
-	Error     json.RawMessage `json:"error"`
+type authorizationErrorResponse struct {
+	Error string `json:"error"`
 }
 
-func decodeAuthorizationDecline(response *http.Response) (app.BankAuthorizationResult, bool) {
-	if !isAuthorizationDeclineCandidateStatus(response.StatusCode) {
-		return app.BankAuthorizationResult{}, false
-	}
-
-	var payload bankErrorResponse
+func decodeBadRequestDecline(response *http.Response) (app.BankAuthorizationResult, bool) {
+	var payload authorizationErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return app.BankAuthorizationResult{}, false
 	}
 
-	code := payload.declineCode()
-	reason, ok := mapDeclineReason(code)
-	if !ok {
-		if strings.TrimSpace(code) == "" || !isDefinitiveDeclineStatus(response.StatusCode) {
-			return app.BankAuthorizationResult{}, false
-		}
-		reason = domain.DeclineReasonUnknown
-	}
-
-	return app.BankAuthorizationResult{DeclineReason: reason}, true
+	reason, ok := declineReasonForBadRequest(payload.Error)
+	return app.BankAuthorizationResult{DeclineReason: reason}, ok
 }
 
-func (r bankErrorResponse) declineCode() string {
-	errorCode := rawErrorCode(r.Error)
-	switch {
-	case strings.TrimSpace(errorCode) != "":
-		return errorCode
-	case strings.TrimSpace(r.Code) != "":
-		return r.Code
-	default:
-		return r.ErrorCode
-	}
-}
-
-func rawErrorCode(raw json.RawMessage) string {
-	var code string
-	if err := json.Unmarshal(raw, &code); err == nil {
-		return code
-	}
-
-	var payload struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
-	}
-	return payload.Code
-}
-
-func mapDeclineReason(code string) (domain.DeclineReason, bool) {
+func declineReasonForBadRequest(code string) (domain.DeclineReason, bool) {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "insufficient_funds":
-		return domain.DeclineReasonInsufficientFunds, true
 	case "invalid_card", "invalid_card_number", "invalid_cvv":
 		return domain.DeclineReasonInvalidCard, true
-	case "expired_card", "card_expired":
+	case "card_expired":
 		return domain.DeclineReasonExpiredCard, true
 	default:
 		return "", false
 	}
-}
-
-func isAuthorizationDeclineCandidateStatus(status int) bool {
-	return status == http.StatusBadRequest || isDefinitiveDeclineStatus(status)
-}
-
-func isDefinitiveDeclineStatus(status int) bool {
-	return status == http.StatusPaymentRequired || status == http.StatusUnprocessableEntity
 }

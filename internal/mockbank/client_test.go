@@ -124,18 +124,6 @@ func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
 			body:       `{"error":"card_expired","message":"expired card"}`,
 			wantReason: domain.DeclineReasonExpiredCard,
 		},
-		{
-			name:       "legacy nested error shape",
-			status:     http.StatusUnprocessableEntity,
-			body:       `{"error":{"code":"expired_card","message":"expired card"}}`,
-			wantReason: domain.DeclineReasonExpiredCard,
-		},
-		{
-			name:       "unknown definitive decline",
-			status:     http.StatusPaymentRequired,
-			body:       `{"error":"do_not_honor","message":"declined"}`,
-			wantReason: domain.DeclineReasonUnknown,
-		},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +141,59 @@ func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, app.BankAuthorizationResult{DeclineReason: tt.wantReason}, result)
+		})
+	}
+}
+
+func TestAuthorizePaymentMapsPaymentRequiredToInsufficientFunds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(`{"error":"insufficient_funds","message":"not enough funds"}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, result)
+}
+
+func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "non-decline bad request",
+			status: http.StatusBadRequest,
+			body:   `{"error":"invalid_amount","message":"amount must be positive"}`,
+		},
+		{
+			name:   "internal bank error",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"internal_error","message":"try again"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "mock bank authorization failed")
 		})
 	}
 }
