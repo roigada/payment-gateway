@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type Client struct {
@@ -57,19 +58,26 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode)
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload authorizationResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankAuthorizationResult{}, err
+		}
+		if strings.TrimSpace(payload.AuthorizationID) == "" {
+			return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
+		}
+
+		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+	case http.StatusBadRequest:
+		if result, ok := decodeBadRequestDecline(response); ok {
+			return result, nil
+		}
+	case http.StatusPaymentRequired:
+		return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, nil
 	}
 
-	var payload authorizationResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return app.BankAuthorizationResult{}, err
-	}
-	if strings.TrimSpace(payload.AuthorizationID) == "" {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
-	}
-
-	return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+	return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode)
 }
 
 type authorizationRequest struct {
@@ -82,4 +90,29 @@ type authorizationRequest struct {
 
 type authorizationResponse struct {
 	AuthorizationID string `json:"authorization_id"`
+}
+
+type authorizationErrorResponse struct {
+	Error string `json:"error"`
+}
+
+func decodeBadRequestDecline(response *http.Response) (app.BankAuthorizationResult, bool) {
+	var payload authorizationErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return app.BankAuthorizationResult{}, false
+	}
+
+	reason, ok := declineReasonForBadRequest(payload.Error)
+	return app.BankAuthorizationResult{DeclineReason: reason}, ok
+}
+
+func declineReasonForBadRequest(code string) (domain.DeclineReason, bool) {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "invalid_card", "invalid_card_number", "invalid_cvv":
+		return domain.DeclineReasonInvalidCard, true
+	case "card_expired":
+		return domain.DeclineReasonExpiredCard, true
+	default:
+		return "", false
+	}
 }
