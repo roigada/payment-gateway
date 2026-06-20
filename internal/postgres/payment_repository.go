@@ -46,7 +46,10 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
-	return err
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
 }
 
 func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
@@ -91,12 +94,12 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, app.ErrPaymentNotFound
+			return nil, app.NewPaymentNotFound(string(id), err)
 		}
-		return nil, err
+		return nil, app.NewInternalPaymentError(err)
 	}
 
-	return domain.LoadPayment(
+	payment, err := domain.LoadPayment(
 		id,
 		orderID,
 		customerID,
@@ -109,6 +112,10 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		createdAt.Time,
 		updatedAt.Time,
 	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payment, nil
 }
 
 func nullableString(value string) any {

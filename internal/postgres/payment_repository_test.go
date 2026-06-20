@@ -52,7 +52,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
 	_, err = repository.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"))
-	assert.ErrorIs(t, err, app.ErrPaymentNotFound)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorNotFound))
 }
 
 func TestPaymentRepositoryPersistsDeclinedPayment(t *testing.T) {
@@ -115,8 +115,9 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 
 	require.NoError(t, repository.SaveCompleted(ctx, record))
 
-	saved, err := repository.FindCompleted(ctx, "authorize_payment", "public-key-1")
+	saved, found, err := repository.FindCompleted(ctx, "authorize_payment", "public-key-1")
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.Equal(t, record.Operation, saved.Operation)
 	assert.Equal(t, record.Key, saved.Key)
 	assert.Equal(t, record.RequestFingerprint, saved.RequestFingerprint)
@@ -130,8 +131,40 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 	assert.True(t, saved.Result.CreatedAt.Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.Result.UpdatedAt.Equal(now), "updated_at should round-trip as the same instant")
 
-	_, err = repository.FindCompleted(ctx, "authorize_payment", "missing-key")
-	assert.ErrorIs(t, err, app.ErrIdempotencyNotFound)
+	_, found, err = repository.FindCompleted(ctx, "authorize_payment", "missing-key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestIdempotencyRepositoryReturnsConflictForDuplicateCompletedRecord(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewIdempotencyRepository(db)
+	ctx := context.Background()
+	record := app.IdempotencyRecord{
+		Operation:          "authorize_payment",
+		Key:                "public-key-1",
+		RequestFingerprint: "fingerprint-1",
+		Result: app.PaymentResult{
+			ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
+			OrderID:     "order-1",
+			CustomerID:  "customer-1",
+			AmountCents: 1299,
+			Currency:    "USD",
+			Status:      "authorized",
+			CreatedAt:   time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC),
+			UpdatedAt:   time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC),
+		},
+	}
+
+	require.NoError(t, repository.SaveCompleted(ctx, record))
+	err := repository.SaveCompleted(ctx, record)
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 }
 
 func newTestDatabase(t *testing.T) *sql.DB {

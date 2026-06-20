@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/roigada/payment-gateway/internal/app"
 )
 
@@ -18,7 +19,7 @@ func NewIdempotencyRepository(db *sql.DB) *IdempotencyRepository {
 	return &IdempotencyRepository{db: db}
 }
 
-func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation string, key string) (app.IdempotencyRecord, error) {
+func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
 	var (
 		record       app.IdempotencyRecord
 		responseBody []byte
@@ -35,26 +36,26 @@ func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation str
 	).Scan(&record.RequestFingerprint, &responseBody)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return app.IdempotencyRecord{}, app.ErrIdempotencyNotFound
+			return app.IdempotencyRecord{}, false, nil
 		}
-		return app.IdempotencyRecord{}, err
+		return app.IdempotencyRecord{}, false, app.NewInternalPaymentError(err)
 	}
 
 	result, err := decodePaymentResultSnapshot(responseBody)
 	if err != nil {
-		return app.IdempotencyRecord{}, err
+		return app.IdempotencyRecord{}, false, app.NewInternalPaymentError(err)
 	}
 
 	record.Operation = operation
 	record.Key = key
 	record.Result = result
-	return record, nil
+	return record, true, nil
 }
 
 func (r *IdempotencyRepository) SaveCompleted(ctx context.Context, record app.IdempotencyRecord) error {
 	responseBody, err := encodePaymentResultSnapshot(record.Result)
 	if err != nil {
-		return err
+		return app.NewInternalPaymentError(err)
 	}
 
 	_, err = r.db.ExecContext(
@@ -71,7 +72,18 @@ func (r *IdempotencyRepository) SaveCompleted(ctx context.Context, record app.Id
 		record.RequestFingerprint,
 		string(responseBody),
 	)
-	return err
+	if err != nil {
+		if isUniqueViolation(err) {
+			return app.NewPaymentIdempotencyConflict(err)
+		}
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 type paymentResultSnapshot struct {

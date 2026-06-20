@@ -11,17 +11,15 @@ import (
 )
 
 const (
-	errorCodeInternalServer        = "internal_server_error"
-	errorCodeInvalidJSONBody       = "invalid_json_body"
-	errorCodeUnsupportedMediaType  = "unsupported_media_type"
-	errorCodeServiceUnavailable    = "service_unavailable"
-	errorCodeInvalidOrderID        = "invalid_order_id"
-	errorCodeInvalidCustomerID     = "invalid_customer_id"
-	errorCodeInvalidAmount         = "invalid_amount"
-	errorCodeInvalidCardDetails    = "invalid_card_details"
-	errorCodeMissingIdempotencyKey = "missing_idempotency_key"
-	errorCodeIdempotencyConflict   = "idempotency_conflict"
-	errorCodePaymentNotFound       = "payment_not_found"
+	errorCodeInternalServer       = "internal_server_error"
+	errorCodeInvalidJSONBody      = "invalid_json_body"
+	errorCodeUnsupportedMediaType = "unsupported_media_type"
+	errorCodeServiceUnavailable   = "service_unavailable"
+	errorCodeValidation           = "validation_error"
+	errorCodeIdempotencyConflict  = "idempotency_key_conflict"
+	errorCodePaymentNotFound      = "payment_not_found"
+	errorCodeBankUnavailable      = "bank_unavailable"
+	errorCodeBankTimeout          = "bank_timeout"
 )
 
 func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
@@ -132,22 +130,24 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 }
 
 func writePaymentServiceError(w http.ResponseWriter, err error) {
-	switch app.ClassifyPaymentError(err) {
-	case app.PaymentErrorInvalidOrderID:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidOrderID, "invalid order id")
-	case app.PaymentErrorInvalidCustomerID:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCustomerID, "invalid customer id")
-	case app.PaymentErrorInvalidAmount:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidAmount, "invalid amount")
-	case app.PaymentErrorInvalidCardDetails:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeInvalidCardDetails, "invalid card details")
-	case app.PaymentErrorMissingIdempotencyKey:
-		writeError(w, http.StatusUnprocessableEntity, errorCodeMissingIdempotencyKey, app.ErrMissingIdempotencyKey.Error())
-	case app.PaymentErrorIdempotencyConflict:
-		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, app.ErrIdempotencyConflict.Error())
-	case app.PaymentErrorNotFound:
-		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, app.ErrPaymentNotFound.Error())
-	default:
+	kind, ok := app.PaymentErrorKindOf(err)
+	if !ok {
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
+		return
+	}
+
+	switch kind {
+	case app.PaymentErrorInvalidInput:
+		writeError(w, http.StatusUnprocessableEntity, errorCodeValidation, "payment request is invalid")
+	case app.PaymentErrorIdempotencyConflict:
+		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key was already used with a different request")
+	case app.PaymentErrorNotFound:
+		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, "payment was not found")
+	case app.PaymentErrorBankUnavailable:
+		writeError(w, http.StatusBadGateway, errorCodeBankUnavailable, "bank is unavailable")
+	case app.PaymentErrorBankTimeout:
+		writeError(w, http.StatusGatewayTimeout, errorCodeBankTimeout, "bank request timed out")
+	default:
+		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, "internal server error")
 	}
 }

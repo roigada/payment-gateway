@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,7 +47,7 @@ type PaymentRepository interface {
 }
 
 type IdempotencyRepository interface {
-	FindCompleted(ctx context.Context, operation string, key string) (IdempotencyRecord, error)
+	FindCompleted(ctx context.Context, operation string, key string) (IdempotencyRecord, bool, error)
 	SaveCompleted(ctx context.Context, record IdempotencyRecord) error
 }
 
@@ -141,31 +140,31 @@ func NewPaymentService(
 func (s *PaymentService) AuthorizePayment(ctx context.Context, command AuthorizePaymentCommand) (PaymentResult, error) {
 	command = normalizeAuthorizePaymentCommand(command)
 	if command.IdempotencyKey == "" {
-		return PaymentResult{}, ErrMissingIdempotencyKey
+		return PaymentResult{}, NewInvalidPaymentInput("idempotency key is required", nil)
 	}
 	if command.OrderID == "" {
-		return PaymentResult{}, domain.ErrInvalidOrderID
+		return PaymentResult{}, NewInvalidPaymentInput("order id is required", nil)
 	}
 	if command.CustomerID == "" {
-		return PaymentResult{}, domain.ErrInvalidCustomerID
+		return PaymentResult{}, NewInvalidPaymentInput("customer id is required", nil)
 	}
 	if command.AmountCents <= 0 {
-		return PaymentResult{}, domain.ErrInvalidAmount
+		return PaymentResult{}, NewInvalidPaymentInput("amount must be greater than zero", nil)
 	}
 	if err := validateCardDetails(command.Card); err != nil {
 		return PaymentResult{}, err
 	}
 
 	fingerprint := authorizePaymentFingerprint(command, s.fingerprintSecret)
-	record, err := s.idempotency.FindCompleted(ctx, authorizePaymentOperation, command.IdempotencyKey)
-	if err == nil {
+	record, found, err := s.idempotency.FindCompleted(ctx, authorizePaymentOperation, command.IdempotencyKey)
+	if err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+	if found {
 		if record.RequestFingerprint != fingerprint {
-			return PaymentResult{}, ErrIdempotencyConflict
+			return PaymentResult{}, NewPaymentIdempotencyConflict(nil)
 		}
 		return record.Result, nil
-	}
-	if !errors.Is(err, ErrIdempotencyNotFound) {
-		return PaymentResult{}, err
 	}
 
 	paymentID := s.paymentIDs.NewPaymentID()
@@ -179,7 +178,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		Card:         command.Card,
 	})
 	if err != nil {
-		return PaymentResult{}, err
+		return PaymentResult{}, asPaymentError(err)
 	}
 
 	now := s.clock.Now()
@@ -206,10 +205,10 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		)
 	}
 	if err != nil {
-		return PaymentResult{}, err
+		return PaymentResult{}, asPaymentError(err)
 	}
 	if err := s.paymentRepository.Create(ctx, payment); err != nil {
-		return PaymentResult{}, err
+		return PaymentResult{}, asPaymentError(err)
 	}
 
 	result := newPaymentResult(payment)
@@ -219,7 +218,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		RequestFingerprint: fingerprint,
 		Result:             result,
 	}); err != nil {
-		return PaymentResult{}, err
+		return PaymentResult{}, asPaymentError(err)
 	}
 
 	return result, nil
@@ -228,23 +227,23 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 func (s *PaymentService) GetPayment(ctx context.Context, id string) (PaymentResult, error) {
 	payment, err := s.paymentRepository.FindByID(ctx, domain.PaymentID(id))
 	if err != nil {
-		return PaymentResult{}, err
+		return PaymentResult{}, asPaymentError(err)
 	}
 	return newPaymentResult(payment), nil
 }
 
 func validateCardDetails(card CardDetails) error {
 	if !allDigits(card.Number) || len(card.Number) < 12 || len(card.Number) > 19 {
-		return ErrInvalidCardDetails
+		return NewInvalidPaymentInput("card details are invalid", nil)
 	}
 	if !allDigits(card.CVV) || len(card.CVV) < 3 || len(card.CVV) > 4 {
-		return ErrInvalidCardDetails
+		return NewInvalidPaymentInput("card details are invalid", nil)
 	}
 	if card.ExpiryMonth < 1 || card.ExpiryMonth > 12 {
-		return ErrInvalidCardDetails
+		return NewInvalidPaymentInput("card details are invalid", nil)
 	}
 	if card.ExpiryYear <= 0 {
-		return ErrInvalidCardDetails
+		return NewInvalidPaymentInput("card details are invalid", nil)
 	}
 	return nil
 }

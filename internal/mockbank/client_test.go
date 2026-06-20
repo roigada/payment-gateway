@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/domain"
@@ -68,7 +69,7 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 
 func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"authorization_id":""}`))
 	}))
 	defer server.Close()
@@ -90,62 +91,10 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 		},
 	})
 
-	assert.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
-func TestAuthorizePaymentMapsBankDeclinesToGatewayDeclineReasons(t *testing.T) {
-	tests := []struct {
-		name       string
-		status     int
-		body       string
-		wantReason domain.DeclineReason
-	}{
-		{
-			name:       "insufficient funds",
-			status:     http.StatusPaymentRequired,
-			body:       `{"error":"insufficient_funds","message":"not enough funds"}`,
-			wantReason: domain.DeclineReasonInsufficientFunds,
-		},
-		{
-			name:       "invalid card",
-			status:     http.StatusBadRequest,
-			body:       `{"error":"invalid_card","message":"invalid card"}`,
-			wantReason: domain.DeclineReasonInvalidCard,
-		},
-		{
-			name:       "invalid cvv",
-			status:     http.StatusBadRequest,
-			body:       `{"error":"invalid_cvv","message":"invalid cvv"}`,
-			wantReason: domain.DeclineReasonInvalidCard,
-		},
-		{
-			name:       "expired card",
-			status:     http.StatusBadRequest,
-			body:       `{"error":"card_expired","message":"expired card"}`,
-			wantReason: domain.DeclineReasonExpiredCard,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.status)
-				_, _ = w.Write([]byte(tt.body))
-			}))
-			defer server.Close()
-
-			client, err := mockbank.NewClient(server.URL, server.Client())
-			require.NoError(t, err)
-
-			result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
-			require.NoError(t, err)
-
-			assert.Equal(t, app.BankAuthorizationResult{DeclineReason: tt.wantReason}, result)
-		})
-	}
-}
-
-func TestAuthorizePaymentMapsPaymentRequiredToInsufficientFunds(t *testing.T) {
+func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPaymentRequired)
 		_, _ = w.Write([]byte(`{"error":"insufficient_funds","message":"not enough funds"}`))
@@ -161,6 +110,48 @@ func TestAuthorizePaymentMapsPaymentRequiredToInsufficientFunds(t *testing.T) {
 	assert.Equal(t, app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, result)
 }
 
+func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "invalid amount",
+			body: `{"error":"invalid_amount","message":"amount must be positive"}`,
+		},
+		{
+			name: "invalid card",
+			body: `{"error":"invalid_card","message":"invalid card"}`,
+		},
+		{
+			name: "invalid cvv",
+			body: `{"error":"invalid_cvv","message":"invalid cvv"}`,
+		},
+		{
+			name: "expired card",
+			body: `{"error":"card_expired","message":"expired card"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+
+			require.Error(t, err)
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+		})
+	}
+}
+
 func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -170,7 +161,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 		{
 			name:   "non-decline bad request",
 			status: http.StatusBadRequest,
-			body:   `{"error":"invalid_amount","message":"amount must be positive"}`,
+			body:   `{"error":"unknown_error","message":"unknown"}`,
 		},
 		{
 			name:   "internal bank error",
@@ -193,9 +184,57 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "mock bank authorization failed")
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 		})
 	}
+}
+
+func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Timeout = time.Nanosecond
+	client, err := mockbank.NewClient(server.URL, httpClient)
+	require.NoError(t, err)
+
+	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
+func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
+	client, err := mockbank.NewClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}})
+	require.NoError(t, err)
+
+	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
+type timeoutRoundTripper struct{}
+
+func (timeoutRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, timeoutError{}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string {
+	return "transport timed out"
+}
+
+func (timeoutError) Timeout() bool {
+	return true
+}
+
+func (timeoutError) Temporary() bool {
+	return true
 }
 
 func validAuthorizationRequest() app.BankAuthorizationRequest {

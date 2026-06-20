@@ -32,7 +32,7 @@ func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) e
 func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	payment, ok := r.payments[id]
 	if !ok {
-		return nil, app.ErrPaymentNotFound
+		return nil, app.NewPaymentNotFound(string(id), nil)
 	}
 	return clonePayment(payment)
 }
@@ -69,12 +69,12 @@ func NewIdempotencyRepository() *IdempotencyRepository {
 	return &IdempotencyRepository{records: make(map[string]app.IdempotencyRecord)}
 }
 
-func (r *IdempotencyRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, error) {
+func (r *IdempotencyRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
 	record, ok := r.records[idempotencyMapKey(operation, key)]
 	if !ok {
-		return app.IdempotencyRecord{}, app.ErrIdempotencyNotFound
+		return app.IdempotencyRecord{}, false, nil
 	}
-	return cloneIdempotencyRecord(record), nil
+	return cloneIdempotencyRecord(record), true, nil
 }
 
 func (r *IdempotencyRepository) SaveCompleted(_ context.Context, record app.IdempotencyRecord) error {

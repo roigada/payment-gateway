@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
-	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,12 +122,14 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 		message string
 		status  int
 	}{
-		{name: "invalid order id", err: domain.ErrInvalidOrderID, code: "invalid_order_id", message: "invalid order id", status: http.StatusUnprocessableEntity},
-		{name: "invalid customer id", err: domain.ErrInvalidCustomerID, code: "invalid_customer_id", message: "invalid customer id", status: http.StatusUnprocessableEntity},
-		{name: "invalid amount", err: domain.ErrInvalidAmount, code: "invalid_amount", message: "invalid amount", status: http.StatusUnprocessableEntity},
-		{name: "invalid card details", err: app.ErrInvalidCardDetails, code: "invalid_card_details", message: "invalid card details", status: http.StatusUnprocessableEntity},
-		{name: "missing idempotency key", err: app.ErrMissingIdempotencyKey, code: "missing_idempotency_key", message: "missing idempotency key", status: http.StatusUnprocessableEntity},
-		{name: "idempotency conflict", err: app.ErrIdempotencyConflict, code: "idempotency_conflict", message: "idempotency key conflicts with a different request", status: http.StatusConflict},
+		{name: "invalid input", err: app.NewInvalidPaymentInput("amount must be greater than zero", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
+		{name: "payment not found", err: app.NewPaymentNotFound("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
+		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflict(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
+		{name: "bank unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
+		{name: "bank timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
+		{name: "internal", err: app.NewInternalPaymentError(errors.New("scan failed")), code: "internal_server_error", message: "internal server error", status: http.StatusInternalServerError},
+		{name: "wrapped payment error", err: fmt.Errorf("authorize payment: %w", app.NewPaymentBankUnavailable(errors.New("connection refused"))), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
+		{name: "raw error", err: errors.New("raw failure"), code: "internal_server_error", message: "Internal Server Error", status: http.StatusInternalServerError},
 	}
 
 	for _, tt := range tests {

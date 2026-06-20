@@ -127,7 +127,7 @@ func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *test
 	second.AmountCents = 2599
 	_, err = service.AuthorizePayment(context.Background(), second)
 
-	assert.ErrorIs(t, err, app.ErrIdempotencyConflict)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	assert.Equal(t, 1, bank.calls)
 }
 
@@ -166,23 +166,22 @@ func TestAuthorizePaymentRequiresIdempotencyKeyBeforeCallingBank(t *testing.T) {
 
 	_, err := service.AuthorizePayment(context.Background(), command)
 
-	assert.ErrorIs(t, err, app.ErrMissingIdempotencyKey)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 	assert.Zero(t, bank.request)
 }
 
 func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 	tests := []struct {
-		name     string
-		mutate   func(*app.AuthorizePaymentCommand)
-		category app.PaymentErrorCategory
+		name   string
+		mutate func(*app.AuthorizePaymentCommand)
 	}{
-		{name: "order id", mutate: func(c *app.AuthorizePaymentCommand) { c.OrderID = "" }, category: app.PaymentErrorInvalidOrderID},
-		{name: "customer id", mutate: func(c *app.AuthorizePaymentCommand) { c.CustomerID = "" }, category: app.PaymentErrorInvalidCustomerID},
-		{name: "amount", mutate: func(c *app.AuthorizePaymentCommand) { c.AmountCents = 0 }, category: app.PaymentErrorInvalidAmount},
-		{name: "card number", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.Number = "4111x" }, category: app.PaymentErrorInvalidCardDetails},
-		{name: "cvv", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.CVV = "12x" }, category: app.PaymentErrorInvalidCardDetails},
-		{name: "expiry month", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryMonth = 13 }, category: app.PaymentErrorInvalidCardDetails},
-		{name: "expiry year", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryYear = 0 }, category: app.PaymentErrorInvalidCardDetails},
+		{name: "order id", mutate: func(c *app.AuthorizePaymentCommand) { c.OrderID = "" }},
+		{name: "customer id", mutate: func(c *app.AuthorizePaymentCommand) { c.CustomerID = "" }},
+		{name: "amount", mutate: func(c *app.AuthorizePaymentCommand) { c.AmountCents = 0 }},
+		{name: "card number", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.Number = "4111x" }},
+		{name: "cvv", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.CVV = "12x" }},
+		{name: "expiry month", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryMonth = 13 }},
+		{name: "expiry year", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryYear = 0 }},
 	}
 
 	for _, tt := range tests {
@@ -194,13 +193,13 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 
 			_, err := service.AuthorizePayment(context.Background(), command)
 
-			assert.Equal(t, tt.category, app.ClassifyPaymentError(err))
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 			assert.Zero(t, bank.request)
 		})
 	}
 }
 
-func TestAuthorizePaymentReturnsBankErrorWithoutStoringPayment(t *testing.T) {
+func TestAuthorizePaymentNormalizesBankErrorWithoutStoringPayment(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bankErr := errors.New("bank unavailable")
 	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, time.Now())
@@ -208,8 +207,9 @@ func TestAuthorizePaymentReturnsBankErrorWithoutStoringPayment(t *testing.T) {
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 
 	assert.ErrorIs(t, err, bankErr)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInternal))
 	_, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
-	assert.ErrorIs(t, findErr, app.ErrPaymentNotFound)
+	assert.True(t, app.IsPaymentErrorKind(findErr, app.PaymentErrorNotFound))
 }
 
 func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
