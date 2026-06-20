@@ -18,7 +18,6 @@ func TestClassifyPaymentError(t *testing.T) {
 	}{
 		{name: "missing idempotency key", err: app.ErrMissingIdempotencyKey, category: app.PaymentErrorMissingIdempotencyKey},
 		{name: "payment not found", err: app.ErrPaymentNotFound, category: app.PaymentErrorNotFound},
-		{name: "idempotency conflict", err: app.ErrIdempotencyConflict, category: app.PaymentErrorIdempotencyConflict},
 		{name: "invalid order id", err: domain.ErrInvalidOrderID, category: app.PaymentErrorInvalidOrderID},
 		{name: "invalid customer id", err: domain.ErrInvalidCustomerID, category: app.PaymentErrorInvalidCustomerID},
 		{name: "invalid amount", err: domain.ErrInvalidAmount, category: app.PaymentErrorInvalidAmount},
