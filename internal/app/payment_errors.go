@@ -1,44 +1,103 @@
 package app
 
-import (
-	"errors"
+import "errors"
 
-	"github.com/roigada/payment-gateway/internal/domain"
-)
-
-var (
-	ErrInvalidCardDetails    = errors.New("invalid card details")
-	ErrMissingIdempotencyKey = errors.New("missing idempotency key")
-	ErrPaymentNotFound       = errors.New("payment not found")
-)
-
-type PaymentErrorCategory string
+type PaymentErrorKind string
 
 const (
-	PaymentErrorInvalidOrderID        PaymentErrorCategory = "invalid_order_id"
-	PaymentErrorInvalidCustomerID     PaymentErrorCategory = "invalid_customer_id"
-	PaymentErrorInvalidAmount         PaymentErrorCategory = "invalid_amount"
-	PaymentErrorInvalidCardDetails    PaymentErrorCategory = "invalid_card_details"
-	PaymentErrorMissingIdempotencyKey PaymentErrorCategory = "missing_idempotency_key"
-	PaymentErrorNotFound              PaymentErrorCategory = "not_found"
-	PaymentErrorUnknown               PaymentErrorCategory = "unknown"
+	PaymentErrorInvalidInput        PaymentErrorKind = "invalid_input"
+	PaymentErrorNotFound            PaymentErrorKind = "not_found"
+	PaymentErrorIdempotencyConflict PaymentErrorKind = "idempotency_conflict"
+	PaymentErrorBankUnavailable     PaymentErrorKind = "bank_unavailable"
+	PaymentErrorBankTimeout         PaymentErrorKind = "bank_timeout"
+	PaymentErrorInternal            PaymentErrorKind = "internal"
 )
 
-func ClassifyPaymentError(err error) PaymentErrorCategory {
-	switch {
-	case errors.Is(err, ErrMissingIdempotencyKey):
-		return PaymentErrorMissingIdempotencyKey
-	case errors.Is(err, ErrPaymentNotFound):
-		return PaymentErrorNotFound
-	case errors.Is(err, domain.ErrInvalidOrderID):
-		return PaymentErrorInvalidOrderID
-	case errors.Is(err, domain.ErrInvalidCustomerID):
-		return PaymentErrorInvalidCustomerID
-	case errors.Is(err, domain.ErrInvalidAmount):
-		return PaymentErrorInvalidAmount
-	case errors.Is(err, ErrInvalidCardDetails):
-		return PaymentErrorInvalidCardDetails
-	default:
-		return PaymentErrorUnknown
+type PaymentError struct {
+	kind    PaymentErrorKind
+	message string
+	cause   error
+}
+
+func NewInvalidPaymentInput(reason string, cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorInvalidInput,
+		message: reason,
+		cause:   cause,
 	}
+}
+
+func NewPaymentNotFound(id string, cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorNotFound,
+		message: "payment " + id + " was not found",
+		cause:   cause,
+	}
+}
+
+func NewPaymentIdempotencyConflict(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorIdempotencyConflict,
+		message: "idempotency key was already used with a different request",
+		cause:   cause,
+	}
+}
+
+func NewPaymentBankUnavailable(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorBankUnavailable,
+		message: "bank is unavailable",
+		cause:   cause,
+	}
+}
+
+func NewPaymentBankTimeout(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorBankTimeout,
+		message: "bank request timed out",
+		cause:   cause,
+	}
+}
+
+func NewInternalPaymentError(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorInternal,
+		message: "internal server error",
+		cause:   cause,
+	}
+}
+
+func (e *PaymentError) Kind() PaymentErrorKind {
+	return e.kind
+}
+
+func (e *PaymentError) Error() string {
+	return e.message
+}
+
+func (e *PaymentError) Unwrap() error {
+	return e.cause
+}
+
+func PaymentErrorKindOf(err error) (PaymentErrorKind, bool) {
+	var paymentErr *PaymentError
+	if errors.As(err, &paymentErr) {
+		return paymentErr.Kind(), true
+	}
+	return "", false
+}
+
+func IsPaymentErrorKind(err error, kind PaymentErrorKind) bool {
+	actual, ok := PaymentErrorKindOf(err)
+	return ok && actual == kind
+}
+
+func asPaymentError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := PaymentErrorKindOf(err); ok {
+		return err
+	}
+	return NewInternalPaymentError(err)
 }

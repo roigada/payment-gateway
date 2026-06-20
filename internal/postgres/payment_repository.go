@@ -29,22 +29,27 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     status,
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
+		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
 		payment.AmountCents(),
 		payment.Currency(),
 		payment.Status(),
-		payment.BankAuthorizationID(),
+		nullableString(payment.BankAuthorizationID()),
 		payment.AuthorizationBankOperationKey(),
+		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
-	return err
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
 }
 
 func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
@@ -54,8 +59,9 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents                   int64
 		currency                      string
 		status                        domain.PaymentStatus
-		bankAuthorizationID           string
+		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
+		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
 	)
@@ -68,6 +74,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        status,
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
+		        decline_reason,
 		        created_at,
 		        updated_at
 		   FROM payments
@@ -81,26 +88,46 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&status,
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
+		&declineReason,
 		&createdAt,
 		&updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, app.ErrPaymentNotFound
+			return nil, app.NewPaymentNotFound(string(id), err)
 		}
-		return nil, err
+		return nil, app.NewInternalPaymentError(err)
 	}
 
-	return domain.LoadPayment(
+	payment, err := domain.LoadPayment(
 		id,
 		orderID,
 		customerID,
 		amountCents,
 		currency,
 		status,
-		bankAuthorizationID,
+		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
+		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
 	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payment, nil
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullStringValue(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }

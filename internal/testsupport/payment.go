@@ -32,7 +32,7 @@ func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) e
 func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	payment, ok := r.payments[id]
 	if !ok {
-		return nil, app.ErrPaymentNotFound
+		return nil, app.NewPaymentNotFound(string(id), nil)
 	}
 	return clonePayment(payment)
 }
@@ -61,6 +61,40 @@ func (c FixedClock) Now() time.Time {
 	return c.Time
 }
 
+type IdempotencyRepository struct {
+	records map[string]app.IdempotencyRecord
+}
+
+func NewIdempotencyRepository() *IdempotencyRepository {
+	return &IdempotencyRepository{records: make(map[string]app.IdempotencyRecord)}
+}
+
+func (r *IdempotencyRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
+	record, ok := r.records[idempotencyMapKey(operation, key)]
+	if !ok {
+		return app.IdempotencyRecord{}, false, nil
+	}
+	return cloneIdempotencyRecord(record), true, nil
+}
+
+func (r *IdempotencyRepository) SaveCompleted(_ context.Context, record app.IdempotencyRecord) error {
+	r.records[idempotencyMapKey(record.Operation, record.Key)] = cloneIdempotencyRecord(record)
+	return nil
+}
+
+func idempotencyMapKey(operation string, key string) string {
+	return operation + "\x00" + key
+}
+
+func cloneIdempotencyRecord(record app.IdempotencyRecord) app.IdempotencyRecord {
+	return app.IdempotencyRecord{
+		Operation:          record.Operation,
+		Key:                record.Key,
+		RequestFingerprint: record.RequestFingerprint,
+		Result:             record.Result,
+	}
+}
+
 func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 	return domain.LoadPayment(
 		payment.ID(),
@@ -71,6 +105,7 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.Status(),
 		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
+		payment.DeclineReason(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)

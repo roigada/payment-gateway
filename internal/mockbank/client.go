@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type Client struct {
@@ -53,23 +56,41 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		return app.BankAuthorizationResult{}, err
+		if isTimeout(err) {
+			return app.BankAuthorizationResult{}, app.NewPaymentBankTimeout(err)
+		}
+		return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode)
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload authorizationResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if strings.TrimSpace(payload.AuthorizationID) == "" {
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization response missing authorization id"))
+		}
+
+		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+	case http.StatusBadRequest:
+		if err := decodeBadRequestInvalidInput(response); err != nil {
+			return app.BankAuthorizationResult{}, err
+		}
+	case http.StatusPaymentRequired:
+		return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, nil
 	}
 
-	var payload authorizationResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return app.BankAuthorizationResult{}, err
-	}
-	if strings.TrimSpace(payload.AuthorizationID) == "" {
-		return app.BankAuthorizationResult{}, fmt.Errorf("mock bank authorization response missing authorization id")
-	}
+	return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
+}
 
-	return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 type authorizationRequest struct {
@@ -82,4 +103,36 @@ type authorizationRequest struct {
 
 type authorizationResponse struct {
 	AuthorizationID string `json:"authorization_id"`
+}
+
+type authorizationErrorResponse struct {
+	Error string `json:"error"`
+}
+
+func decodeBadRequestInvalidInput(response *http.Response) error {
+	var payload authorizationErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return app.NewPaymentBankUnavailable(err)
+	}
+
+	reason := invalidInputReasonForBadRequest(payload.Error)
+	if reason != "" {
+		return app.NewInvalidPaymentInput(reason, nil)
+	}
+	return app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
+}
+
+func invalidInputReasonForBadRequest(code string) string {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "invalid_card", "invalid_card_number":
+		return "card details are invalid"
+	case "invalid_cvv":
+		return "card details are invalid"
+	case "card_expired":
+		return "card details are invalid"
+	case "invalid_amount":
+		return "amount must be greater than zero"
+	default:
+		return ""
+	}
 }
