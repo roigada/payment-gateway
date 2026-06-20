@@ -10,8 +10,6 @@ var (
 	ErrInvalidCardDetails    = errors.New("invalid card details")
 	ErrMissingIdempotencyKey = errors.New("missing idempotency key")
 	ErrPaymentNotFound       = errors.New("payment not found")
-	ErrIdempotencyConflict   = errors.New("idempotency key conflicts with a different request")
-	ErrIdempotencyNotFound   = errors.New("idempotency record not found")
 )
 
 type PaymentErrorCategory string
@@ -23,7 +21,6 @@ const (
 	PaymentErrorInvalidCardDetails    PaymentErrorCategory = "invalid_card_details"
 	PaymentErrorMissingIdempotencyKey PaymentErrorCategory = "missing_idempotency_key"
 	PaymentErrorNotFound              PaymentErrorCategory = "not_found"
-	PaymentErrorIdempotencyConflict   PaymentErrorCategory = "idempotency_conflict"
 	PaymentErrorUnknown               PaymentErrorCategory = "unknown"
 )
 
@@ -33,8 +30,6 @@ func ClassifyPaymentError(err error) PaymentErrorCategory {
 		return PaymentErrorMissingIdempotencyKey
 	case errors.Is(err, ErrPaymentNotFound):
 		return PaymentErrorNotFound
-	case errors.Is(err, ErrIdempotencyConflict):
-		return PaymentErrorIdempotencyConflict
 	case errors.Is(err, domain.ErrInvalidOrderID):
 		return PaymentErrorInvalidOrderID
 	case errors.Is(err, domain.ErrInvalidCustomerID):

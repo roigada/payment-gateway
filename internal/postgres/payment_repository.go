@@ -29,20 +29,18 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     status,
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
-		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
 		payment.AmountCents(),
 		payment.Currency(),
 		payment.Status(),
-		nullableString(payment.BankAuthorizationID()),
+		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
-		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
@@ -56,9 +54,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents                   int64
 		currency                      string
 		status                        domain.PaymentStatus
-		bankAuthorizationID           sql.NullString
+		bankAuthorizationID           string
 		authorizationBankOperationKey string
-		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
 	)
@@ -71,7 +68,6 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        status,
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
-		        decline_reason,
 		        created_at,
 		        updated_at
 		   FROM payments
@@ -85,7 +81,6 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&status,
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
-		&declineReason,
 		&createdAt,
 		&updatedAt,
 	)
@@ -103,24 +98,9 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		amountCents,
 		currency,
 		status,
-		nullStringValue(bankAuthorizationID),
+		bankAuthorizationID,
 		authorizationBankOperationKey,
-		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
 	)
-}
-
-func nullableString(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
-}
-
-func nullStringValue(value sql.NullString) string {
-	if !value.Valid {
-		return ""
-	}
-	return value.String
 }
