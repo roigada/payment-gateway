@@ -41,6 +41,12 @@ type RetryAuthorizationCommand struct {
 	IdempotencyKey string
 }
 
+type PaymentSearchFilter struct {
+	OrderID    string
+	CustomerID string
+	Status     string
+}
+
 type CardDetails struct {
 	Number      string
 	CVV         string
@@ -52,6 +58,7 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *domain.Payment) error
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
 	UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error
+	Search(ctx context.Context, filter PaymentSearchFilter) ([]*domain.Payment, error)
 }
 
 type IdempotencyRepository interface {
@@ -327,6 +334,27 @@ func (s *PaymentService) GetPayment(ctx context.Context, id string) (PaymentResu
 	return newPaymentResult(payment), nil
 }
 
+func (s *PaymentService) SearchPayments(ctx context.Context, filter PaymentSearchFilter) ([]PaymentResult, error) {
+	filter = normalizePaymentSearchFilter(filter)
+	if filter.OrderID == "" && filter.CustomerID == "" {
+		return nil, NewInvalidPaymentInput("order id or customer id is required", nil)
+	}
+	if filter.Status != "" && !isValidPaymentStatus(filter.Status) {
+		return nil, NewInvalidPaymentInput("payment status is invalid", nil)
+	}
+
+	payments, err := s.paymentRepository.Search(ctx, filter)
+	if err != nil {
+		return nil, asPaymentError(err)
+	}
+
+	results := make([]PaymentResult, 0, len(payments))
+	for _, payment := range payments {
+		results = append(results, newPaymentResult(payment))
+	}
+	return results, nil
+}
+
 func validateCardDetails(card CardDetails) error {
 	if !allDigits(card.Number) || len(card.Number) < 12 || len(card.Number) > 19 {
 		return NewInvalidPaymentInput("card details are invalid", nil)
@@ -370,6 +398,22 @@ func normalizeRetryAuthorizationCommand(command RetryAuthorizationCommand) Retry
 	command.Card.Number = strings.TrimSpace(command.Card.Number)
 	command.Card.CVV = strings.TrimSpace(command.Card.CVV)
 	return command
+}
+
+func normalizePaymentSearchFilter(filter PaymentSearchFilter) PaymentSearchFilter {
+	filter.OrderID = strings.TrimSpace(filter.OrderID)
+	filter.CustomerID = strings.TrimSpace(filter.CustomerID)
+	filter.Status = strings.TrimSpace(filter.Status)
+	return filter
+}
+
+func isValidPaymentStatus(status string) bool {
+	switch domain.PaymentStatus(status) {
+	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusDeclined:
+		return true
+	default:
+		return false
+	}
 }
 
 func authorizePaymentRequestFingerprint(command AuthorizePaymentCommand, secret string) string {

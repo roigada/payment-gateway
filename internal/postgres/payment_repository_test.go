@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -124,6 +125,43 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }
 
+func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	for i := 0; i < 105; i++ {
+		payment := newRepositoryPayment(t, i, "order-1", "customer-1", domain.PaymentStatusAuthorized, base.Add(time.Duration(i)*time.Minute))
+		require.NoError(t, repository.Create(ctx, payment))
+	}
+	otherOrder := newRepositoryPayment(t, 105, "order-2", "customer-1", domain.PaymentStatusAuthorized, base.Add(105*time.Minute))
+	require.NoError(t, repository.Create(ctx, otherOrder))
+	declined := newRepositoryPayment(t, 106, "order-1", "customer-1", domain.PaymentStatusDeclined, base.Add(106*time.Minute))
+	require.NoError(t, repository.Create(ctx, declined))
+
+	authorized, err := repository.Search(ctx, app.PaymentSearchFilter{
+		OrderID:    "order-1",
+		CustomerID: "customer-1",
+		Status:     "authorized",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, authorized, 100)
+	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000104"), authorized[0].ID())
+	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000005"), authorized[99].ID())
+
+	byCustomer, err := repository.Search(ctx, app.PaymentSearchFilter{CustomerID: "customer-1"})
+
+	require.NoError(t, err)
+	require.Len(t, byCustomer, 100)
+	assert.Equal(t, declined.ID(), byCustomer[0].ID())
+	assert.Equal(t, otherOrder.ID(), byCustomer[1].ID())
+}
+
 func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -171,6 +209,45 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 	_, found, err = repository.FindCompleted(ctx, "authorize_payment", "missing-key")
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID string, status domain.PaymentStatus, now time.Time) *domain.Payment {
+	t.Helper()
+
+	id := domain.PaymentID(fmt.Sprintf("pay_00000000-0000-4000-8000-%012d", sequence))
+	bankOperationKey := fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence)
+	cardFingerprint := fmt.Sprintf("fingerprint-%d", sequence)
+	switch status {
+	case domain.PaymentStatusAuthorized:
+		payment, err := domain.NewAuthorizedPayment(
+			id,
+			orderID,
+			customerID,
+			1299,
+			fmt.Sprintf("auth_00000000-0000-4000-8000-%012d", sequence),
+			bankOperationKey,
+			cardFingerprint,
+			now,
+		)
+		require.NoError(t, err)
+		return payment
+	case domain.PaymentStatusDeclined:
+		payment, err := domain.NewDeclinedPayment(
+			id,
+			orderID,
+			customerID,
+			1299,
+			domain.DeclineReasonInvalidCard,
+			bankOperationKey,
+			cardFingerprint,
+			now,
+		)
+		require.NoError(t, err)
+		return payment
+	default:
+		t.Fatalf("unsupported status %q", status)
+		return nil
+	}
 }
 
 func TestIdempotencyRepositoryReturnsConflictForDuplicateCompletedRecord(t *testing.T) {

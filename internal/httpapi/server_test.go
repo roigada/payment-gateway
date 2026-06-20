@@ -140,6 +140,102 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestGetPaymentByIDReturnsPayment(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", api.payments.getPaymentID)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "authorized",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+	assert.NotContains(t, rec.Body.String(), "history")
+}
+
+func TestGetPaymentByIDMapsNotFound(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.getPaymentErr = app.NewPaymentNotFound("pay_missing", nil)
+	rec := api.request(t, http.MethodGet, "/v1/payments/not-a-payment-id", "", nil)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "payment_not_found", "payment was not found")
+}
+
+func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
+	api := newPaymentAPITest(t)
+	first := newPayment("pay_550e8400-e29b-41d4-a716-446655440001")
+	second := newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	api.payments.searchPaymentsResult = []app.PaymentResult{first, second}
+	rec := api.request(t, http.MethodGet, "/v1/payments?order_id=order-1&customer_id=customer-1&status=declined", "", nil)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, app.PaymentSearchFilter{
+		OrderID:    "order-1",
+		CustomerID: "customer-1",
+		Status:     "declined",
+	}, api.payments.searchPaymentsFilter)
+	assert.JSONEq(t, `{
+		"payments": [
+			{
+				"id": "pay_550e8400-e29b-41d4-a716-446655440001",
+				"order_id": "order-1",
+				"customer_id": "customer-1",
+				"amount": 1299,
+				"currency": "USD",
+				"status": "authorized",
+				"created_at": "2026-06-18T12:00:00Z",
+				"updated_at": "2026-06-18T12:00:00Z"
+			},
+			{
+				"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+				"order_id": "order-1",
+				"customer_id": "customer-1",
+				"amount": 1299,
+				"currency": "USD",
+				"status": "declined",
+				"decline_reason": "invalid_card",
+				"created_at": "2026-06-18T12:00:00Z",
+				"updated_at": "2026-06-18T12:00:00Z"
+			}
+		]
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+	assert.NotContains(t, rec.Body.String(), "history")
+}
+
+func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "unfiltered", path: "/v1/payments"},
+		{name: "status only", path: "/v1/payments?status=authorized"},
+		{name: "unknown query parameter", path: "/v1/payments?order_id=order-1&limit=10"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			api.payments.searchPaymentsErr = app.NewInvalidPaymentInput("order id or customer id is required", nil)
+			rec := api.request(t, http.MethodGet, tt.path, "", nil)
+
+			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "validation_error", "payment request is invalid")
+		})
+	}
+}
+
 func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
@@ -354,6 +450,12 @@ type paymentUseCasesFake struct {
 	retryAuthorizationResult  app.PaymentResult
 	retryAuthorizationErr     error
 	retryAuthorizationPanic   any
+	getPaymentID              string
+	getPaymentResult          app.PaymentResult
+	getPaymentErr             error
+	searchPaymentsFilter      app.PaymentSearchFilter
+	searchPaymentsResult      []app.PaymentResult
+	searchPaymentsErr         error
 }
 
 type readinessCheckerFake struct {
@@ -380,6 +482,16 @@ func (f *paymentUseCasesFake) RetryAuthorization(_ context.Context, command app.
 	}
 	f.retryAuthorizationCommand = command
 	return f.retryAuthorizationResult, f.retryAuthorizationErr
+}
+
+func (f *paymentUseCasesFake) GetPayment(_ context.Context, id string) (app.PaymentResult, error) {
+	f.getPaymentID = id
+	return f.getPaymentResult, f.getPaymentErr
+}
+
+func (f *paymentUseCasesFake) SearchPayments(_ context.Context, filter app.PaymentSearchFilter) ([]app.PaymentResult, error) {
+	f.searchPaymentsFilter = filter
+	return f.searchPaymentsResult, f.searchPaymentsErr
 }
 
 func newPayment(id string) app.PaymentResult {

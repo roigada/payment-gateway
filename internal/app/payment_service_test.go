@@ -361,6 +361,79 @@ func TestAuthorizePaymentNormalizesBankErrorWithoutStoringPayment(t *testing.T) 
 	assert.True(t, app.IsPaymentErrorKind(findErr, app.PaymentErrorNotFound))
 }
 
+func TestGetPaymentReturnsPublicResult(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"bank-auth-id-1",
+		"bok_123",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(context.Background(), payment))
+	service := newPaymentService(repo, &bankAuthorizerFake{}, now)
+
+	result, err := service.GetPayment(context.Background(), "pay_550e8400-e29b-41d4-a716-446655440000")
+
+	require.NoError(t, err)
+	assert.Equal(t, app.PaymentResult{
+		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "authorized",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, result)
+}
+
+func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	newer := mustAuthorizedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440001", "order-1", "customer-1", time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
+	older := mustDeclinedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), older))
+	require.NoError(t, repo.Create(context.Background(), newer))
+	service := newPaymentService(repo, &bankAuthorizerFake{}, newer.CreatedAt())
+
+	results, err := service.SearchPayments(context.Background(), app.PaymentSearchFilter{
+		OrderID:    " order-1 ",
+		CustomerID: " customer-1 ",
+		Status:     " authorized ",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, newer.ID(), domain.PaymentID(results[0].ID))
+	assert.Equal(t, "authorized", results[0].Status)
+}
+
+func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter app.PaymentSearchFilter
+	}{
+		{name: "unfiltered", filter: app.PaymentSearchFilter{}},
+		{name: "status only", filter: app.PaymentSearchFilter{Status: "authorized"}},
+		{name: "invalid status", filter: app.PaymentSearchFilter{OrderID: "order-1", Status: "unknown"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newPaymentService(testsupport.NewPaymentRepository(), &bankAuthorizerFake{}, time.Now())
+
+			_, err := service.SearchPayments(context.Background(), tt.filter)
+
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+		})
+	}
+}
+
 func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 	validPaymentRepository := testsupport.NewPaymentRepository()
 	validIdempotency := testsupport.NewIdempotencyRepository()
@@ -430,6 +503,40 @@ func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 			assert.PanicsWithValue(t, tt.reason, tt.build)
 		})
 	}
+}
+
+func mustAuthorizedPayment(t *testing.T, id string, orderID string, customerID string, now time.Time) *domain.Payment {
+	t.Helper()
+
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID(id),
+		orderID,
+		customerID,
+		1299,
+		"bank-auth-id-1",
+		"bok_123",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	return payment
+}
+
+func mustDeclinedPayment(t *testing.T, id string, orderID string, customerID string, now time.Time) *domain.Payment {
+	t.Helper()
+
+	payment, err := domain.NewDeclinedPayment(
+		domain.PaymentID(id),
+		orderID,
+		customerID,
+		1299,
+		domain.DeclineReasonInvalidCard,
+		"bok_123",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	return payment
 }
 
 func validAuthorizeCommand() app.AuthorizePaymentCommand {
