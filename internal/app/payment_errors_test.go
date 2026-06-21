@@ -37,6 +37,12 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 			message: "idempotency key was already used with a different request",
 		},
 		{
+			name:    "invalid status conflict",
+			err:     app.NewPaymentInvalidStatusConflict(cause),
+			kind:    app.PaymentErrorInvalidStatusConflict,
+			message: "payment status does not allow this operation",
+		},
+		{
 			name:    "bank unavailable",
 			err:     app.NewPaymentBankUnavailable(cause),
 			kind:    app.PaymentErrorBankUnavailable,

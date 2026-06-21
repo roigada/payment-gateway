@@ -29,11 +29,12 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     status,
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
+		     authorization_fingerprint,
 		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
@@ -42,12 +43,47 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
 		payment.AuthorizationBankOperationKey(),
+		payment.AuthorizationFingerprint(),
 		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        bank_authorization_id = $3,
+		        decline_reason = $4,
+		        updated_at = $5
+		  WHERE id = $1
+		    AND status = $6`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankAuthorizationID()),
+		nullableString(string(payment.DeclineReason())),
+		payment.UpdatedAt(),
+		domain.PaymentStatusPending,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := r.FindByID(ctx, payment.ID())
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
 }
@@ -61,6 +97,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		status                        domain.PaymentStatus
 		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
+		authorizationFingerprint      string
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -74,6 +111,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        status,
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
+		        authorization_fingerprint,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -88,6 +126,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&status,
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
+		&authorizationFingerprint,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -108,6 +147,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		status,
 		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
+		authorizationFingerprint,
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,

@@ -11,15 +11,16 @@ import (
 )
 
 const (
-	errorCodeInternalServer       = "internal_server_error"
-	errorCodeInvalidJSONBody      = "invalid_json_body"
-	errorCodeUnsupportedMediaType = "unsupported_media_type"
-	errorCodeServiceUnavailable   = "service_unavailable"
-	errorCodeValidation           = "validation_error"
-	errorCodeIdempotencyConflict  = "idempotency_key_conflict"
-	errorCodePaymentNotFound      = "payment_not_found"
-	errorCodeBankUnavailable      = "bank_unavailable"
-	errorCodeBankTimeout          = "bank_timeout"
+	errorCodeInternalServer        = "internal_server_error"
+	errorCodeInvalidJSONBody       = "invalid_json_body"
+	errorCodeUnsupportedMediaType  = "unsupported_media_type"
+	errorCodeServiceUnavailable    = "service_unavailable"
+	errorCodeValidation            = "validation_error"
+	errorCodeIdempotencyConflict   = "idempotency_key_conflict"
+	errorCodePaymentStatusConflict = "payment_status_conflict"
+	errorCodePaymentNotFound       = "payment_not_found"
+	errorCodeBankUnavailable       = "bank_unavailable"
+	errorCodeBankTimeout           = "bank_timeout"
 )
 
 func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +69,48 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(payment.ID))
 	writeJSON(w, http.StatusCreated, newPaymentEnvelope(payment))
+}
+
+func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
+	if !isJSONRequest(r) {
+		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
+	var request struct {
+		Card struct {
+			Number      string `json:"number"`
+			CVV         string `json:"cvv"`
+			ExpiryMonth int    `json:"expiry_month"`
+			ExpiryYear  int    `json:"expiry_year"`
+		} `json:"card"`
+	}
+	if err := decodeJSONRequest(w, r, &request); err != nil {
+		if errors.Is(err, errInvalidJSONBody) {
+			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, invalidJSONBodyMessage)
+			return
+		}
+
+		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
+		return
+	}
+
+	payment, err := s.payments.RetryAuthorization(r.Context(), app.RetryAuthorizationCommand{
+		PaymentID:      r.PathValue("payment_id"),
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		Card: app.CardDetails{
+			Number:      request.Card.Number,
+			CVV:         request.Card.CVV,
+			ExpiryMonth: request.Card.ExpiryMonth,
+			ExpiryYear:  request.Card.ExpiryYear,
+		},
+	})
+	if err != nil {
+		writePaymentServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
 }
 
 func isJSONRequest(r *http.Request) bool {
@@ -141,6 +184,8 @@ func writePaymentServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, errorCodeValidation, "payment request is invalid")
 	case app.PaymentErrorIdempotencyConflict:
 		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key was already used with a different request")
+	case app.PaymentErrorInvalidStatusConflict:
+		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorNotFound:
 		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, "payment was not found")
 	case app.PaymentErrorBankUnavailable:

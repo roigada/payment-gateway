@@ -81,6 +81,134 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
+func TestAuthorizePaymentStoresPendingPaymentForUnknownBankOutcome(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	bankErr := app.NewPaymentBankTimeout(context.DeadlineExceeded)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, now)
+
+	payment, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.PaymentResult{
+		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "pending",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, payment)
+
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
+	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
+	assert.NotEmpty(t, saved.AuthorizationFingerprint())
+	assert.NotContains(t, saved.AuthorizationFingerprint(), "4111111111111111")
+	assert.NotContains(t, saved.AuthorizationFingerprint(), "123")
+}
+
+func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
+	pending, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service = newPaymentService(repo, bank, now.Add(time.Minute))
+	retry := validRetryAuthorizationCommand(pending.ID)
+
+	payment, err := service.RetryAuthorization(context.Background(), retry)
+	require.NoError(t, err)
+
+	assert.Equal(t, "authorized", payment.Status)
+	assert.Equal(t, now.Add(time.Minute), payment.UpdatedAt)
+	assert.Equal(t, app.BankAuthorizationRequest{
+		OperationKey: "bok_123",
+		OrderID:      "order-1",
+		CustomerID:   "customer-1",
+		AmountCents:  1299,
+		Currency:     "USD",
+		Card: app.CardDetails{
+			Number:      "4111111111111111",
+			CVV:         "123",
+			ExpiryMonth: 12,
+			ExpiryYear:  2030,
+		},
+	}, bank.request)
+}
+
+func TestRetryAuthorizationResolvesPendingPaymentToDeclined(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
+	pending, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
+	service = newPaymentService(repo, bank, now.Add(time.Minute))
+
+	payment, err := service.RetryAuthorization(context.Background(), validRetryAuthorizationCommand(pending.ID))
+	require.NoError(t, err)
+
+	assert.Equal(t, "declined", payment.Status)
+	assert.Equal(t, "invalid_card", payment.DeclineReason)
+	assert.Equal(t, 1, bank.calls)
+}
+
+func TestRetryAuthorizationLeavesPendingPaymentPendingForUnknownBankOutcome(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
+	pending, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	bank := &bankAuthorizerFake{err: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
+	service = newPaymentService(repo, bank, now.Add(time.Minute))
+
+	payment, err := service.RetryAuthorization(context.Background(), validRetryAuthorizationCommand(pending.ID))
+	require.NoError(t, err)
+
+	assert.Equal(t, "pending", payment.Status)
+	assert.Equal(t, now.Add(time.Minute), payment.UpdatedAt)
+	assert.Equal(t, 1, bank.calls)
+}
+
+func TestRetryAuthorizationRejectsFingerprintMismatchWithoutCallingBank(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	pending, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service = newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
+	retry := validRetryAuthorizationCommand(pending.ID)
+	retry.Card.Number = "4000000000000002"
+
+	_, err = service.RetryAuthorization(context.Background(), retry)
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+	assert.Zero(t, bank.calls)
+}
+
+func TestRetryAuthorizationRejectsNonPendingPaymentWithoutCallingBank(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	service := newPaymentService(repo, &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	authorized, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-2"}}
+	service = newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
+
+	_, err = service.RetryAuthorization(context.Background(), validRetryAuthorizationCommand(authorized.ID))
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+	assert.Zero(t, bank.calls)
+}
+
 func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
@@ -295,6 +423,14 @@ func validAuthorizeCommand() app.AuthorizePaymentCommand {
 			ExpiryMonth: 12,
 			ExpiryYear:  2030,
 		},
+	}
+}
+
+func validRetryAuthorizationCommand(paymentID string) app.RetryAuthorizationCommand {
+	return app.RetryAuthorizationCommand{
+		PaymentID:      paymentID,
+		IdempotencyKey: "retry-key-1",
+		Card:           validAuthorizeCommand().Card,
 	}
 }
 
