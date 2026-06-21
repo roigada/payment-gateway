@@ -87,6 +87,56 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
 }
 
+func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(captureRequest{
+		AuthorizationID: request.BankAuthorizationID,
+		AmountCents:     request.AmountCents,
+	}); err != nil {
+		return app.BankCaptureResult{}, err
+	}
+
+	endpoint := c.baseURL.JoinPath("/api/v1/captures")
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
+	if err != nil {
+		return app.BankCaptureResult{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
+
+	response, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		if isTimeout(err) {
+			return app.BankCaptureResult{}, app.NewPaymentBankTimeout(err)
+		}
+		return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+	}
+	defer response.Body.Close()
+
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload captureResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if strings.TrimSpace(payload.CaptureID) == "" {
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank capture response missing capture id"))
+		}
+
+		return app.BankCaptureResult{BankCaptureID: payload.CaptureID}, nil
+	case http.StatusBadRequest:
+		reason, err := decodeBadRequestInvalidInputReason(response)
+		if err != nil {
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if reason != "" {
+			return app.BankCaptureResult{}, app.NewInvalidPaymentInput(reason, nil)
+		}
+	}
+
+	return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank capture failed: status %d", response.StatusCode))
+}
+
 func isTimeout(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -105,6 +155,15 @@ type authorizationRequest struct {
 
 type authorizationResponse struct {
 	AuthorizationID string `json:"authorization_id"`
+}
+
+type captureRequest struct {
+	AuthorizationID string `json:"authorization_id"`
+	AmountCents     int64  `json:"amount"`
+}
+
+type captureResponse struct {
+	CaptureID string `json:"capture_id"`
 }
 
 type authorizationErrorResponse struct {
@@ -130,6 +189,10 @@ func invalidInputReasonForBadRequest(code string) string {
 		return "card details are invalid"
 	case "invalid_amount":
 		return "amount must be greater than zero"
+	case "amount_mismatch":
+		return "amount does not match bank authorization"
+	case "authorization_not_found", "authorization_expired", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
+		return "bank authorization cannot be captured"
 	default:
 		return ""
 	}

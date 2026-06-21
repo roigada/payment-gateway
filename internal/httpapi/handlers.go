@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -104,6 +105,31 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 			ExpiryMonth: request.Card.ExpiryMonth,
 			ExpiryYear:  request.Card.ExpiryYear,
 		},
+	})
+	if err != nil {
+		writePaymentServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+}
+
+func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
+			return
+		}
+		if len(body) > 0 {
+			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
+			return
+		}
+	}
+
+	payment, err := s.payments.CapturePayment(r.Context(), app.CapturePaymentCommand{
+		PaymentID:      r.PathValue("payment_id"),
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
 		writePaymentServiceError(w, err)

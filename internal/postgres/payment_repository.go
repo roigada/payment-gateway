@@ -30,11 +30,13 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
 		     authorization_card_fingerprint,
+		     bank_capture_id,
+		     capture_bank_operation_key,
 		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
@@ -44,6 +46,8 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		nullableString(payment.BankAuthorizationID()),
 		payment.AuthorizationBankOperationKey(),
 		payment.AuthorizationCardFingerprint(),
+		nullableString(payment.BankCaptureID()),
+		nullableString(payment.CaptureBankOperationKey()),
 		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
@@ -88,6 +92,115 @@ func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payme
 	return nil
 }
 
+func (r *PaymentRepository) ClaimCapture(ctx context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	defer rollback(tx)
+
+	insertResult, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO idempotency_records (
+		     operation,
+		     key,
+		     request_fingerprint,
+		     response_body,
+		     completed
+		 )
+		 VALUES ($1, $2, $3, '{}'::jsonb, false)
+		 ON CONFLICT (operation, key) DO NOTHING`,
+		record.Operation,
+		record.Key,
+		record.RequestFingerprint,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	inserted, err := insertResult.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+
+	var (
+		storedFingerprint string
+		completed         bool
+	)
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT request_fingerprint,
+		        completed
+		   FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2`,
+		record.Operation,
+		record.Key,
+	).Scan(&storedFingerprint, &completed)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if storedFingerprint != record.RequestFingerprint || completed {
+		return app.NewPaymentIdempotencyConflict(nil)
+	}
+	if inserted > 0 {
+		if err := updatePayment(ctx, tx, payment); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func (r *PaymentRepository) CompleteCapture(ctx context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
+	responseBody, err := encodePaymentResultSnapshot(record.Result)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	defer rollback(tx)
+
+	if err := updatePayment(ctx, tx, payment); err != nil {
+		return err
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE idempotency_records
+		    SET response_body = $4::jsonb,
+		        completed = true
+		  WHERE operation = $1
+		    AND key = $2
+		    AND request_fingerprint = $3
+		    AND completed = false`,
+		record.Operation,
+		record.Key,
+		record.RequestFingerprint,
+		string(responseBody),
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		return app.NewPaymentIdempotencyConflict(nil)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
 func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	var (
 		orderID                       string
@@ -98,6 +211,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
 		authorizationCardFingerprint  string
+		bankCaptureID                 sql.NullString
+		captureBankOperationKey       sql.NullString
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -112,6 +227,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
 		        authorization_card_fingerprint,
+		        bank_capture_id,
+		        capture_bank_operation_key,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -127,6 +244,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
 		&authorizationCardFingerprint,
+		&bankCaptureID,
+		&captureBankOperationKey,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -148,6 +267,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
 		authorizationCardFingerprint,
+		nullStringValue(bankCaptureID),
+		nullStringValue(captureBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
@@ -170,6 +291,8 @@ func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPayments
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
 		        authorization_card_fingerprint,
+		        bank_capture_id,
+		        capture_bank_operation_key,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -217,6 +340,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
 		authorizationCardFingerprint  string
+		bankCaptureID                 sql.NullString
+		captureBankOperationKey       sql.NullString
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -231,6 +356,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
 		&authorizationCardFingerprint,
+		&bankCaptureID,
+		&captureBankOperationKey,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -249,6 +376,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
 		authorizationCardFingerprint,
+		nullStringValue(bankCaptureID),
+		nullStringValue(captureBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
@@ -257,6 +386,50 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		return nil, app.NewInternalPaymentError(err)
 	}
 	return payment, nil
+}
+
+type paymentUpdater interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payment) error {
+	result, err := db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        bank_authorization_id = $3,
+		        authorization_bank_operation_key = $4,
+		        authorization_card_fingerprint = $5,
+		        bank_capture_id = $6,
+		        capture_bank_operation_key = $7,
+		        decline_reason = $8,
+		        updated_at = $9
+		  WHERE id = $1`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankAuthorizationID()),
+		payment.AuthorizationBankOperationKey(),
+		payment.AuthorizationCardFingerprint(),
+		nullableString(payment.BankCaptureID()),
+		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(string(payment.DeclineReason())),
+		payment.UpdatedAt(),
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		return app.NewPaymentNotFound(string(payment.ID()), sql.ErrNoRows)
+	}
+	return nil
+}
+
+func rollback(tx *sql.Tx) {
+	_ = tx.Rollback()
 }
 
 func nullableString(value string) any {

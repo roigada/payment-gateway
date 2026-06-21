@@ -30,7 +30,8 @@ func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation str
 		        response_body
 		   FROM idempotency_records
 		  WHERE operation = $1
-		    AND key = $2`,
+		    AND key = $2
+		    AND completed = true`,
 		operation,
 		key,
 	).Scan(&record.RequestFingerprint, &responseBody)
@@ -64,9 +65,10 @@ func (r *IdempotencyRepository) SaveCompleted(ctx context.Context, record app.Id
 		     operation,
 		     key,
 		     request_fingerprint,
-		     response_body
+		     response_body,
+		     completed
 		 )
-		 VALUES ($1, $2, $3, $4::jsonb)`,
+		 VALUES ($1, $2, $3, $4::jsonb, true)`,
 		record.Operation,
 		record.Key,
 		record.RequestFingerprint,

@@ -217,6 +217,107 @@ func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
+	var gotPath string
+	var gotIdempotencyKey string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotIdempotencyKey = r.Header.Get("Idempotency-Key")
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"capture_id": "cap_550e8400-e29b-41d4-a716-446655440001",
+			"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
+			"status": "captured",
+			"amount": 1299,
+			"currency": "USD",
+			"captured_at": "2026-06-18T15:00:00Z"
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	result, err := client.CapturePayment(context.Background(), validCaptureRequest())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}, result)
+	assert.Equal(t, "/api/v1/captures", gotPath)
+	assert.Equal(t, "bok_123", gotIdempotencyKey)
+	assert.Equal(t, map[string]any{
+		"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
+		"amount":           float64(1299),
+	}, gotBody)
+}
+
+func TestCapturePaymentRejectsMalformedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"capture_id":""}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+}
+
+func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		kind app.PaymentErrorKind
+	}{
+		{name: "amount mismatch", code: "amount_mismatch", kind: app.PaymentErrorInvalidInput},
+		{name: "authorization not found", code: "authorization_not_found", kind: app.PaymentErrorInvalidInput},
+		{name: "authorization already used", code: "authorization_already_used", kind: app.PaymentErrorInvalidInput},
+		{name: "internal", code: "internal_error", kind: app.PaymentErrorBankUnavailable},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"` + tt.code + `","message":"capture failed"}`))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.CapturePayment(context.Background(), validCaptureRequest())
+
+			require.Error(t, err)
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+		})
+	}
+}
+
+func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Timeout = time.Nanosecond
+	client, err := mockbank.NewClient(server.URL, httpClient)
+	require.NoError(t, err)
+
+	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
 type timeoutRoundTripper struct{}
 
 func (timeoutRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
@@ -250,5 +351,14 @@ func validAuthorizationRequest() app.BankAuthorizationRequest {
 			ExpiryMonth: 12,
 			ExpiryYear:  2030,
 		},
+	}
+}
+
+func validCaptureRequest() app.BankCaptureRequest {
+	return app.BankCaptureRequest{
+		OperationKey:        "bok_123",
+		BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000",
+		AmountCents:         1299,
+		Currency:            "USD",
 	}
 }

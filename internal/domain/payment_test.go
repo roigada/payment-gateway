@@ -90,6 +90,85 @@ func TestNewDeclinedPaymentCreatesPaymentWithGatewayDeclineReason(t *testing.T) 
 	assert.Equal(t, now, payment.UpdatedAt())
 }
 
+func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
+	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		authorizedAt,
+	)
+	require.NoError(t, err)
+	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+
+	require.NoError(t, payment.Capture(
+		" cap_550e8400-e29b-41d4-a716-446655440002 ",
+		" bok_550e8400-e29b-41d4-a716-446655440003 ",
+		capturedAt,
+	))
+
+	assert.Equal(t, domain.PaymentStatusCaptured, payment.Status())
+	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", payment.BankAuthorizationID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", payment.AuthorizationBankOperationKey())
+	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", payment.BankCaptureID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", payment.CaptureBankOperationKey())
+	assert.Equal(t, authorizedAt, payment.CreatedAt())
+	assert.Equal(t, capturedAt, payment.UpdatedAt())
+}
+
+func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
+	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name          string
+		status        domain.PaymentStatus
+		bankCaptureID string
+		bok           string
+		now           time.Time
+		wantErr       error
+	}{
+		{name: "status", status: domain.PaymentStatusDeclined, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: authorizedAt, wantErr: domain.ErrInvalidPaymentStatus},
+		{name: "capture id", status: domain.PaymentStatusAuthorized, bankCaptureID: " ", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: authorizedAt, wantErr: domain.ErrInvalidBankCaptureID},
+		{name: "bank operation key", status: domain.PaymentStatusAuthorized, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: " ", now: authorizedAt, wantErr: domain.ErrInvalidBankOperationKey},
+		{name: "timestamp", status: domain.PaymentStatusAuthorized, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bankAuthorizationID := ""
+			declineReason := domain.DeclineReasonUnknown
+			if tt.status == domain.PaymentStatusAuthorized {
+				bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
+				declineReason = ""
+			}
+			payment, err := domain.LoadPayment(
+				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+				"order-1",
+				"customer-1",
+				1299,
+				domain.CurrencyUSD,
+				tt.status,
+				bankAuthorizationID,
+				"bok_550e8400-e29b-41d4-a716-446655440001",
+				"fingerprint-1",
+				"",
+				"",
+				declineReason,
+				authorizedAt,
+				authorizedAt,
+			)
+			require.NoError(t, err)
+
+			err = payment.Capture(tt.bankCaptureID, tt.bok, tt.now)
+
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 

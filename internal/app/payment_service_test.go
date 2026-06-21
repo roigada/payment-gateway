@@ -436,12 +436,219 @@ func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
 	}
 }
 
+func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	payment := newAuthorizedDomainPayment(t, authorizedAt)
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+	service := newPaymentService(repo, bank, capturedAt)
+
+	captured, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankCaptureRequest{
+		OperationKey:        "bok_123",
+		BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000",
+		AmountCents:         1299,
+		Currency:            "USD",
+	}, bank.captureRequest)
+	assert.Equal(t, app.PaymentResult{
+		ID:          string(payment.ID()),
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "captured",
+		CreatedAt:   authorizedAt,
+		UpdatedAt:   capturedAt,
+	}, captured)
+
+	saved, err := repo.FindByID(context.Background(), payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
+	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440001", saved.BankCaptureID())
+	assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
+}
+
+func TestCapturePaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Now())
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Now())
+
+	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "",
+	})
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+	assert.Zero(t, bank.captureRequest)
+}
+
+func TestCapturePaymentRejectsNonAuthorizedStatusesWithoutCallingBank(t *testing.T) {
+	statuses := []domain.PaymentStatus{
+		domain.PaymentStatusPending,
+		domain.PaymentStatusDeclined,
+		domain.PaymentStatusCaptured,
+		domain.PaymentStatusVoided,
+		domain.PaymentStatusRefunded,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			payment := loadDomainPaymentForStatus(t, status)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+			service := newPaymentService(repo, bank, time.Now())
+
+			_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "public-capture-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+			assert.Zero(t, bank.captureRequest)
+		})
+	}
+}
+
+func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		kind app.PaymentErrorKind
+	}{
+		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
+		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+			payment := newAuthorizedDomainPayment(t, authorizedAt)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			service := newPaymentService(repo, &bankFake{captureErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+
+			_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "public-capture-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			require.NoError(t, findErr)
+			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+			assert.Equal(t, authorizedAt, saved.UpdatedAt())
+			assert.Empty(t, saved.BankCaptureID())
+			assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
+		})
+	}
+}
+
+func TestCapturePaymentReusesStoredCaptureBankOperationKey(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	payment, err := domain.LoadPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		domain.CurrencyUSD,
+		domain.PaymentStatusAuthorized,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		"",
+		"bok_existing_capture",
+		"",
+		authorizedAt,
+		authorizedAt,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+
+	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "bok_existing_capture", bank.captureRequest.OperationKey)
+	saved, err := repo.FindByID(context.Background(), payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, "bok_existing_capture", saved.CaptureBankOperationKey())
+}
+
+func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	command := app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	}
+	first, err := service.CapturePayment(context.Background(), command)
+	require.NoError(t, err)
+	bank.captureResult = app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002"}
+
+	replayed, err := service.CapturePayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, first, replayed)
+	assert.Equal(t, 1, bank.captureCalls)
+}
+
+func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	secondPayment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
+		"order-2",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440002",
+		"bok_550e8400-e29b-41d4-a716-446655440003",
+		payment.AuthorizationCardFingerprint(),
+		payment.CreatedAt(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+	require.NoError(t, err)
+
+	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(secondPayment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.Equal(t, 1, bank.captureCalls)
+}
+
 func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 	validPaymentRepository := testsupport.NewPaymentRepository()
 	validIdempotency := testsupport.NewIdempotencyRepository()
 	validPaymentIDs := testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")}
 	validBankOperationKeys := testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"}
-	validBank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	validBank := &bankFake{authorizeResult: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	validClock := testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)}
 
 	tests := []struct {
@@ -564,10 +771,14 @@ func validRetryAuthorizationCommand(paymentID string) app.RetryAuthorizationComm
 	}
 }
 
-func newPaymentService(repo app.PaymentRepository, bank app.BankAuthorizer, now time.Time) *app.PaymentService {
+func newPaymentService(repo app.PaymentRepository, bank app.BankClient, now time.Time) *app.PaymentService {
+	idempotency := app.IdempotencyRepository(testsupport.NewIdempotencyRepository())
+	if repoIdempotency, ok := repo.(app.IdempotencyRepository); ok {
+		idempotency = repoIdempotency
+	}
 	return app.NewPaymentService(
 		repo,
-		testsupport.NewIdempotencyRepository(),
+		idempotency,
 		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
 		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
 		bank,
@@ -587,4 +798,96 @@ func (f *bankAuthorizerFake) AuthorizePayment(_ context.Context, request app.Ban
 	f.request = request
 	f.calls++
 	return f.result, f.err
+}
+
+func (f *bankAuthorizerFake) CapturePayment(context.Context, app.BankCaptureRequest) (app.BankCaptureResult, error) {
+	return app.BankCaptureResult{}, errors.New("unexpected capture call")
+}
+
+type bankFake struct {
+	authorizeRequest app.BankAuthorizationRequest
+	authorizeResult  app.BankAuthorizationResult
+	authorizeErr     error
+	authorizeCalls   int
+	captureRequest   app.BankCaptureRequest
+	captureResult    app.BankCaptureResult
+	captureErr       error
+	captureCalls     int
+}
+
+func (f *bankFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
+	f.authorizeRequest = request
+	f.authorizeCalls++
+	return f.authorizeResult, f.authorizeErr
+}
+
+func (f *bankFake) CapturePayment(_ context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
+	f.captureRequest = request
+	f.captureCalls++
+	return f.captureResult, f.captureErr
+}
+
+func newAuthorizedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
+	t.Helper()
+
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	return payment
+}
+
+func loadDomainPaymentForStatus(t *testing.T, status domain.PaymentStatus) *domain.Payment {
+	t.Helper()
+
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	var (
+		bankAuthorizationID     string
+		captureBankOperationKey string
+		bankCaptureID           string
+		declineReason           domain.DeclineReason
+	)
+	switch status {
+	case domain.PaymentStatusPending:
+		// Pending payments keep the authorization operation key but have no definitive bank result yet.
+	case domain.PaymentStatusDeclined:
+		declineReason = domain.DeclineReasonUnknown
+	case domain.PaymentStatusAuthorized:
+		bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
+	case domain.PaymentStatusCaptured:
+		bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
+		bankCaptureID = "cap_550e8400-e29b-41d4-a716-446655440002"
+		captureBankOperationKey = "bok_550e8400-e29b-41d4-a716-446655440003"
+	case domain.PaymentStatusVoided:
+		bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
+	case domain.PaymentStatusRefunded:
+		bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
+		bankCaptureID = "cap_550e8400-e29b-41d4-a716-446655440002"
+		captureBankOperationKey = "bok_550e8400-e29b-41d4-a716-446655440003"
+	}
+	payment, err := domain.LoadPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		domain.CurrencyUSD,
+		status,
+		bankAuthorizationID,
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		bankCaptureID,
+		captureBankOperationKey,
+		declineReason,
+		now,
+		now,
+	)
+	require.NoError(t, err)
+	return payment
 }

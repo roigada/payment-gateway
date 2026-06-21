@@ -11,11 +11,15 @@ import (
 )
 
 type PaymentRepository struct {
-	payments map[domain.PaymentID]*domain.Payment
+	payments           map[domain.PaymentID]*domain.Payment
+	idempotencyRecords map[string]app.IdempotencyRecord
 }
 
 func NewPaymentRepository() *PaymentRepository {
-	return &PaymentRepository{payments: make(map[domain.PaymentID]*domain.Payment)}
+	return &PaymentRepository{
+		payments:           make(map[domain.PaymentID]*domain.Payment),
+		idempotencyRecords: make(map[string]app.IdempotencyRecord),
+	}
 }
 
 func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) error {
@@ -46,12 +50,7 @@ func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment
 	if existing.Status() != domain.PaymentStatusPending {
 		return app.NewPaymentInvalidStatusConflict(nil)
 	}
-	cloned, err := clonePayment(payment)
-	if err != nil {
-		return err
-	}
-	r.payments[payment.ID()] = cloned
-	return nil
+	return r.update(payment)
 }
 
 func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
@@ -79,6 +78,62 @@ func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQu
 		matches = matches[:100]
 	}
 	return matches, nil
+}
+
+func (r *PaymentRepository) ClaimCapture(_ context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
+	key := idempotencyMapKey(record.Operation, record.Key)
+	existing, ok := r.idempotencyRecords[key]
+	if ok {
+		if existing.RequestFingerprint != record.RequestFingerprint {
+			return app.NewPaymentIdempotencyConflict(nil)
+		}
+		return nil
+	}
+	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
+	return r.update(payment)
+}
+
+func (r *PaymentRepository) CompleteCapture(_ context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
+	if err := r.update(payment); err != nil {
+		return err
+	}
+	key := idempotencyMapKey(record.Operation, record.Key)
+	existing, ok := r.idempotencyRecords[key]
+	if ok && existing.RequestFingerprint != record.RequestFingerprint {
+		return app.NewPaymentIdempotencyConflict(nil)
+	}
+	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
+	return nil
+}
+
+func (r *PaymentRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
+	record, ok := r.idempotencyRecords[idempotencyMapKey(operation, key)]
+	if !ok || record.Result.ID == "" {
+		return app.IdempotencyRecord{}, false, nil
+	}
+	return cloneIdempotencyRecord(record), true, nil
+}
+
+func (r *PaymentRepository) SaveCompleted(_ context.Context, record app.IdempotencyRecord) error {
+	key := idempotencyMapKey(record.Operation, record.Key)
+	existing, ok := r.idempotencyRecords[key]
+	if ok && existing.Result.ID != "" {
+		return app.NewPaymentIdempotencyConflict(nil)
+	}
+	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
+	return nil
+}
+
+func (r *PaymentRepository) update(payment *domain.Payment) error {
+	if _, ok := r.payments[payment.ID()]; !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	cloned, err := clonePayment(payment)
+	if err != nil {
+		return err
+	}
+	r.payments[payment.ID()] = cloned
+	return nil
 }
 
 type FixedPaymentIDGenerator struct {
@@ -150,6 +205,8 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
 		payment.AuthorizationCardFingerprint(),
+		payment.BankCaptureID(),
+		payment.CaptureBankOperationKey(),
 		payment.DeclineReason(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),

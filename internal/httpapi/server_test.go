@@ -314,6 +314,92 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	}
 }
 
+func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
+	api := newPaymentAPITest(t)
+	captured := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	captured.Status = "captured"
+	captured.UpdatedAt = time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+	api.payments.capturePaymentResult = captured
+
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
+		"Idempotency-Key": "public-capture-key-1",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Empty(t, rec.Header().Get("Location"))
+	assert.Equal(t, app.CapturePaymentCommand{
+		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
+		IdempotencyKey: "public-capture-key-1",
+	}, api.payments.capturePaymentCommand)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "captured",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:30:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
+func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "json object", body: `{}`},
+		{name: "whitespace", body: " \n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", tt.body, map[string]string{
+				"Content-Type":    "application/json",
+				"Idempotency-Key": "public-capture-key-1",
+			})
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "invalid_json_body", "request body must be empty")
+			assert.Zero(t, api.payments.capturePaymentCommand)
+		})
+	}
+}
+
+func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    string
+		message string
+		status  int
+	}{
+		{name: "invalid input", err: app.NewInvalidPaymentInput("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
+		{name: "payment not found", err: app.NewPaymentNotFound("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
+		{name: "invalid transition", err: app.NewPaymentInvalidStatusConflict(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
+		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflict(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
+		{name: "bank unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
+		{name: "bank timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			api.payments.capturePaymentErr = tt.err
+			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
+				"Idempotency-Key": "public-capture-key-1",
+			})
+
+			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, tt.code, tt.message)
+		})
+	}
+}
+
 func TestPostPaymentsRecoversPanic(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentPanic = "database pool exploded"
@@ -452,6 +538,10 @@ type paymentUseCasesFake struct {
 	retryAuthorizationResult  app.PaymentResult
 	retryAuthorizationErr     error
 	retryAuthorizationPanic   any
+	capturePaymentCommand     app.CapturePaymentCommand
+	capturePaymentResult      app.PaymentResult
+	capturePaymentErr         error
+	capturePaymentPanic       any
 	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
@@ -484,6 +574,14 @@ func (f *paymentUseCasesFake) RetryAuthorization(_ context.Context, command app.
 	}
 	f.retryAuthorizationCommand = command
 	return f.retryAuthorizationResult, f.retryAuthorizationErr
+}
+
+func (f *paymentUseCasesFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentResult, error) {
+	if f.capturePaymentPanic != nil {
+		panic(f.capturePaymentPanic)
+	}
+	f.capturePaymentCommand = command
+	return f.capturePaymentResult, f.capturePaymentErr
 }
 
 func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
