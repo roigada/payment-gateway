@@ -156,6 +156,8 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 				"fingerprint-1",
 				"",
 				"",
+				"",
+				"",
 				declineReason,
 				authorizedAt,
 				authorizedAt,
@@ -167,6 +169,49 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestPaymentVoidMovesAuthorizedPaymentToVoided(t *testing.T) {
+	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok-auth",
+		"fingerprint-1",
+		createdAt,
+	)
+	require.NoError(t, err)
+	voidedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
+
+	err = payment.MarkVoided(" void_550e8400-e29b-41d4-a716-446655440002 ", " bok-void ", voidedAt)
+	require.NoError(t, err)
+
+	assert.Equal(t, domain.PaymentStatusVoided, payment.Status())
+	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440002", payment.BankVoidID())
+	assert.Equal(t, "bok-void", payment.VoidBankOperationKey())
+	assert.Equal(t, createdAt, payment.CreatedAt())
+	assert.Equal(t, voidedAt, payment.UpdatedAt())
+}
+
+func TestPaymentVoidRejectsInvalidTransition(t *testing.T) {
+	payment, err := domain.NewDeclinedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		domain.DeclineReasonInvalidCard,
+		"bok-auth",
+		"fingerprint-1",
+		time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+
+	err = payment.MarkVoided("void_550e8400-e29b-41d4-a716-446655440002", "bok-void", time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
+
+	assert.ErrorIs(t, err, domain.ErrInvalidPaymentStatus)
 }
 
 func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {

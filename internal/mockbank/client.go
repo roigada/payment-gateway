@@ -137,6 +137,46 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 	return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank capture failed: status %d", response.StatusCode))
 }
 
+func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(voidRequest{
+		AuthorizationID: request.BankAuthorizationID,
+	}); err != nil {
+		return app.BankVoidResult{}, err
+	}
+
+	endpoint := c.baseURL.JoinPath("/api/v1/voids")
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
+	if err != nil {
+		return app.BankVoidResult{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
+
+	response, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		if isTimeout(err) {
+			return app.BankVoidResult{}, app.NewPaymentBankTimeout(err)
+		}
+		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
+	}
+
+	var payload voidResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+	}
+	if strings.TrimSpace(payload.VoidID) == "" {
+		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void response missing void id"))
+	}
+
+	return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
+}
+
 func isTimeout(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -164,6 +204,14 @@ type captureRequest struct {
 
 type captureResponse struct {
 	CaptureID string `json:"capture_id"`
+}
+
+type voidRequest struct {
+	AuthorizationID string `json:"authorization_id"`
+}
+
+type voidResponse struct {
+	VoidID string `json:"void_id"`
 }
 
 type authorizationErrorResponse struct {

@@ -49,6 +49,38 @@ func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment
 	return r.update(payment)
 }
 
+func (r *PaymentRepository) UpdateVoidOperationKey(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusAuthorized || existing.VoidBankOperationKey() != "" {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	cloned, err := clonePayment(payment)
+	if err != nil {
+		return err
+	}
+	r.payments[payment.ID()] = cloned
+	return nil
+}
+
+func (r *PaymentRepository) UpdateVoidResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusAuthorized {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	cloned, err := clonePayment(payment)
+	if err != nil {
+		return err
+	}
+	r.payments[payment.ID()] = cloned
+	return nil
+}
+
 func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
@@ -170,6 +202,8 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.AuthorizationCardFingerprint(),
 		payment.BankCaptureID(),
 		payment.CaptureBankOperationKey(),
+		payment.BankVoidID(),
+		payment.VoidBankOperationKey(),
 		payment.DeclineReason(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),

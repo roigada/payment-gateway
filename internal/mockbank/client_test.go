@@ -318,6 +318,110 @@ func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
+	var gotPath string
+	var gotIdempotencyKey string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotIdempotencyKey = r.Header.Get("Idempotency-Key")
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"void_id": "void_550e8400-e29b-41d4-a716-446655440002",
+			"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
+			"status": "voided",
+			"voided_at": "2026-06-18T15:00:00Z"
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	result, err := client.VoidPayment(context.Background(), validVoidRequest())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}, result)
+	assert.Equal(t, "/api/v1/voids", gotPath)
+	assert.Equal(t, "bok_123", gotIdempotencyKey)
+	assert.Equal(t, map[string]any{
+		"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
+	}, gotBody)
+}
+
+func TestVoidPaymentRejectsMalformedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"void_id":""}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	_, err = client.VoidPayment(context.Background(), validVoidRequest())
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+}
+
+func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "bad request",
+			status: http.StatusBadRequest,
+			body:   `{"error":"already_voided","message":"already voided"}`,
+		},
+		{
+			name:   "internal bank error",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"internal_error","message":"try again"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.VoidPayment(context.Background(), validVoidRequest())
+
+			require.Error(t, err)
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+		})
+	}
+}
+
+func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Timeout = time.Nanosecond
+	client, err := mockbank.NewClient(server.URL, httpClient)
+	require.NoError(t, err)
+
+	_, err = client.VoidPayment(context.Background(), validVoidRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
 type timeoutRoundTripper struct{}
 
 func (timeoutRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
@@ -360,5 +464,12 @@ func validCaptureRequest() app.BankCaptureRequest {
 		BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000",
 		AmountCents:         1299,
 		Currency:            "USD",
+	}
+}
+
+func validVoidRequest() app.BankVoidRequest {
+	return app.BankVoidRequest{
+		OperationKey:        "bok_123",
+		BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000",
 	}
 }
