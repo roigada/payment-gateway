@@ -80,9 +80,13 @@ _Avoid_: Charge, pay
 An attempt to resolve a **Pending** **Payment** by asking the **Mock Bank** again for the authorization outcome.
 _Avoid_: Recreate payment, duplicate authorization
 
+**Authorization Request Fingerprint**:
+A non-reversible value used with a caller-provided **Idempotency Key** to check whether repeated authorization requests contain the same request values, including the **Amount**.
+_Avoid_: Authorization Card Fingerprint, Bank Operation Key, Request ID
+
 **Authorization Card Fingerprint**:
-A non-reversible value used to check whether an **Authorization Retry** uses the same card number and expiry as the original authorization request. It does not represent the card CVV.
-_Avoid_: Authorization Fingerprint, Request Fingerprint, Stored card, card token
+A non-reversible value used to check whether an **Authorization Retry** uses the same card number and expiry as the original authorization request for an existing **Payment ID**. The **Payment** already owns the **Amount**, so this value does not include the **Amount** and does not represent the card CVV.
+_Avoid_: Authorization Request Fingerprint, Stored card, card token
 
 **Capture**:
 To collect the full authorized **Amount** for a **Payment**.
