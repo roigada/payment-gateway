@@ -43,16 +43,14 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 		ExpiryYear:  request.Card.ExpiryYear,
 		AmountCents: request.AmountCents,
 	}); err != nil {
-		return app.BankAuthorizationResult{}, err
+		return app.BankAuthorizationResult{}, app.NewInternalPaymentError(err)
 	}
 
 	endpoint := c.baseURL.JoinPath("/api/v1/authorizations")
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
+	httpRequest, err := newAuthorizationHTTPRequest(ctx, endpoint.String(), &body, request.OperationKey)
 	if err != nil {
 		return app.BankAuthorizationResult{}, err
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
 
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
@@ -135,4 +133,14 @@ func invalidInputReasonForBadRequest(code string) string {
 	default:
 		return ""
 	}
+}
+
+func newAuthorizationHTTPRequest(ctx context.Context, endpoint string, body *bytes.Buffer, operationKey string) (*http.Request, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Idempotency-Key", operationKey)
+	return httpRequest, nil
 }
