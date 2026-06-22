@@ -33,18 +33,18 @@ func newLogger() *slog.Logger {
 }
 
 type config struct {
-	Addr                           string
-	DatabaseURL                    string
-	MockBankBaseURL                string
-	AuthorizationFingerprintSecret string
+	Addr              string
+	DatabaseURL       string
+	MockBankBaseURL   string
+	FingerprintSecret string
 }
 
 func loadConfig() config {
 	cfg := config{
-		Addr:                           os.Getenv("ADDR"),
-		DatabaseURL:                    os.Getenv("DATABASE_URL"),
-		MockBankBaseURL:                os.Getenv("MOCK_BANK_BASE_URL"),
-		AuthorizationFingerprintSecret: os.Getenv("AUTHORIZATION_FINGERPRINT_SECRET"),
+		Addr:              os.Getenv("ADDR"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		MockBankBaseURL:   os.Getenv("MOCK_BANK_BASE_URL"),
+		FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"),
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
@@ -60,8 +60,8 @@ func (cfg config) validate() error {
 	if cfg.MockBankBaseURL == "" {
 		return fmt.Errorf("MOCK_BANK_BASE_URL is required")
 	}
-	if cfg.AuthorizationFingerprintSecret == "" {
-		return fmt.Errorf("AUTHORIZATION_FINGERPRINT_SECRET is required")
+	if cfg.FingerprintSecret == "" {
+		return fmt.Errorf("FINGERPRINT_SECRET is required")
 	}
 
 	return nil
@@ -91,7 +91,7 @@ func run(logger *slog.Logger) error {
 	idempotencyRepository := postgres.NewIdempotencyRepository(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentRepository, idempotencyRepository, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.AuthorizationFingerprintSecret)
+	paymentService := app.NewPaymentService(paymentRepository, idempotencyRepository, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.FingerprintSecret)
 	readiness := postgres.NewReadinessChecker(db)
 	server := httpapi.NewServer(paymentService, readiness, logger)
 

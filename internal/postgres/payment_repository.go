@@ -29,7 +29,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     status,
 		     bank_authorization_id,
 		     authorization_bank_operation_key,
-		     authorization_fingerprint,
+		     authorization_card_fingerprint,
 		     decline_reason,
 		     created_at,
 		     updated_at
@@ -43,7 +43,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
 		payment.AuthorizationBankOperationKey(),
-		payment.AuthorizationFingerprint(),
+		payment.AuthorizationCardFingerprint(),
 		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
@@ -97,7 +97,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		status                        domain.PaymentStatus
 		bankAuthorizationID           sql.NullString
 		authorizationBankOperationKey string
-		authorizationFingerprint      string
+		authorizationCardFingerprint  string
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -111,7 +111,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        status,
 		        bank_authorization_id,
 		        authorization_bank_operation_key,
-		        authorization_fingerprint,
+		        authorization_card_fingerprint,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -126,7 +126,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&status,
 		&bankAuthorizationID,
 		&authorizationBankOperationKey,
-		&authorizationFingerprint,
+		&authorizationCardFingerprint,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -147,7 +147,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		status,
 		nullStringValue(bankAuthorizationID),
 		authorizationBankOperationKey,
-		authorizationFingerprint,
+		authorizationCardFingerprint,
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,

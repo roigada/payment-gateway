@@ -9,16 +9,16 @@ import (
 const CurrencyUSD = "USD"
 
 var (
-	ErrInvalidPaymentID                = errors.New("invalid payment id")
-	ErrInvalidOrderID                  = errors.New("invalid order id")
-	ErrInvalidCustomerID               = errors.New("invalid customer id")
-	ErrInvalidAmount                   = errors.New("invalid amount")
-	ErrInvalidBankAuthorizationID      = errors.New("invalid bank authorization id")
-	ErrInvalidBankOperationKey         = errors.New("invalid bank operation key")
-	ErrInvalidAuthorizationFingerprint = errors.New("invalid authorization fingerprint")
-	ErrInvalidDeclineReason            = errors.New("invalid decline reason")
-	ErrInvalidPaymentTimestamp         = errors.New("invalid payment timestamp")
-	ErrInvalidPaymentStatus            = errors.New("invalid payment status")
+	ErrInvalidPaymentID                    = errors.New("invalid payment id")
+	ErrInvalidOrderID                      = errors.New("invalid order id")
+	ErrInvalidCustomerID                   = errors.New("invalid customer id")
+	ErrInvalidAmount                       = errors.New("invalid amount")
+	ErrInvalidBankAuthorizationID          = errors.New("invalid bank authorization id")
+	ErrInvalidBankOperationKey             = errors.New("invalid bank operation key")
+	ErrInvalidAuthorizationCardFingerprint = errors.New("invalid authorization card fingerprint")
+	ErrInvalidDeclineReason                = errors.New("invalid decline reason")
+	ErrInvalidPaymentTimestamp             = errors.New("invalid payment timestamp")
+	ErrInvalidPaymentStatus                = errors.New("invalid payment status")
 )
 
 type PaymentID string
@@ -49,7 +49,7 @@ type Payment struct {
 	status                        PaymentStatus
 	bankAuthorizationID           string
 	authorizationBankOperationKey string
-	authorizationFingerprint      string
+	authorizationCardFingerprint  string
 	declineReason                 DeclineReason
 	createdAt                     time.Time
 	updatedAt                     time.Time
@@ -61,7 +61,7 @@ func NewPendingPayment(
 	customerID string,
 	amountCents int64,
 	authorizationBankOperationKey string,
-	authorizationFingerprint string,
+	authorizationCardFingerprint string,
 	now time.Time,
 ) (*Payment, error) {
 	payment, err := newBasePayment(
@@ -71,7 +71,7 @@ func NewPendingPayment(
 		amountCents,
 		PaymentStatusPending,
 		authorizationBankOperationKey,
-		authorizationFingerprint,
+		authorizationCardFingerprint,
 		now,
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func NewAuthorizedPayment(
 	amountCents int64,
 	bankAuthorizationID string,
 	authorizationBankOperationKey string,
-	authorizationFingerprint string,
+	authorizationCardFingerprint string,
 	now time.Time,
 ) (*Payment, error) {
 	payment, err := newBasePayment(
@@ -97,7 +97,7 @@ func NewAuthorizedPayment(
 		amountCents,
 		PaymentStatusAuthorized,
 		authorizationBankOperationKey,
-		authorizationFingerprint,
+		authorizationCardFingerprint,
 		now,
 	)
 	if err != nil {
@@ -118,7 +118,7 @@ func NewDeclinedPayment(
 	amountCents int64,
 	declineReason DeclineReason,
 	authorizationBankOperationKey string,
-	authorizationFingerprint string,
+	authorizationCardFingerprint string,
 	now time.Time,
 ) (*Payment, error) {
 	payment, err := newBasePayment(
@@ -128,7 +128,7 @@ func NewDeclinedPayment(
 		amountCents,
 		PaymentStatusDeclined,
 		authorizationBankOperationKey,
-		authorizationFingerprint,
+		authorizationCardFingerprint,
 		now,
 	)
 	if err != nil {
@@ -148,7 +148,7 @@ func newBasePayment(
 	amountCents int64,
 	status PaymentStatus,
 	authorizationBankOperationKey string,
-	authorizationFingerprint string,
+	authorizationCardFingerprint string,
 	now time.Time,
 ) (*Payment, error) {
 	if err := validatePaymentID(id); err != nil {
@@ -169,7 +169,7 @@ func newBasePayment(
 	if err != nil {
 		return nil, err
 	}
-	authorizationFingerprint, err = normalizeRequired(authorizationFingerprint, ErrInvalidAuthorizationFingerprint)
+	authorizationCardFingerprint, err = normalizeRequired(authorizationCardFingerprint, ErrInvalidAuthorizationCardFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func newBasePayment(
 		currency:                      CurrencyUSD,
 		status:                        status,
 		authorizationBankOperationKey: authorizationBankOperationKey,
-		authorizationFingerprint:      authorizationFingerprint,
+		authorizationCardFingerprint:  authorizationCardFingerprint,
 		createdAt:                     now,
 		updatedAt:                     now,
 	}, nil
@@ -200,7 +200,7 @@ func LoadPayment(
 	status PaymentStatus,
 	bankAuthorizationID string,
 	authorizationBankOperationKey string,
-	authorizationFingerprint string,
+	authorizationCardFingerprint string,
 	declineReason DeclineReason,
 	createdAt time.Time,
 	updatedAt time.Time,
@@ -224,17 +224,17 @@ func LoadPayment(
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationFingerprint, createdAt)
+		payment, err = NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	case PaymentStatusAuthorized:
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = NewAuthorizedPayment(id, orderID, customerID, amountCents, bankAuthorizationID, authorizationBankOperationKey, authorizationFingerprint, createdAt)
+		payment, err = NewAuthorizedPayment(id, orderID, customerID, amountCents, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	case PaymentStatusDeclined:
 		if strings.TrimSpace(bankAuthorizationID) != "" {
 			return nil, ErrInvalidBankAuthorizationID
 		}
-		payment, err = NewDeclinedPayment(id, orderID, customerID, amountCents, declineReason, authorizationBankOperationKey, authorizationFingerprint, createdAt)
+		payment, err = NewDeclinedPayment(id, orderID, customerID, amountCents, declineReason, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	default:
 		return nil, ErrInvalidPaymentStatus
 	}
@@ -350,7 +350,7 @@ func (p *Payment) Currency() string                      { return p.currency }
 func (p *Payment) Status() PaymentStatus                 { return p.status }
 func (p *Payment) BankAuthorizationID() string           { return p.bankAuthorizationID }
 func (p *Payment) AuthorizationBankOperationKey() string { return p.authorizationBankOperationKey }
-func (p *Payment) AuthorizationFingerprint() string      { return p.authorizationFingerprint }
+func (p *Payment) AuthorizationCardFingerprint() string  { return p.authorizationCardFingerprint }
 func (p *Payment) DeclineReason() DeclineReason          { return p.declineReason }
 func (p *Payment) CreatedAt() time.Time                  { return p.createdAt }
 func (p *Payment) UpdatedAt() time.Time                  { return p.updatedAt }

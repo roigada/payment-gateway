@@ -33,7 +33,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *tes
 	assert.Empty(t, payment.DeclineReason())
 	assert.Equal(t, "bank-auth-id-1", payment.BankAuthorizationID())
 	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", payment.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
 	assert.Equal(t, now, payment.CreatedAt())
 	assert.Equal(t, now, payment.UpdatedAt())
 }
@@ -56,7 +56,7 @@ func TestNewPendingPaymentCreatesPaymentWithRetryPrivateFields(t *testing.T) {
 	assert.Empty(t, payment.BankAuthorizationID())
 	assert.Empty(t, payment.DeclineReason())
 	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", payment.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
 	assert.Equal(t, now, payment.CreatedAt())
 	assert.Equal(t, now, payment.UpdatedAt())
 }
@@ -85,7 +85,7 @@ func TestNewDeclinedPaymentCreatesPaymentWithGatewayDeclineReason(t *testing.T) 
 	assert.Equal(t, domain.DeclineReasonInsufficientFunds, payment.DeclineReason())
 	assert.Empty(t, payment.BankAuthorizationID())
 	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", payment.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
 	assert.Equal(t, now, payment.CreatedAt())
 	assert.Equal(t, now, payment.UpdatedAt())
 }
@@ -114,7 +114,7 @@ func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 		{name: "amount", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAmount},
 		{name: "bank authorization id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
 		{name: "bank operation key", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "authorization fingerprint", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationFingerprint},
+		{name: "authorization card fingerprint", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
 		{name: "timestamp", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
 	}
 
@@ -139,7 +139,7 @@ func TestNewDeclinedPaymentRejectsInvalidValues(t *testing.T) {
 	}{
 		{name: "decline reason", reason: domain.DeclineReason("raw_bank_code"), bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidDeclineReason},
 		{name: "bank operation key", reason: domain.DeclineReasonInvalidCard, bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "authorization fingerprint", reason: domain.DeclineReasonInvalidCard, bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationFingerprint},
+		{name: "authorization card fingerprint", reason: domain.DeclineReasonInvalidCard, bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
 		{name: "timestamp", reason: domain.DeclineReasonExpiredCard, bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
 	}
 

@@ -131,7 +131,7 @@ func NewPaymentService(
 	}
 	fingerprintSecret = strings.TrimSpace(fingerprintSecret)
 	if fingerprintSecret == "" {
-		panic("authorization fingerprint secret is required")
+		panic("fingerprint secret is required")
 	}
 
 	return &PaymentService{
@@ -164,7 +164,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	}
 
 	fingerprint := authorizePaymentRequestFingerprint(command, s.fingerprintSecret)
-	authorizationFingerprint := authorizationFingerprint(command.Card, command.AmountCents, s.fingerprintSecret)
+	authorizationCardFingerprint := authorizationCardFingerprint(command.Card, s.fingerprintSecret)
 	record, found, err := s.idempotency.FindCompleted(ctx, authorizePaymentOperation, command.IdempotencyKey)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
@@ -196,7 +196,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 			command.CustomerID,
 			command.AmountCents,
 			bankOperationKey,
-			authorizationFingerprint,
+			authorizationCardFingerprint,
 			now,
 		)
 	} else if err != nil {
@@ -209,7 +209,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 			command.AmountCents,
 			bankResult.DeclineReason,
 			bankOperationKey,
-			authorizationFingerprint,
+			authorizationCardFingerprint,
 			now,
 		)
 	} else {
@@ -220,7 +220,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 			command.AmountCents,
 			bankResult.BankAuthorizationID,
 			bankOperationKey,
-			authorizationFingerprint,
+			authorizationCardFingerprint,
 			now,
 		)
 	}
@@ -276,7 +276,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 	if payment.Status() != domain.PaymentStatusPending {
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
-	if authorizationFingerprint(command.Card, payment.AmountCents(), s.fingerprintSecret) != payment.AuthorizationFingerprint() {
+	if authorizationCardFingerprint(command.Card, s.fingerprintSecret) != payment.AuthorizationCardFingerprint() {
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
@@ -402,13 +402,12 @@ func retryAuthorizationRequestFingerprint(command RetryAuthorizationCommand, sec
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func authorizationFingerprint(card CardDetails, amountCents int64, secret string) string {
+func authorizationCardFingerprint(card CardDetails, secret string) string {
 	hash := hmac.New(sha256.New, []byte(secret))
 	_, _ = fmt.Fprintf(
 		hash,
-		"%s\n%d\n%s\n%d\n%d",
+		"%s\n%s\n%d\n%d",
 		"authorization",
-		amountCents,
 		card.Number,
 		card.ExpiryMonth,
 		card.ExpiryYear,

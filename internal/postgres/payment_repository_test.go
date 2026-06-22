@@ -49,7 +49,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", saved.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
@@ -86,7 +86,7 @@ func TestPaymentRepositoryPersistsDeclinedPayment(t *testing.T) {
 	assert.Equal(t, domain.DeclineReasonExpiredCard, saved.DeclineReason())
 	assert.Empty(t, saved.BankAuthorizationID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", saved.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 }
@@ -119,7 +119,7 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
-	assert.Equal(t, "fingerprint-1", saved.AuthorizationFingerprint())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should stay as the original instant")
 	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }

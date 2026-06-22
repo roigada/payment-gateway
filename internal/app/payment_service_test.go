@@ -105,9 +105,30 @@ func TestAuthorizePaymentStoresPendingPaymentForUnknownBankOutcome(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
-	assert.NotEmpty(t, saved.AuthorizationFingerprint())
-	assert.NotContains(t, saved.AuthorizationFingerprint(), "4111111111111111")
-	assert.NotContains(t, saved.AuthorizationFingerprint(), "123")
+	assert.NotEmpty(t, saved.AuthorizationCardFingerprint())
+	assert.NotContains(t, saved.AuthorizationCardFingerprint(), "4111111111111111")
+	assert.NotContains(t, saved.AuthorizationCardFingerprint(), "123")
+}
+
+func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	firstRepo := testsupport.NewPaymentRepository()
+	firstService := newPaymentService(firstRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
+	first, err := firstService.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	secondRepo := testsupport.NewPaymentRepository()
+	secondService := newPaymentService(secondRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
+	secondCommand := validAuthorizeCommand()
+	secondCommand.AmountCents = 2599
+	second, err := secondService.AuthorizePayment(context.Background(), secondCommand)
+	require.NoError(t, err)
+
+	firstSaved, err := firstRepo.FindByID(context.Background(), domain.PaymentID(first.ID))
+	require.NoError(t, err)
+	secondSaved, err := secondRepo.FindByID(context.Background(), domain.PaymentID(second.ID))
+	require.NoError(t, err)
+	assert.Equal(t, firstSaved.AuthorizationCardFingerprint(), secondSaved.AuthorizationCardFingerprint())
 }
 
 func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
@@ -400,7 +421,7 @@ func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 			build: func() {
 				app.NewPaymentService(validPaymentRepository, validIdempotency, validPaymentIDs, validBankOperationKeys, validBank, validClock, " ")
 			},
-			reason: "authorization fingerprint secret is required",
+			reason: "fingerprint secret is required",
 		},
 	}
 

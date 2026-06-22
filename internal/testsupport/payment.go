@@ -121,7 +121,7 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.Status(),
 		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
-		payment.AuthorizationFingerprint(),
+		payment.AuthorizationCardFingerprint(),
 		payment.DeclineReason(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),

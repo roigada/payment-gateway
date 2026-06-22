@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	validDatabaseURL                    = "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable"
-	validMockBankBaseURL                = "http://localhost:9090"
-	validAuthorizationFingerprintSecret = "secret"
+	validDatabaseURL       = "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable"
+	validMockBankBaseURL   = "http://localhost:9090"
+	validFingerprintSecret = "secret"
 )
 
 func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
@@ -32,12 +32,12 @@ func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
 			wantErr: "MOCK_BANK_BASE_URL is required",
 		},
 		{
-			name: "authorization fingerprint secret",
+			name: "fingerprint secret",
 			cfg: config{
 				DatabaseURL:     validDatabaseURL,
 				MockBankBaseURL: validMockBankBaseURL,
 			},
-			wantErr: "AUTHORIZATION_FINGERPRINT_SECRET is required",
+			wantErr: "FINGERPRINT_SECRET is required",
 		},
 	}
 
@@ -53,9 +53,9 @@ func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
 
 func TestConfigValidateAllowsPaymentGatewayConfiguration(t *testing.T) {
 	cfg := config{
-		DatabaseURL:                    validDatabaseURL,
-		MockBankBaseURL:                validMockBankBaseURL,
-		AuthorizationFingerprintSecret: validAuthorizationFingerprintSecret,
+		DatabaseURL:       validDatabaseURL,
+		MockBankBaseURL:   validMockBankBaseURL,
+		FingerprintSecret: validFingerprintSecret,
 	}
 
 	require.NoError(t, cfg.validate())
@@ -64,14 +64,14 @@ func TestConfigValidateAllowsPaymentGatewayConfiguration(t *testing.T) {
 func TestLoadConfigUsesPaymentGatewayRuntimeDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", validDatabaseURL)
 	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL)
-	t.Setenv("AUTHORIZATION_FINGERPRINT_SECRET", validAuthorizationFingerprintSecret)
+	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
 
 	cfg := loadConfig()
 
 	assert.Equal(t, ":8080", cfg.Addr)
 	assert.Equal(t, validDatabaseURL, cfg.DatabaseURL)
 	assert.Equal(t, validMockBankBaseURL, cfg.MockBankBaseURL)
-	assert.Equal(t, validAuthorizationFingerprintSecret, cfg.AuthorizationFingerprintSecret)
+	assert.Equal(t, validFingerprintSecret, cfg.FingerprintSecret)
 }
 
 func TestLoadConfigAllowsCustomListenAddress(t *testing.T) {
