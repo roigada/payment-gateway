@@ -49,7 +49,7 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	endpoint := c.baseURL.JoinPath("/api/v1/authorizations")
 	httpRequest, err := newAuthorizationHTTPRequest(ctx, endpoint.String(), &body, request.OperationKey)
 	if err != nil {
-		return app.BankAuthorizationResult{}, err
+		return app.BankAuthorizationResult{}, app.NewInternalPaymentError(err)
 	}
 
 	response, err := c.httpClient.Do(httpRequest)
@@ -73,8 +73,12 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 
 		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
 	case http.StatusBadRequest:
-		if err := decodeBadRequestInvalidInput(response); err != nil {
-			return app.BankAuthorizationResult{}, err
+		reason, err := decodeBadRequestInvalidInputReason(response)
+		if err != nil {
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if reason != "" {
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInput(reason, nil)
 		}
 	case http.StatusPaymentRequired:
 		return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, nil
@@ -107,17 +111,13 @@ type authorizationErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func decodeBadRequestInvalidInput(response *http.Response) error {
+func decodeBadRequestInvalidInputReason(response *http.Response) (string, error) {
 	var payload authorizationErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return app.NewPaymentBankUnavailable(err)
+		return "", err
 	}
 
-	reason := invalidInputReasonForBadRequest(payload.Error)
-	if reason != "" {
-		return app.NewInvalidPaymentInput(reason, nil)
-	}
-	return app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
+	return invalidInputReasonForBadRequest(payload.Error), nil
 }
 
 func invalidInputReasonForBadRequest(code string) string {
@@ -138,7 +138,7 @@ func invalidInputReasonForBadRequest(code string) string {
 func newAuthorizationHTTPRequest(ctx context.Context, endpoint string, body *bytes.Buffer, operationKey string) (*http.Request, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
+		return nil, err
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Idempotency-Key", operationKey)
