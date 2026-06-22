@@ -32,6 +32,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
 		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
 		now,
 	)
 	require.NoError(t, err)
@@ -48,6 +49,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
@@ -71,6 +73,7 @@ func TestPaymentRepositoryPersistsDeclinedPayment(t *testing.T) {
 		1299,
 		domain.DeclineReasonExpiredCard,
 		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
 		now,
 	)
 	require.NoError(t, err)
@@ -83,8 +86,42 @@ func TestPaymentRepositoryPersistsDeclinedPayment(t *testing.T) {
 	assert.Equal(t, domain.DeclineReasonExpiredCard, saved.DeclineReason())
 	assert.Empty(t, saved.BankAuthorizationID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
+}
+
+func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewPendingPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repository.Create(ctx, payment))
+
+	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Minute)))
+	require.NoError(t, repository.UpdateAuthorizationResult(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
+	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
+	assert.True(t, saved.CreatedAt().Equal(now), "created_at should stay as the original instant")
+	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }
 
 func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
@@ -180,6 +217,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 		tcpostgres.WithInitScripts(
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
 			filepath.Join("..", "..", "migrations", "000002_add_declined_payments_and_idempotency.up.sql"),
+			filepath.Join("..", "..", "migrations", "000003_add_pending_authorization_retry.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

@@ -34,7 +34,7 @@ services:
         condition: service_completed_successfully
     environment:
       ADDR: :8080
-      AUTHORIZATION_FINGERPRINT_SECRET: local-development-secret
+      FINGERPRINT_SECRET: local-development-secret
       DATABASE_URL: postgres://payment_gateway:payment_gateway@postgres:5432/payment_gateway?sslmode=disable
       MOCK_BANK_BASE_URL: http://mock-bank:9090
     ports:

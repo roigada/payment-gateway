@@ -17,6 +17,7 @@ type Server struct {
 
 type paymentUseCases interface {
 	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error)
+	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error)
 }
 
 type readinessChecker interface {
@@ -47,6 +48,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /v1/payments", s.authorizePayment)
+	mux.HandleFunc("POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
 
 	return s.logRequest(s.recoverPanic(mux))
 }

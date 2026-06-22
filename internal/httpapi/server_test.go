@@ -82,10 +82,78 @@ func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.authorizePaymentResult = newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "pending",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
+func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.retryAuthorizationResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "retry-key-1",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, app.RetryAuthorizationCommand{
+		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
+		IdempotencyKey: "retry-key-1",
+		Card: app.CardDetails{
+			Number:      "4111111111111111",
+			CVV:         "123",
+			ExpiryMonth: 12,
+			ExpiryYear:  2030,
+		},
+	}, api.payments.retryAuthorizationCommand)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "authorized",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
 func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
 		"Idempotency-Key": "public-key-1",
+	})
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+}
+
+func TestPostPaymentAuthorizationRetriesRequiresJSONContentType(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
+		"Idempotency-Key": "retry-key-1",
 	})
 
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
@@ -125,6 +193,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 		{name: "invalid input", err: app.NewInvalidPaymentInput("amount must be greater than zero", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
 		{name: "payment not found", err: app.NewPaymentNotFound("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
 		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflict(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
+		{name: "invalid status conflict", err: app.NewPaymentInvalidStatusConflict(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
 		{name: "bank unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
 		{name: "bank timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
 		{name: "internal", err: app.NewInternalPaymentError(errors.New("scan failed")), code: "internal_server_error", message: "internal server error", status: http.StatusInternalServerError},
@@ -200,6 +269,17 @@ func validAuthorizeBody() string {
 	}`
 }
 
+func validRetryAuthorizationBody() string {
+	return `{
+		"card": {
+			"number": "4111111111111111",
+			"cvv": "123",
+			"expiry_month": 12,
+			"expiry_year": 2030
+		}
+	}`
+}
+
 type paymentAPITest struct {
 	payments  *paymentUseCasesFake
 	readiness *readinessCheckerFake
@@ -266,10 +346,14 @@ func discardLogger() *slog.Logger {
 }
 
 type paymentUseCasesFake struct {
-	authorizePaymentCommand app.AuthorizePaymentCommand
-	authorizePaymentResult  app.PaymentResult
-	authorizePaymentErr     error
-	authorizePaymentPanic   any
+	authorizePaymentCommand   app.AuthorizePaymentCommand
+	authorizePaymentResult    app.PaymentResult
+	authorizePaymentErr       error
+	authorizePaymentPanic     any
+	retryAuthorizationCommand app.RetryAuthorizationCommand
+	retryAuthorizationResult  app.PaymentResult
+	retryAuthorizationErr     error
+	retryAuthorizationPanic   any
 }
 
 type readinessCheckerFake struct {
@@ -290,6 +374,14 @@ func (f *paymentUseCasesFake) AuthorizePayment(_ context.Context, command app.Au
 	return f.authorizePaymentResult, f.authorizePaymentErr
 }
 
+func (f *paymentUseCasesFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error) {
+	if f.retryAuthorizationPanic != nil {
+		panic(f.retryAuthorizationPanic)
+	}
+	f.retryAuthorizationCommand = command
+	return f.retryAuthorizationResult, f.retryAuthorizationErr
+}
+
 func newPayment(id string) app.PaymentResult {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	return app.PaymentResult{
@@ -308,5 +400,11 @@ func newDeclinedPayment(id string) app.PaymentResult {
 	payment := newPayment(id)
 	payment.Status = "declined"
 	payment.DeclineReason = "invalid_card"
+	return payment
+}
+
+func newPendingPayment(id string) app.PaymentResult {
+	payment := newPayment(id)
+	payment.Status = "pending"
 	return payment
 }

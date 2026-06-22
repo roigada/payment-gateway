@@ -30,7 +30,7 @@ The service reads configuration from environment variables:
 ```text
 DATABASE_URL                      required Postgres connection string
 MOCK_BANK_BASE_URL                required Mock Bank base URL
-AUTHORIZATION_FINGERPRINT_SECRET  required secret for future authorization retry fingerprints
+FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
 ADDR                              optional HTTP listen address, defaults to :8080
 ```
 
@@ -39,7 +39,7 @@ Example:
 ```sh
 export DATABASE_URL='postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
-export AUTHORIZATION_FINGERPRINT_SECRET='local-development-secret'
+export FINGERPRINT_SECRET='local-development-secret'
 export ADDR=':8080'
 ```
 

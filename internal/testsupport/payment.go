@@ -37,6 +37,22 @@ func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*d
 	return clonePayment(payment)
 }
 
+func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusPending {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	cloned, err := clonePayment(payment)
+	if err != nil {
+		return err
+	}
+	r.payments[payment.ID()] = cloned
+	return nil
+}
+
 type FixedPaymentIDGenerator struct {
 	ID domain.PaymentID
 }
@@ -105,6 +121,7 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.Status(),
 		payment.BankAuthorizationID(),
 		payment.AuthorizationBankOperationKey(),
+		payment.AuthorizationCardFingerprint(),
 		payment.DeclineReason(),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
