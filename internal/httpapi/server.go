@@ -18,8 +18,8 @@ type Server struct {
 type paymentUseCases interface {
 	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error)
 	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error)
-	GetPayment(ctx context.Context, id string) (app.PaymentResult, error)
-	SearchPayments(ctx context.Context, filter app.PaymentSearchFilter) ([]app.PaymentResult, error)
+	GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error)
+	SearchPayments(ctx context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error)
 }
 
 type readinessChecker interface {

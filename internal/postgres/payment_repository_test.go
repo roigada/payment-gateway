@@ -143,7 +143,7 @@ func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testi
 	declined := newRepositoryPayment(t, 106, "order-1", "customer-1", domain.PaymentStatusDeclined, base.Add(106*time.Minute))
 	require.NoError(t, repository.Create(ctx, declined))
 
-	authorized, err := repository.Search(ctx, app.PaymentSearchFilter{
+	authorized, err := repository.Search(ctx, app.SearchPaymentsQuery{
 		OrderID:    "order-1",
 		CustomerID: "customer-1",
 		Status:     "authorized",
@@ -154,7 +154,7 @@ func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testi
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000104"), authorized[0].ID())
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000005"), authorized[99].ID())
 
-	byCustomer, err := repository.Search(ctx, app.PaymentSearchFilter{CustomerID: "customer-1"})
+	byCustomer, err := repository.Search(ctx, app.SearchPaymentsQuery{CustomerID: "customer-1"})
 
 	require.NoError(t, err)
 	require.Len(t, byCustomer, 100)

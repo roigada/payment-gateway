@@ -378,7 +378,9 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, now)
 
-	result, err := service.GetPayment(context.Background(), "pay_550e8400-e29b-41d4-a716-446655440000")
+	result, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
+		PaymentID: "pay_550e8400-e29b-41d4-a716-446655440000",
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, app.PaymentResult{
@@ -401,7 +403,7 @@ func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
 	require.NoError(t, repo.Create(context.Background(), newer))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, newer.CreatedAt())
 
-	results, err := service.SearchPayments(context.Background(), app.PaymentSearchFilter{
+	results, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
 		OrderID:    " order-1 ",
 		CustomerID: " customer-1 ",
 		Status:     " authorized ",
@@ -415,19 +417,19 @@ func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
 
 func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
 	tests := []struct {
-		name   string
-		filter app.PaymentSearchFilter
+		name  string
+		query app.SearchPaymentsQuery
 	}{
-		{name: "unfiltered", filter: app.PaymentSearchFilter{}},
-		{name: "status only", filter: app.PaymentSearchFilter{Status: "authorized"}},
-		{name: "invalid status", filter: app.PaymentSearchFilter{OrderID: "order-1", Status: "unknown"}},
+		{name: "unfiltered", query: app.SearchPaymentsQuery{}},
+		{name: "status only", query: app.SearchPaymentsQuery{Status: "authorized"}},
+		{name: "invalid status", query: app.SearchPaymentsQuery{OrderID: "order-1", Status: "unknown"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := newPaymentService(testsupport.NewPaymentRepository(), &bankAuthorizerFake{}, time.Now())
 
-			_, err := service.SearchPayments(context.Background(), tt.filter)
+			_, err := service.SearchPayments(context.Background(), tt.query)
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 		})

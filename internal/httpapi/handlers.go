@@ -114,7 +114,9 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
-	payment, err := s.payments.GetPayment(r.Context(), r.PathValue("id"))
+	payment, err := s.payments.GetPayment(r.Context(), app.GetPaymentQuery{
+		PaymentID: r.PathValue("id"),
+	})
 	if err != nil {
 		writePaymentServiceError(w, err)
 		return
@@ -134,7 +136,7 @@ func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payments, err := s.payments.SearchPayments(r.Context(), app.PaymentSearchFilter{
+	payments, err := s.payments.SearchPayments(r.Context(), app.SearchPaymentsQuery{
 		OrderID:    query.Get("order_id"),
 		CustomerID: query.Get("customer_id"),
 		Status:     query.Get("status"),

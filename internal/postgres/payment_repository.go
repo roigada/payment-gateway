@@ -158,7 +158,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 	return payment, nil
 }
 
-func (r *PaymentRepository) Search(ctx context.Context, filter app.PaymentSearchFilter) ([]*domain.Payment, error) {
+func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	rows, err := r.db.QueryContext(
 		ctx,
 		`SELECT id,
@@ -179,9 +179,9 @@ func (r *PaymentRepository) Search(ctx context.Context, filter app.PaymentSearch
 		    AND ($3 = '' OR status = $3)
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 100`,
-		filter.OrderID,
-		filter.CustomerID,
-		filter.Status,
+		query.OrderID,
+		query.CustomerID,
+		query.Status,
 	)
 	if err != nil {
 		return nil, app.NewInternalPaymentError(err)

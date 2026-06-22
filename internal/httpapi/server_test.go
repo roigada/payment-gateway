@@ -146,7 +146,9 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", api.payments.getPaymentID)
+	assert.Equal(t, app.GetPaymentQuery{
+		PaymentID: "pay_550e8400-e29b-41d4-a716-446655440000",
+	}, api.payments.getPaymentQuery)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -180,11 +182,11 @@ func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	rec := api.request(t, http.MethodGet, "/v1/payments?order_id=order-1&customer_id=customer-1&status=declined", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.PaymentSearchFilter{
+	assert.Equal(t, app.SearchPaymentsQuery{
 		OrderID:    "order-1",
 		CustomerID: "customer-1",
 		Status:     "declined",
-	}, api.payments.searchPaymentsFilter)
+	}, api.payments.searchPaymentsQuery)
 	assert.JSONEq(t, `{
 		"payments": [
 			{
@@ -450,10 +452,10 @@ type paymentUseCasesFake struct {
 	retryAuthorizationResult  app.PaymentResult
 	retryAuthorizationErr     error
 	retryAuthorizationPanic   any
-	getPaymentID              string
+	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
-	searchPaymentsFilter      app.PaymentSearchFilter
+	searchPaymentsQuery       app.SearchPaymentsQuery
 	searchPaymentsResult      []app.PaymentResult
 	searchPaymentsErr         error
 }
@@ -484,13 +486,13 @@ func (f *paymentUseCasesFake) RetryAuthorization(_ context.Context, command app.
 	return f.retryAuthorizationResult, f.retryAuthorizationErr
 }
 
-func (f *paymentUseCasesFake) GetPayment(_ context.Context, id string) (app.PaymentResult, error) {
-	f.getPaymentID = id
+func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
 }
 
-func (f *paymentUseCasesFake) SearchPayments(_ context.Context, filter app.PaymentSearchFilter) ([]app.PaymentResult, error) {
-	f.searchPaymentsFilter = filter
+func (f *paymentUseCasesFake) SearchPayments(_ context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
+	f.searchPaymentsQuery = query
 	return f.searchPaymentsResult, f.searchPaymentsErr
 }
 

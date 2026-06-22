@@ -54,16 +54,16 @@ func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment
 	return nil
 }
 
-func (r *PaymentRepository) Search(_ context.Context, filter app.PaymentSearchFilter) ([]*domain.Payment, error) {
+func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
-		if filter.OrderID != "" && payment.OrderID() != filter.OrderID {
+		if query.OrderID != "" && payment.OrderID() != query.OrderID {
 			continue
 		}
-		if filter.CustomerID != "" && payment.CustomerID() != filter.CustomerID {
+		if query.CustomerID != "" && payment.CustomerID() != query.CustomerID {
 			continue
 		}
-		if filter.Status != "" && string(payment.Status()) != filter.Status {
+		if query.Status != "" && string(payment.Status()) != query.Status {
 			continue
 		}
 		cloned, err := clonePayment(payment)
