@@ -158,6 +158,107 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 	return payment, nil
 }
 
+func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id,
+		        order_id,
+		        customer_id,
+		        amount_cents,
+		        currency,
+		        status,
+		        bank_authorization_id,
+		        authorization_bank_operation_key,
+		        authorization_card_fingerprint,
+		        decline_reason,
+		        created_at,
+		        updated_at
+		   FROM payments
+		  WHERE ($1 = '' OR order_id = $1)
+		    AND ($2 = '' OR customer_id = $2)
+		    AND ($3 = '' OR status = $3)
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 100`,
+		query.OrderID,
+		query.CustomerID,
+		query.Status,
+	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	defer rows.Close()
+
+	var payments []*domain.Payment
+	for rows.Next() {
+		payment, err := scanPayment(rows)
+		if err != nil {
+			return nil, err
+		}
+		payments = append(payments, payment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payments, nil
+}
+
+type paymentScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
+	var (
+		id                            domain.PaymentID
+		orderID                       string
+		customerID                    string
+		amountCents                   int64
+		currency                      string
+		status                        domain.PaymentStatus
+		bankAuthorizationID           sql.NullString
+		authorizationBankOperationKey string
+		authorizationCardFingerprint  string
+		declineReason                 sql.NullString
+		createdAt                     sql.NullTime
+		updatedAt                     sql.NullTime
+	)
+	err := scanner.Scan(
+		&id,
+		&orderID,
+		&customerID,
+		&amountCents,
+		&currency,
+		&status,
+		&bankAuthorizationID,
+		&authorizationBankOperationKey,
+		&authorizationCardFingerprint,
+		&declineReason,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+
+	payment, err := domain.LoadPayment(
+		id,
+		orderID,
+		customerID,
+		amountCents,
+		currency,
+		status,
+		nullStringValue(bankAuthorizationID),
+		authorizationBankOperationKey,
+		authorizationCardFingerprint,
+		domain.DeclineReason(nullStringValue(declineReason)),
+		createdAt.Time,
+		updatedAt.Time,
+	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payment, nil
+}
+
 func nullableString(value string) any {
 	if value == "" {
 		return nil

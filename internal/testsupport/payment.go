@@ -3,6 +3,7 @@ package testsupport
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
@@ -51,6 +52,33 @@ func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment
 	}
 	r.payments[payment.ID()] = cloned
 	return nil
+}
+
+func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
+	var matches []*domain.Payment
+	for _, payment := range r.payments {
+		if query.OrderID != "" && payment.OrderID() != query.OrderID {
+			continue
+		}
+		if query.CustomerID != "" && payment.CustomerID() != query.CustomerID {
+			continue
+		}
+		if query.Status != "" && string(payment.Status()) != query.Status {
+			continue
+		}
+		cloned, err := clonePayment(payment)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, cloned)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].CreatedAt().After(matches[j].CreatedAt())
+	})
+	if len(matches) > 100 {
+		matches = matches[:100]
+	}
+	return matches, nil
 }
 
 type FixedPaymentIDGenerator struct {

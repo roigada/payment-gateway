@@ -41,6 +41,16 @@ type RetryAuthorizationCommand struct {
 	IdempotencyKey string
 }
 
+type GetPaymentQuery struct {
+	PaymentID string
+}
+
+type SearchPaymentsQuery struct {
+	OrderID    string
+	CustomerID string
+	Status     string
+}
+
 type CardDetails struct {
 	Number      string
 	CVV         string
@@ -52,6 +62,7 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *domain.Payment) error
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
 	UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error
+	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
 }
 
 type IdempotencyRepository interface {
@@ -319,12 +330,34 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 	return result, nil
 }
 
-func (s *PaymentService) GetPayment(ctx context.Context, id string) (PaymentResult, error) {
-	payment, err := s.paymentRepository.FindByID(ctx, domain.PaymentID(id))
+func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
+	query = normalizeGetPaymentQuery(query)
+	payment, err := s.paymentRepository.FindByID(ctx, domain.PaymentID(query.PaymentID))
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
 	return newPaymentResult(payment), nil
+}
+
+func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
+	query = normalizeSearchPaymentsQuery(query)
+	if query.OrderID == "" && query.CustomerID == "" {
+		return nil, NewInvalidPaymentInput("order id or customer id is required", nil)
+	}
+	if query.Status != "" && !isValidPaymentStatus(query.Status) {
+		return nil, NewInvalidPaymentInput("payment status is invalid", nil)
+	}
+
+	payments, err := s.paymentRepository.Search(ctx, query)
+	if err != nil {
+		return nil, asPaymentError(err)
+	}
+
+	results := make([]PaymentResult, 0, len(payments))
+	for _, payment := range payments {
+		results = append(results, newPaymentResult(payment))
+	}
+	return results, nil
 }
 
 func validateCardDetails(card CardDetails) error {
@@ -370,6 +403,27 @@ func normalizeRetryAuthorizationCommand(command RetryAuthorizationCommand) Retry
 	command.Card.Number = strings.TrimSpace(command.Card.Number)
 	command.Card.CVV = strings.TrimSpace(command.Card.CVV)
 	return command
+}
+
+func normalizeGetPaymentQuery(query GetPaymentQuery) GetPaymentQuery {
+	query.PaymentID = strings.TrimSpace(query.PaymentID)
+	return query
+}
+
+func normalizeSearchPaymentsQuery(query SearchPaymentsQuery) SearchPaymentsQuery {
+	query.OrderID = strings.TrimSpace(query.OrderID)
+	query.CustomerID = strings.TrimSpace(query.CustomerID)
+	query.Status = strings.TrimSpace(query.Status)
+	return query
+}
+
+func isValidPaymentStatus(status string) bool {
+	switch domain.PaymentStatus(status) {
+	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusDeclined:
+		return true
+	default:
+		return false
+	}
 }
 
 func authorizePaymentRequestFingerprint(command AuthorizePaymentCommand, secret string) string {

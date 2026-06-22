@@ -113,6 +113,42 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
 }
 
+func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
+	payment, err := s.payments.GetPayment(r.Context(), app.GetPaymentQuery{
+		PaymentID: r.PathValue("id"),
+	})
+	if err != nil {
+		writePaymentServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+}
+
+func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	for key := range query {
+		switch key {
+		case "order_id", "customer_id", "status":
+		default:
+			writePaymentServiceError(w, app.NewInvalidPaymentInput("unsupported payment search filter", nil))
+			return
+		}
+	}
+
+	payments, err := s.payments.SearchPayments(r.Context(), app.SearchPaymentsQuery{
+		OrderID:    query.Get("order_id"),
+		CustomerID: query.Get("customer_id"),
+		Status:     query.Get("status"),
+	})
+	if err != nil {
+		writePaymentServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newPaymentsEnvelope(payments))
+}
+
 func isJSONRequest(r *http.Request) bool {
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
@@ -138,6 +174,10 @@ type paymentEnvelope struct {
 	Payment paymentPayload `json:"payment"`
 }
 
+type paymentsEnvelope struct {
+	Payments []paymentPayload `json:"payments"`
+}
+
 func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
 	return paymentEnvelope{
 		Payment: paymentPayload{
@@ -152,6 +192,14 @@ func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
 			UpdatedAt:     payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		},
 	}
+}
+
+func newPaymentsEnvelope(payments []app.PaymentResult) paymentsEnvelope {
+	payloads := make([]paymentPayload, 0, len(payments))
+	for _, payment := range payments {
+		payloads = append(payloads, newPaymentEnvelope(payment).Payment)
+	}
+	return paymentsEnvelope{Payments: payloads}
 }
 
 type errorEnvelope struct {
