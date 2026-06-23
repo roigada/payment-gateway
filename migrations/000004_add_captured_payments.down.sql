@@ -3,9 +3,6 @@ ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_capture_bank_operation_k
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_bank_capture_id_check;
 ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_status_check;
 
-ALTER TABLE idempotency_records
-    DROP COLUMN IF EXISTS completed;
-
 ALTER TABLE payments
     DROP COLUMN IF EXISTS capture_bank_operation_key,
     DROP COLUMN IF EXISTS bank_capture_id,

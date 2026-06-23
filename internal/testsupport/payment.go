@@ -11,15 +11,11 @@ import (
 )
 
 type PaymentRepository struct {
-	payments           map[domain.PaymentID]*domain.Payment
-	idempotencyRecords map[string]app.IdempotencyRecord
+	payments map[domain.PaymentID]*domain.Payment
 }
 
 func NewPaymentRepository() *PaymentRepository {
-	return &PaymentRepository{
-		payments:           make(map[domain.PaymentID]*domain.Payment),
-		idempotencyRecords: make(map[string]app.IdempotencyRecord),
-	}
+	return &PaymentRepository{payments: make(map[domain.PaymentID]*domain.Payment)}
 }
 
 func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) error {
@@ -80,48 +76,15 @@ func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQu
 	return matches, nil
 }
 
-func (r *PaymentRepository) ClaimCapture(_ context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
-	key := idempotencyMapKey(record.Operation, record.Key)
-	existing, ok := r.idempotencyRecords[key]
-	if ok {
-		if existing.RequestFingerprint != record.RequestFingerprint {
-			return app.NewPaymentIdempotencyConflict(nil)
-		}
-		return nil
+func (r *PaymentRepository) UpdateCaptureResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
 	}
-	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
+	if existing.Status() != domain.PaymentStatusAuthorized {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
 	return r.update(payment)
-}
-
-func (r *PaymentRepository) CompleteCapture(_ context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
-	if err := r.update(payment); err != nil {
-		return err
-	}
-	key := idempotencyMapKey(record.Operation, record.Key)
-	existing, ok := r.idempotencyRecords[key]
-	if ok && existing.RequestFingerprint != record.RequestFingerprint {
-		return app.NewPaymentIdempotencyConflict(nil)
-	}
-	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
-	return nil
-}
-
-func (r *PaymentRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
-	record, ok := r.idempotencyRecords[idempotencyMapKey(operation, key)]
-	if !ok || record.Result.ID == "" {
-		return app.IdempotencyRecord{}, false, nil
-	}
-	return cloneIdempotencyRecord(record), true, nil
-}
-
-func (r *PaymentRepository) SaveCompleted(_ context.Context, record app.IdempotencyRecord) error {
-	key := idempotencyMapKey(record.Operation, record.Key)
-	existing, ok := r.idempotencyRecords[key]
-	if ok && existing.Result.ID != "" {
-		return app.NewPaymentIdempotencyConflict(nil)
-	}
-	r.idempotencyRecords[key] = cloneIdempotencyRecord(record)
-	return nil
 }
 
 func (r *PaymentRepository) update(payment *domain.Payment) error {

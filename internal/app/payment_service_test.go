@@ -548,45 +548,9 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 			assert.Equal(t, authorizedAt, saved.UpdatedAt())
 			assert.Empty(t, saved.BankCaptureID())
-			assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
+			assert.Empty(t, saved.CaptureBankOperationKey())
 		})
 	}
-}
-
-func TestCapturePaymentReusesStoredCaptureBankOperationKey(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
-	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	payment, err := domain.LoadPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		"order-1",
-		"customer-1",
-		1299,
-		domain.CurrencyUSD,
-		domain.PaymentStatusAuthorized,
-		"auth_550e8400-e29b-41d4-a716-446655440000",
-		"bok_550e8400-e29b-41d4-a716-446655440001",
-		"fingerprint-1",
-		"",
-		"bok_existing_capture",
-		"",
-		authorizedAt,
-		authorizedAt,
-	)
-	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), payment))
-	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
-	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-
-	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
-	require.NoError(t, err)
-
-	assert.Equal(t, "bok_existing_capture", bank.captureRequest.OperationKey)
-	saved, err := repo.FindByID(context.Background(), payment.ID())
-	require.NoError(t, err)
-	assert.Equal(t, "bok_existing_capture", saved.CaptureBankOperationKey())
 }
 
 func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
@@ -772,13 +736,9 @@ func validRetryAuthorizationCommand(paymentID string) app.RetryAuthorizationComm
 }
 
 func newPaymentService(repo app.PaymentRepository, bank app.BankClient, now time.Time) *app.PaymentService {
-	idempotency := app.IdempotencyRepository(testsupport.NewIdempotencyRepository())
-	if repoIdempotency, ok := repo.(app.IdempotencyRepository); ok {
-		idempotency = repoIdempotency
-	}
 	return app.NewPaymentService(
 		repo,
-		idempotency,
+		testsupport.NewIdempotencyRepository(),
 		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
 		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
 		bank,

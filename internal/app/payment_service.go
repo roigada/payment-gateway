@@ -69,8 +69,7 @@ type PaymentRepository interface {
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
 	UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error
 	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
-	ClaimCapture(ctx context.Context, payment *domain.Payment, record IdempotencyRecord) error
-	CompleteCapture(ctx context.Context, payment *domain.Payment, record IdempotencyRecord) error
+	UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error
 }
 
 type IdempotencyRepository interface {
@@ -361,28 +360,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
-	bankOperationKey := payment.CaptureBankOperationKey()
-	if bankOperationKey == "" {
-		bankOperationKey = s.bankOperationKeys.NewBankOperationKey()
-		if err := payment.UseCaptureBankOperationKey(bankOperationKey); err != nil {
-			return PaymentResult{}, asPaymentError(err)
-		}
-	}
-	if err := s.paymentRepository.ClaimCapture(ctx, payment, IdempotencyRecord{
-		Operation:          capturePaymentOperation,
-		Key:                command.IdempotencyKey,
-		RequestFingerprint: fingerprint,
-	}); err != nil {
-		return PaymentResult{}, asPaymentError(err)
-	}
-	payment, err = s.paymentRepository.FindByID(ctx, domain.PaymentID(command.PaymentID))
-	if err != nil {
-		return PaymentResult{}, asPaymentError(err)
-	}
-	bankOperationKey = payment.CaptureBankOperationKey()
-	if payment.Status() != domain.PaymentStatusAuthorized || bankOperationKey == "" {
-		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
-	}
+	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	bankResult, err := s.bank.CapturePayment(ctx, BankCaptureRequest{
 		OperationKey:        bankOperationKey,
 		BankAuthorizationID: payment.BankAuthorizationID(),
@@ -396,23 +374,17 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
+	if err := s.paymentRepository.UpdateCaptureResult(ctx, payment); err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
 
 	result := newPaymentResult(payment)
-	if err := s.paymentRepository.CompleteCapture(ctx, payment, IdempotencyRecord{
+	if err := s.idempotency.SaveCompleted(ctx, IdempotencyRecord{
 		Operation:          capturePaymentOperation,
 		Key:                command.IdempotencyKey,
 		RequestFingerprint: fingerprint,
 		Result:             result,
 	}); err != nil {
-		if IsPaymentErrorKind(err, PaymentErrorIdempotencyConflict) {
-			record, found, findErr := s.idempotency.FindCompleted(ctx, capturePaymentOperation, command.IdempotencyKey)
-			if findErr != nil {
-				return PaymentResult{}, asPaymentError(findErr)
-			}
-			if found && record.RequestFingerprint == fingerprint {
-				return record.Result, nil
-			}
-		}
 		return PaymentResult{}, asPaymentError(err)
 	}
 

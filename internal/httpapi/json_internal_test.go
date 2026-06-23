@@ -78,6 +78,55 @@ func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	})
 }
 
+func TestRequireEmptyRequestBodyAcceptsAbsentOrEmptyBody(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{
+			name: "nil body",
+			req: &http.Request{
+				Body: nil,
+			},
+		},
+		{
+			name: "server request with empty body reader",
+			req:  httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", nil),
+		},
+		{
+			name: "explicit empty body reader",
+			req:  httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", strings.NewReader("")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NoError(t, requireEmptyRequestBody(tt.req))
+		})
+	}
+}
+
+func TestRequireEmptyRequestBodyRejectsAnyBodyBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "json object", body: "{}"},
+		{name: "whitespace", body: " \n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", strings.NewReader(tt.body))
+
+			err := requireEmptyRequestBody(req)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errNonEmptyBody)
+		})
+	}
+}
+
 func decodePaymentRequest(body string) error {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(body))

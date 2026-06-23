@@ -92,97 +92,22 @@ func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payme
 	return nil
 }
 
-func (r *PaymentRepository) ClaimCapture(ctx context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	defer rollback(tx)
-
-	insertResult, err := tx.ExecContext(
+func (r *PaymentRepository) UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO idempotency_records (
-		     operation,
-		     key,
-		     request_fingerprint,
-		     response_body,
-		     completed
-		 )
-		 VALUES ($1, $2, $3, '{}'::jsonb, false)
-		 ON CONFLICT (operation, key) DO NOTHING`,
-		record.Operation,
-		record.Key,
-		record.RequestFingerprint,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	inserted, err := insertResult.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-
-	var (
-		storedFingerprint string
-		completed         bool
-	)
-	err = tx.QueryRowContext(
-		ctx,
-		`SELECT request_fingerprint,
-		        completed
-		   FROM idempotency_records
-		  WHERE operation = $1
-		    AND key = $2`,
-		record.Operation,
-		record.Key,
-	).Scan(&storedFingerprint, &completed)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if storedFingerprint != record.RequestFingerprint || completed {
-		return app.NewPaymentIdempotencyConflict(nil)
-	}
-	if inserted > 0 {
-		if err := updatePayment(ctx, tx, payment); err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) CompleteCapture(ctx context.Context, payment *domain.Payment, record app.IdempotencyRecord) error {
-	responseBody, err := encodePaymentResultSnapshot(record.Result)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	defer rollback(tx)
-
-	if err := updatePayment(ctx, tx, payment); err != nil {
-		return err
-	}
-
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE idempotency_records
-		    SET response_body = $4::jsonb,
-		        completed = true
-		  WHERE operation = $1
-		    AND key = $2
-		    AND request_fingerprint = $3
-		    AND completed = false`,
-		record.Operation,
-		record.Key,
-		record.RequestFingerprint,
-		string(responseBody),
+		`UPDATE payments
+		    SET status = $2,
+		        bank_capture_id = $3,
+		        capture_bank_operation_key = $4,
+		        updated_at = $5
+		  WHERE id = $1
+		    AND status = $6`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankCaptureID()),
+		nullableString(payment.CaptureBankOperationKey()),
+		payment.UpdatedAt(),
+		domain.PaymentStatusAuthorized,
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
@@ -192,11 +117,11 @@ func (r *PaymentRepository) CompleteCapture(ctx context.Context, payment *domain
 		return app.NewInternalPaymentError(err)
 	}
 	if affected == 0 {
-		return app.NewPaymentIdempotencyConflict(nil)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return app.NewInternalPaymentError(err)
+		_, err := r.FindByID(ctx, payment.ID())
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
 }
@@ -426,10 +351,6 @@ func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payme
 		return app.NewPaymentNotFound(string(payment.ID()), sql.ErrNoRows)
 	}
 	return nil
-}
-
-func rollback(tx *sql.Tx) {
-	_ = tx.Rollback()
 }
 
 func nullableString(value string) any {

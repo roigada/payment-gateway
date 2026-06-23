@@ -19,10 +19,27 @@ var (
 	errMalformedJSONBody  = errors.New("malformed JSON body")
 	errIncorrectJSONType  = errors.New("incorrect JSON type")
 	errEmptyJSONBody      = errors.New("empty JSON body")
+	errNonEmptyBody       = errors.New("non-empty body")
 	errUnknownJSONField   = errors.New("unknown JSON field")
 	errOversizedJSONBody  = errors.New("oversized JSON body")
 	errMultipleJSONValues = errors.New("multiple JSON values")
 )
+
+func requireEmptyRequestBody(r *http.Request) error {
+	if r.Body == nil {
+		return nil
+	}
+
+	var firstByte [1]byte
+	n, err := io.ReadFull(r.Body, firstByte[:])
+	if n > 0 {
+		return errNonEmptyBody
+	}
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
 
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, body any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)

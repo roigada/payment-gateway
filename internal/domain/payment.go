@@ -178,10 +178,10 @@ func LoadPayment(
 		}
 		payment, err = NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	case PaymentStatusAuthorized:
-		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" {
+		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", captureBankOperationKey, "", createdAt)
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", createdAt)
 	case PaymentStatusDeclined:
 		if strings.TrimSpace(bankAuthorizationID) != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidBankAuthorizationID
@@ -355,19 +355,6 @@ func (p *Payment) Capture(bankCaptureID string, captureBankOperationKey string, 
 	p.bankCaptureID = bankCaptureID
 	p.captureBankOperationKey = captureBankOperationKey
 	p.updatedAt = now
-	return nil
-}
-
-func (p *Payment) UseCaptureBankOperationKey(captureBankOperationKey string) error {
-	if p.status != PaymentStatusAuthorized {
-		return ErrInvalidPaymentStatus
-	}
-	captureBankOperationKey, err := normalizeRequired(captureBankOperationKey, ErrInvalidBankOperationKey)
-	if err != nil {
-		return err
-	}
-
-	p.captureBankOperationKey = captureBankOperationKey
 	return nil
 }
 

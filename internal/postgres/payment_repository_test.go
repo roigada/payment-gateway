@@ -169,7 +169,6 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 
 	db := newTestDatabase(t)
 	repository := postgres.NewPaymentRepository(db)
-	idempotency := postgres.NewIdempotencyRepository(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -184,22 +183,6 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, repository.Create(ctx, payment))
-	require.NoError(t, payment.UseCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440003"))
-	claim := app.IdempotencyRecord{
-		Operation:          "capture_payment",
-		Key:                "public-capture-key-1",
-		RequestFingerprint: "capture-fingerprint-1",
-	}
-	require.NoError(t, repository.ClaimCapture(ctx, payment, claim))
-
-	pendingCapture, err := repository.FindByID(ctx, payment.ID())
-	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusAuthorized, pendingCapture.Status())
-	assert.Empty(t, pendingCapture.BankCaptureID())
-	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", pendingCapture.CaptureBankOperationKey())
-	_, found, err := idempotency.FindCompleted(ctx, "capture_payment", "public-capture-key-1")
-	require.NoError(t, err)
-	assert.False(t, found)
 
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
 	require.NoError(t, payment.Capture(
@@ -207,19 +190,7 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
 	))
-
-	result := app.PaymentResult{
-		ID:          string(payment.ID()),
-		OrderID:     payment.OrderID(),
-		CustomerID:  payment.CustomerID(),
-		AmountCents: payment.AmountCents(),
-		Currency:    payment.Currency(),
-		Status:      string(domain.PaymentStatusCaptured),
-		CreatedAt:   payment.CreatedAt(),
-		UpdatedAt:   payment.UpdatedAt(),
-	}
-	claim.Result = result
-	require.NoError(t, repository.CompleteCapture(ctx, payment, claim))
+	require.NoError(t, repository.UpdateCaptureResult(ctx, payment))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -230,10 +201,6 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", saved.CaptureBankOperationKey())
 	assert.True(t, saved.CreatedAt().Equal(authorizedAt), "created_at should be unchanged")
 	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should be the capture instant")
-	replayed, found, err := idempotency.FindCompleted(ctx, "capture_payment", "public-capture-key-1")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, result, replayed.Result)
 }
 
 func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
