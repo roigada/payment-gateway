@@ -20,6 +20,7 @@ type paymentUseCases interface {
 	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error)
 	CapturePayment(ctx context.Context, command app.CapturePaymentCommand) (app.PaymentResult, error)
 	VoidPayment(ctx context.Context, command app.VoidPaymentCommand) (app.PaymentResult, error)
+	RefundPayment(ctx context.Context, command app.RefundPaymentCommand) (app.PaymentResult, error)
 	GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error)
 	SearchPayments(ctx context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error)
 }
@@ -57,6 +58,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
 	mux.HandleFunc("POST /v1/payments/{payment_id}/capture", s.capturePayment)
 	mux.HandleFunc("POST /v1/payments/{payment_id}/void", s.voidPayment)
+	mux.HandleFunc("POST /v1/payments/{payment_id}/refund", s.refundPayment)
 
 	return s.logRequest(s.recoverPanic(mux))
 }

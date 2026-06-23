@@ -17,6 +17,7 @@ const (
 	retryAuthorizationOperation = "retry_authorization"
 	capturePaymentOperation     = "capture_payment"
 	voidPaymentOperation        = "void_payment"
+	refundPaymentOperation      = "refund_payment"
 )
 
 type PaymentResult struct {
@@ -55,6 +56,11 @@ type VoidPaymentCommand struct {
 	IdempotencyKey string
 }
 
+type RefundPaymentCommand struct {
+	PaymentID      string
+	IdempotencyKey string
+}
+
 type GetPaymentQuery struct {
 	PaymentID string
 }
@@ -79,6 +85,7 @@ type PaymentRepository interface {
 	UpdateVoidResult(ctx context.Context, payment *domain.Payment) error
 	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
 	UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error
+	UpdateRefundResult(ctx context.Context, payment *domain.Payment) error
 }
 
 type IdempotencyRepository interface {
@@ -110,9 +117,14 @@ type BankCapturer interface {
 	CapturePayment(ctx context.Context, request BankCaptureRequest) (BankCaptureResult, error)
 }
 
+type BankRefunder interface {
+	RefundPayment(ctx context.Context, request BankRefundRequest) (BankRefundResult, error)
+}
+
 type BankClient interface {
 	BankAuthorizer
 	BankCapturer
+	BankRefunder
 }
 
 type BankAuthorizationRequest struct {
@@ -147,6 +159,17 @@ type BankVoidRequest struct {
 
 type BankVoidResult struct {
 	BankVoidID string
+}
+
+type BankRefundRequest struct {
+	OperationKey  string
+	BankCaptureID string
+	AmountCents   int64
+	Currency      string
+}
+
+type BankRefundResult struct {
+	BankRefundID string
 }
 
 type PaymentService struct {
@@ -498,6 +521,66 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	return result, nil
 }
 
+func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymentCommand) (PaymentResult, error) {
+	command = normalizeRefundPaymentCommand(command)
+	if command.IdempotencyKey == "" {
+		return PaymentResult{}, NewInvalidPaymentInput("idempotency key is required", nil)
+	}
+	if command.PaymentID == "" {
+		return PaymentResult{}, NewInvalidPaymentInput("payment id is required", nil)
+	}
+
+	fingerprint := refundPaymentRequestFingerprint(command, s.fingerprintSecret)
+	record, found, err := s.idempotency.FindCompleted(ctx, refundPaymentOperation, command.IdempotencyKey)
+	if err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+	if found {
+		if record.RequestFingerprint != fingerprint {
+			return PaymentResult{}, NewPaymentIdempotencyConflict(nil)
+		}
+		return record.Result, nil
+	}
+
+	payment, err := s.paymentRepository.FindByID(ctx, domain.PaymentID(command.PaymentID))
+	if err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+	if payment.Status() != domain.PaymentStatusCaptured {
+		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
+	}
+
+	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
+	bankResult, err := s.bank.RefundPayment(ctx, BankRefundRequest{
+		OperationKey:  bankOperationKey,
+		BankCaptureID: payment.BankCaptureID(),
+		AmountCents:   payment.AmountCents(),
+		Currency:      payment.Currency(),
+	})
+	if err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+
+	if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, s.clock.Now()); err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+	if err := s.paymentRepository.UpdateRefundResult(ctx, payment); err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+
+	result := newPaymentResult(payment)
+	if err := s.idempotency.SaveCompleted(ctx, IdempotencyRecord{
+		Operation:          refundPaymentOperation,
+		Key:                command.IdempotencyKey,
+		RequestFingerprint: fingerprint,
+		Result:             result,
+	}); err != nil {
+		return PaymentResult{}, asPaymentError(err)
+	}
+
+	return result, nil
+}
+
 func validateCardDetails(card CardDetails) error {
 	if !allDigits(card.Number) || len(card.Number) < 12 || len(card.Number) > 19 {
 		return NewInvalidPaymentInput("card details are invalid", nil)
@@ -555,6 +638,12 @@ func normalizeVoidPaymentCommand(command VoidPaymentCommand) VoidPaymentCommand 
 	return command
 }
 
+func normalizeRefundPaymentCommand(command RefundPaymentCommand) RefundPaymentCommand {
+	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
+	command.PaymentID = strings.TrimSpace(command.PaymentID)
+	return command
+}
+
 func normalizeGetPaymentQuery(query GetPaymentQuery) GetPaymentQuery {
 	query.PaymentID = strings.TrimSpace(query.PaymentID)
 	return query
@@ -569,7 +658,7 @@ func normalizeSearchPaymentsQuery(query SearchPaymentsQuery) SearchPaymentsQuery
 
 func isValidPaymentStatus(status string) bool {
 	switch domain.PaymentStatus(status) {
-	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusDeclined, domain.PaymentStatusCaptured, domain.PaymentStatusVoided:
+	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusDeclined, domain.PaymentStatusCaptured, domain.PaymentStatusVoided, domain.PaymentStatusRefunded:
 		return true
 	default:
 		return false
@@ -615,6 +704,12 @@ func capturePaymentRequestFingerprint(command CapturePaymentCommand, secret stri
 func voidPaymentRequestFingerprint(command VoidPaymentCommand, secret string) string {
 	hash := hmac.New(sha256.New, []byte(secret))
 	_, _ = fmt.Fprintf(hash, "%s\n%s", voidPaymentOperation, command.PaymentID)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func refundPaymentRequestFingerprint(command RefundPaymentCommand, secret string) string {
+	hash := hmac.New(sha256.New, []byte(secret))
+	_, _ = fmt.Fprintf(hash, "%s\n%s", refundPaymentOperation, command.PaymentID)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 

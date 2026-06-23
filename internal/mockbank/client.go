@@ -186,6 +186,56 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 	return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
 }
 
+func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(refundRequest{
+		CaptureID:   request.BankCaptureID,
+		AmountCents: request.AmountCents,
+	}); err != nil {
+		return app.BankRefundResult{}, err
+	}
+
+	endpoint := c.baseURL.JoinPath("/api/v1/refunds")
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
+	if err != nil {
+		return app.BankRefundResult{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
+
+	response, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		if isTimeout(err) {
+			return app.BankRefundResult{}, app.NewPaymentBankTimeout(err)
+		}
+		return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+	}
+	defer response.Body.Close()
+
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload refundResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if strings.TrimSpace(payload.RefundID) == "" {
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank refund response missing refund id"))
+		}
+
+		return app.BankRefundResult{BankRefundID: payload.RefundID}, nil
+	case http.StatusBadRequest:
+		reason, err := decodeBadRequestInvalidInputReason(response)
+		if err != nil {
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if reason != "" {
+			return app.BankRefundResult{}, app.NewInvalidPaymentInput(reason, nil)
+		}
+	}
+
+	return app.BankRefundResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank refund failed: status %d", response.StatusCode))
+}
+
 func isTimeout(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -223,6 +273,15 @@ type voidResponse struct {
 	VoidID string `json:"void_id"`
 }
 
+type refundRequest struct {
+	CaptureID   string `json:"capture_id"`
+	AmountCents int64  `json:"amount"`
+}
+
+type refundResponse struct {
+	RefundID string `json:"refund_id"`
+}
+
 type authorizationErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -248,8 +307,10 @@ func invalidInputReasonForBadRequest(code string) string {
 		return "amount must be greater than zero"
 	case "amount_mismatch":
 		return "amount does not match bank authorization"
-	case "authorization_not_found", "authorization_expired", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
+	case "authorization_not_found", "authorization_expired", "authorization_already_used", "already_captured", "already_voided":
 		return "bank authorization cannot be captured"
+	case "capture_not_found", "already_refunded":
+		return "bank capture cannot be refunded"
 	default:
 		return ""
 	}

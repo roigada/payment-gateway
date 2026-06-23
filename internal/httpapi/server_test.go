@@ -167,6 +167,36 @@ func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T) {
+	api := newPaymentAPITest(t)
+	refunded := newRefundedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	refunded.UpdatedAt = time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
+	api.payments.refundPaymentResult = refunded
+
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
+		"Idempotency-Key": "public-refund-key-1",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, app.RefundPaymentCommand{
+		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
+		IdempotencyKey: "public-refund-key-1",
+	}, api.payments.refundPaymentCommand)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "refunded",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T13:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
 func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -397,6 +427,18 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	}
 }
 
+func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", `{}`, map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-refund-key-1",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	assertErrorResponse(t, rec, "invalid_json_body", "request body must be empty")
+	assert.Zero(t, api.payments.refundPaymentCommand)
+}
+
 func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -419,6 +461,36 @@ func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 			api.payments.capturePaymentErr = tt.err
 			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
 				"Idempotency-Key": "public-capture-key-1",
+			})
+
+			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, tt.code, tt.message)
+		})
+	}
+}
+
+func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    string
+		message string
+		status  int
+	}{
+		{name: "invalid input", err: app.NewInvalidPaymentInput("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
+		{name: "payment not found", err: app.NewPaymentNotFound("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
+		{name: "invalid transition", err: app.NewPaymentInvalidStatusConflict(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
+		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflict(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
+		{name: "bank unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
+		{name: "bank timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			api.payments.refundPaymentErr = tt.err
+			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
+				"Idempotency-Key": "public-refund-key-1",
 			})
 
 			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
@@ -572,6 +644,9 @@ type paymentUseCasesFake struct {
 	voidPaymentCommand        app.VoidPaymentCommand
 	voidPaymentResult         app.PaymentResult
 	voidPaymentErr            error
+	refundPaymentCommand      app.RefundPaymentCommand
+	refundPaymentResult       app.PaymentResult
+	refundPaymentErr          error
 	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
@@ -619,6 +694,11 @@ func (f *paymentUseCasesFake) VoidPayment(_ context.Context, command app.VoidPay
 	return f.voidPaymentResult, f.voidPaymentErr
 }
 
+func (f *paymentUseCasesFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentResult, error) {
+	f.refundPaymentCommand = command
+	return f.refundPaymentResult, f.refundPaymentErr
+}
+
 func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
 	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
@@ -659,5 +739,11 @@ func newPendingPayment(id string) app.PaymentResult {
 func newVoidedPayment(id string) app.PaymentResult {
 	payment := newPayment(id)
 	payment.Status = "voided"
+	return payment
+}
+
+func newRefundedPayment(id string) app.PaymentResult {
+	payment := newPayment(id)
+	payment.Status = "refunded"
 	return payment
 }

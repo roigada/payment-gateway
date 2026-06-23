@@ -103,6 +103,17 @@ func (r *PaymentRepository) UpdateCaptureResult(_ context.Context, payment *doma
 	return r.update(payment)
 }
 
+func (r *PaymentRepository) UpdateRefundResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusCaptured {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return r.update(payment)
+}
+
 func (r *PaymentRepository) update(payment *domain.Payment) error {
 	if _, ok := r.payments[payment.ID()]; !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
@@ -186,6 +197,8 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.AuthorizationCardFingerprint(),
 		payment.BankCaptureID(),
 		payment.CaptureBankOperationKey(),
+		payment.BankRefundID(),
+		payment.RefundBankOperationKey(),
 		payment.BankVoidID(),
 		payment.VoidBankOperationKey(),
 		payment.DeclineReason(),
