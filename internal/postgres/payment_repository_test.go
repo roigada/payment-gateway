@@ -162,6 +162,47 @@ func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testi
 	assert.Equal(t, otherOrder.ID(), byCustomer[1].ID())
 }
 
+func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		authorizedAt,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repository.Create(ctx, payment))
+
+	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
+	require.NoError(t, payment.Capture(
+		"cap_550e8400-e29b-41d4-a716-446655440002",
+		"bok_550e8400-e29b-41d4-a716-446655440003",
+		capturedAt,
+	))
+	require.NoError(t, repository.UpdateCaptureResult(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
+	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
+	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", saved.BankCaptureID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", saved.CaptureBankOperationKey())
+	assert.True(t, saved.CreatedAt().Equal(authorizedAt), "created_at should be unchanged")
+	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should be the capture instant")
+}
+
 func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -295,6 +336,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
 			filepath.Join("..", "..", "migrations", "000002_add_declined_payments_and_idempotency.up.sql"),
 			filepath.Join("..", "..", "migrations", "000003_add_pending_authorization_retry.up.sql"),
+			filepath.Join("..", "..", "migrations", "000004_add_captured_payments.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

@@ -113,6 +113,29 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
 }
 
+func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
+	if err := requireEmptyRequestBody(r); err != nil {
+		if errors.Is(err, errNonEmptyBody) {
+			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
+			return
+		}
+
+		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
+		return
+	}
+
+	payment, err := s.payments.CapturePayment(r.Context(), app.CapturePaymentCommand{
+		PaymentID:      r.PathValue("payment_id"),
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writePaymentServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+}
+
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
 	payment, err := s.payments.GetPayment(r.Context(), app.GetPaymentQuery{
 		PaymentID: r.PathValue("id"),

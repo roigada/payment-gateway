@@ -27,10 +27,10 @@ func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation str
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT request_fingerprint,
-		        response_body
-		   FROM idempotency_records
-		  WHERE operation = $1
-		    AND key = $2`,
+			        response_body
+			   FROM idempotency_records
+			  WHERE operation = $1
+			    AND key = $2`,
 		operation,
 		key,
 	).Scan(&record.RequestFingerprint, &responseBody)
