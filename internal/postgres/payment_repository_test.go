@@ -301,6 +301,7 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
+		ResponseStatus:     201,
 		Result: app.PaymentResult{
 			ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
 			OrderID:       "order-1",
@@ -314,14 +315,19 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, repository.SaveCompleted(ctx, record))
-
-	saved, found, err := repository.FindCompleted(ctx, "authorize_payment", "public-key-1")
+	claimed, status, err := repository.Claim(ctx, record.Operation, record.Key, record.RequestFingerprint)
 	require.NoError(t, err)
-	require.True(t, found)
+	assert.Equal(t, app.IdempotencyClaimed, status)
+	assert.Equal(t, record.RequestFingerprint, claimed.RequestFingerprint)
+	require.NoError(t, repository.Complete(ctx, record))
+
+	saved, status, err := repository.Claim(ctx, "authorize_payment", "public-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	require.Equal(t, app.IdempotencyCompleted, status)
 	assert.Equal(t, record.Operation, saved.Operation)
 	assert.Equal(t, record.Key, saved.Key)
 	assert.Equal(t, record.RequestFingerprint, saved.RequestFingerprint)
+	assert.Equal(t, record.ResponseStatus, saved.ResponseStatus)
 	assert.Equal(t, record.Result.ID, saved.Result.ID)
 	assert.Equal(t, record.Result.OrderID, saved.Result.OrderID)
 	assert.Equal(t, record.Result.CustomerID, saved.Result.CustomerID)
@@ -332,9 +338,35 @@ func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {
 	assert.True(t, saved.Result.CreatedAt.Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.Result.UpdatedAt.Equal(now), "updated_at should round-trip as the same instant")
 
-	_, found, err = repository.FindCompleted(ctx, "authorize_payment", "missing-key")
+	_, status, err = repository.Claim(ctx, "authorize_payment", "missing-key", "fingerprint-1")
 	require.NoError(t, err)
-	assert.False(t, found)
+	assert.Equal(t, app.IdempotencyClaimed, status)
+}
+
+func TestIdempotencyRepositoryReturnsInProgressForDuplicateClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewIdempotencyRepository(db)
+	ctx := context.Background()
+
+	_, status, err := repository.Claim(ctx, "capture_payment", "public-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	require.Equal(t, app.IdempotencyClaimed, status)
+
+	record, status, err := repository.Claim(ctx, "capture_payment", "public-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	assert.Equal(t, app.IdempotencyInProgress, status)
+	assert.Equal(t, "capture_payment", record.Operation)
+	assert.Equal(t, "public-key-1", record.Key)
+	assert.Equal(t, "fingerprint-1", record.RequestFingerprint)
+
+	require.NoError(t, repository.Release(ctx, "capture_payment", "public-key-1"))
+	_, status, err = repository.Claim(ctx, "capture_payment", "public-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	assert.Equal(t, app.IdempotencyClaimed, status)
 }
 
 func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID string, status domain.PaymentStatus, now time.Time) *domain.Payment {
@@ -376,7 +408,7 @@ func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID
 	}
 }
 
-func TestIdempotencyRepositoryReturnsConflictForDuplicateCompletedRecord(t *testing.T) {
+func TestIdempotencyRepositoryReturnsConflictWhenCompletingUnclaimedRecord(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -388,6 +420,7 @@ func TestIdempotencyRepositoryReturnsConflictForDuplicateCompletedRecord(t *test
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
+		ResponseStatus:     201,
 		Result: app.PaymentResult{
 			ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
 			OrderID:     "order-1",
@@ -400,8 +433,7 @@ func TestIdempotencyRepositoryReturnsConflictForDuplicateCompletedRecord(t *test
 		},
 	}
 
-	require.NoError(t, repository.SaveCompleted(ctx, record))
-	err := repository.SaveCompleted(ctx, record)
+	err := repository.Complete(ctx, record)
 
 	require.Error(t, err)
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -424,6 +456,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 			filepath.Join("..", "..", "migrations", "000004_add_captured_payments.up.sql"),
 			filepath.Join("..", "..", "migrations", "000005_add_voided_payments.up.sql"),
 			filepath.Join("..", "..", "migrations", "000006_add_refunded_payments.up.sql"),
+			filepath.Join("..", "..", "migrations", "000007_harden_idempotency_records.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

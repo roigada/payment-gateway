@@ -36,14 +36,15 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 		},
 	}, bank.request)
 	assert.Equal(t, app.PaymentResult{
-		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
-		OrderID:     "order-1",
-		CustomerID:  "customer-1",
-		AmountCents: 1299,
-		Currency:    "USD",
-		Status:      "authorized",
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "authorized",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ResponseStatus: 201,
 	}, payment)
 
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
@@ -62,15 +63,16 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 	require.NoError(t, err)
 
 	assert.Equal(t, app.PaymentResult{
-		ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
-		OrderID:       "order-1",
-		CustomerID:    "customer-1",
-		AmountCents:   1299,
-		Currency:      "USD",
-		Status:        "declined",
-		DeclineReason: "insufficient_funds",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:             "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "declined",
+		DeclineReason:  "insufficient_funds",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ResponseStatus: 201,
 	}, payment)
 
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
@@ -91,14 +93,15 @@ func TestAuthorizePaymentStoresPendingPaymentForUnknownBankOutcome(t *testing.T)
 	require.NoError(t, err)
 
 	assert.Equal(t, app.PaymentResult{
-		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
-		OrderID:     "order-1",
-		CustomerID:  "customer-1",
-		AmountCents: 1299,
-		Currency:    "USD",
-		Status:      "pending",
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "pending",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ResponseStatus: 201,
 	}, payment)
 
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
@@ -280,6 +283,25 @@ func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *test
 	assert.Equal(t, 1, bank.calls)
 }
 
+func TestAuthorizePaymentRejectsInProgressIdempotencyKeyBeforeCallingBank(t *testing.T) {
+	idempotency := &alwaysInProgressIdempotencyRepository{}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service := app.NewPaymentService(
+		testsupport.NewPaymentRepository(),
+		idempotency,
+		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
+		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
+		bank,
+		testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)},
+		"fingerprint-secret",
+	)
+
+	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress))
+	assert.Zero(t, bank.calls)
+}
+
 func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
@@ -348,6 +370,31 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 	}
 }
 
+func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.T) {
+	idempotency := testsupport.NewIdempotencyRepository()
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service := app.NewPaymentService(
+		testsupport.NewPaymentRepository(),
+		idempotency,
+		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
+		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
+		bank,
+		testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)},
+		"fingerprint-secret",
+	)
+	invalid := validAuthorizeCommand()
+	invalid.AmountCents = 0
+	_, err := service.AuthorizePayment(context.Background(), invalid)
+	require.Error(t, err)
+
+	valid := validAuthorizeCommand()
+	valid.AmountCents = 1299
+	_, err = service.AuthorizePayment(context.Background(), valid)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, bank.calls)
+}
+
 func TestAuthorizePaymentNormalizesBankErrorWithoutStoringPayment(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bankErr := errors.New("bank unavailable")
@@ -414,14 +461,15 @@ func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testin
 		BankAuthorizationID: "bank-auth-id-1",
 	}, bank.voidRequest)
 	assert.Equal(t, app.PaymentResult{
-		ID:          string(payment.ID()),
-		OrderID:     "order-1",
-		CustomerID:  "customer-1",
-		AmountCents: 1299,
-		Currency:    "USD",
-		Status:      "voided",
-		CreatedAt:   now,
-		UpdatedAt:   now.Add(time.Minute),
+		ID:             string(payment.ID()),
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "voided",
+		CreatedAt:      now,
+		UpdatedAt:      now.Add(time.Minute),
+		ResponseStatus: 200,
 	}, result)
 
 	saved, err := repo.FindByID(context.Background(), payment.ID())
@@ -626,14 +674,15 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 		Currency:            "USD",
 	}, bank.captureRequest)
 	assert.Equal(t, app.PaymentResult{
-		ID:          string(payment.ID()),
-		OrderID:     "order-1",
-		CustomerID:  "customer-1",
-		AmountCents: 1299,
-		Currency:    "USD",
-		Status:      "captured",
-		CreatedAt:   authorizedAt,
-		UpdatedAt:   capturedAt,
+		ID:             string(payment.ID()),
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "captured",
+		CreatedAt:      authorizedAt,
+		UpdatedAt:      capturedAt,
+		ResponseStatus: 200,
 	}, captured)
 
 	saved, err := repo.FindByID(context.Background(), payment.ID())
@@ -797,14 +846,15 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 		Currency:      "USD",
 	}, bank.refundRequest)
 	assert.Equal(t, app.PaymentResult{
-		ID:          string(payment.ID()),
-		OrderID:     "order-1",
-		CustomerID:  "customer-1",
-		AmountCents: 1299,
-		Currency:    "USD",
-		Status:      "refunded",
-		CreatedAt:   capturedAt,
-		UpdatedAt:   refundedAt,
+		ID:             string(payment.ID()),
+		OrderID:        "order-1",
+		CustomerID:     "customer-1",
+		AmountCents:    1299,
+		Currency:       "USD",
+		Status:         "refunded",
+		CreatedAt:      capturedAt,
+		UpdatedAt:      refundedAt,
+		ResponseStatus: 200,
 	}, refunded)
 
 	saved, err := repo.FindByID(context.Background(), payment.ID())
@@ -1145,6 +1195,24 @@ type bankFake struct {
 	refundResult     app.BankRefundResult
 	refundErr        error
 	refundCalls      int
+}
+
+type alwaysInProgressIdempotencyRepository struct{}
+
+func (r *alwaysInProgressIdempotencyRepository) Claim(_ context.Context, operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus, error) {
+	return app.IdempotencyRecord{
+		Operation:          operation,
+		Key:                key,
+		RequestFingerprint: requestFingerprint,
+	}, app.IdempotencyInProgress, nil
+}
+
+func (r *alwaysInProgressIdempotencyRepository) Complete(context.Context, app.IdempotencyRecord) error {
+	return nil
+}
+
+func (r *alwaysInProgressIdempotencyRepository) Release(context.Context, string, string) error {
+	return nil
 }
 
 func (f *bankFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {

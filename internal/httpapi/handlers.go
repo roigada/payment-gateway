@@ -17,6 +17,7 @@ const (
 	errorCodeServiceUnavailable    = "service_unavailable"
 	errorCodeValidation            = "validation_error"
 	errorCodeIdempotencyConflict   = "idempotency_key_conflict"
+	errorCodeIdempotencyInProgress = "idempotency_key_in_progress"
 	errorCodePaymentStatusConflict = "payment_status_conflict"
 	errorCodePaymentNotFound       = "payment_not_found"
 	errorCodeBankUnavailable       = "bank_unavailable"
@@ -68,7 +69,7 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(payment.ID))
-	writeJSON(w, http.StatusCreated, newPaymentEnvelope(payment))
+	writeJSON(w, responseStatusOr(payment, http.StatusCreated), newPaymentEnvelope(payment))
 }
 
 func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +111,7 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +134,7 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +157,7 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +180,7 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
+	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +264,13 @@ func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
 	}
 }
 
+func responseStatusOr(payment app.PaymentResult, fallback int) int {
+	if payment.ResponseStatus == 0 {
+		return fallback
+	}
+	return payment.ResponseStatus
+}
+
 func newPaymentsEnvelope(payments []app.PaymentResult) paymentsEnvelope {
 	payloads := make([]paymentPayload, 0, len(payments))
 	for _, payment := range payments {
@@ -301,6 +309,8 @@ func writePaymentServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, errorCodeValidation, "payment request is invalid")
 	case app.PaymentErrorIdempotencyConflict:
 		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key was already used with a different request")
+	case app.PaymentErrorIdempotencyInProgress:
+		writeError(w, http.StatusConflict, errorCodeIdempotencyInProgress, "idempotency key is already in progress")
 	case app.PaymentErrorInvalidStatusConflict:
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorNotFound:

@@ -19,63 +19,117 @@ func NewIdempotencyRepository(db *sql.DB) *IdempotencyRepository {
 	return &IdempotencyRepository{db: db}
 }
 
-func (r *IdempotencyRepository) FindCompleted(ctx context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
+func (r *IdempotencyRepository) Claim(ctx context.Context, operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus, error) {
+	_, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO idempotency_records (
+		     operation,
+		     key,
+		     request_fingerprint,
+		     status
+		 )
+		 VALUES ($1, $2, $3, 'in_progress')`,
+		operation,
+		key,
+		requestFingerprint,
+	)
+	if err == nil {
+		return app.IdempotencyRecord{
+			Operation:          operation,
+			Key:                key,
+			RequestFingerprint: requestFingerprint,
+		}, app.IdempotencyClaimed, nil
+	}
+	if !isUniqueViolation(err) {
+		return app.IdempotencyRecord{}, "", app.NewInternalPaymentError(err)
+	}
+
 	var (
 		record       app.IdempotencyRecord
+		status       string
 		responseBody []byte
+		responseCode sql.NullInt64
 	)
-	err := r.db.QueryRowContext(
+	err = r.db.QueryRowContext(
 		ctx,
 		`SELECT request_fingerprint,
+			        status,
+			        response_status,
 			        response_body
 			   FROM idempotency_records
 			  WHERE operation = $1
 			    AND key = $2`,
 		operation,
 		key,
-	).Scan(&record.RequestFingerprint, &responseBody)
+	).Scan(&record.RequestFingerprint, &status, &responseCode, &responseBody)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return app.IdempotencyRecord{}, false, nil
+			return app.IdempotencyRecord{}, "", app.NewInternalPaymentError(err)
 		}
-		return app.IdempotencyRecord{}, false, app.NewInternalPaymentError(err)
-	}
-
-	result, err := decodePaymentResultSnapshot(responseBody)
-	if err != nil {
-		return app.IdempotencyRecord{}, false, app.NewInternalPaymentError(err)
+		return app.IdempotencyRecord{}, "", app.NewInternalPaymentError(err)
 	}
 
 	record.Operation = operation
 	record.Key = key
-	record.Result = result
-	return record, true, nil
+	if status == string(app.IdempotencyCompleted) {
+		result, err := decodePaymentResultSnapshot(responseBody)
+		if err != nil {
+			return app.IdempotencyRecord{}, "", app.NewInternalPaymentError(err)
+		}
+		record.Result = result
+		record.ResponseStatus = int(responseCode.Int64)
+		record.Result.ResponseStatus = record.ResponseStatus
+	}
+
+	return record, app.IdempotencyClaimStatus(status), nil
 }
 
-func (r *IdempotencyRepository) SaveCompleted(ctx context.Context, record app.IdempotencyRecord) error {
+func (r *IdempotencyRepository) Complete(ctx context.Context, record app.IdempotencyRecord) error {
 	responseBody, err := encodePaymentResultSnapshot(record.Result)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
 
-	_, err = r.db.ExecContext(
+	result, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO idempotency_records (
-		     operation,
-		     key,
-		     request_fingerprint,
-		     response_body
-		 )
-		 VALUES ($1, $2, $3, $4::jsonb)`,
+		`UPDATE idempotency_records
+		    SET status = 'completed',
+		        response_status = $4,
+		        response_body = $5::jsonb
+		  WHERE operation = $1
+		    AND key = $2
+		    AND request_fingerprint = $3
+		    AND status = 'in_progress'`,
 		record.Operation,
 		record.Key,
 		record.RequestFingerprint,
+		record.ResponseStatus,
 		string(responseBody),
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return app.NewPaymentIdempotencyConflict(err)
-		}
+		return app.NewInternalPaymentError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if rowsAffected != 1 {
+		return app.NewPaymentIdempotencyConflict(nil)
+	}
+	return nil
+}
+
+func (r *IdempotencyRepository) Release(ctx context.Context, operation string, key string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`DELETE FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2
+		    AND status = 'in_progress'`,
+		operation,
+		key,
+	)
+	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
 	return nil
