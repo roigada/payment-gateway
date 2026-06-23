@@ -425,6 +425,122 @@ func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
+	var gotPath string
+	var gotIdempotencyKey string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotIdempotencyKey = r.Header.Get("Idempotency-Key")
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"refund_id": "ref_550e8400-e29b-41d4-a716-446655440003",
+			"capture_id": "cap_550e8400-e29b-41d4-a716-446655440001",
+			"status": "refunded",
+			"amount": 1299,
+			"currency": "USD",
+			"refunded_at": "2026-06-18T15:00:00Z"
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	result, err := client.RefundPayment(context.Background(), validRefundRequest())
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440003"}, result)
+	assert.Equal(t, "/api/v1/refunds", gotPath)
+	assert.Equal(t, "bok_123", gotIdempotencyKey)
+	assert.Equal(t, map[string]any{
+		"capture_id": "cap_550e8400-e29b-41d4-a716-446655440001",
+		"amount":     float64(1299),
+	}, gotBody)
+}
+
+func TestRefundPaymentRejectsMalformedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"refund_id":""}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	_, err = client.RefundPayment(context.Background(), validRefundRequest())
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+}
+
+func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		kind   app.PaymentErrorKind
+	}{
+		{
+			name:   "capture not found",
+			status: http.StatusBadRequest,
+			body:   `{"error":"capture_not_found","message":"capture not found"}`,
+			kind:   app.PaymentErrorInvalidInput,
+		},
+		{
+			name:   "already refunded",
+			status: http.StatusBadRequest,
+			body:   `{"error":"already_refunded","message":"already refunded"}`,
+			kind:   app.PaymentErrorInvalidInput,
+		},
+		{
+			name:   "internal bank error",
+			status: http.StatusInternalServerError,
+			body:   `{"error":"internal_error","message":"try again"}`,
+			kind:   app.PaymentErrorBankUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client, err := mockbank.NewClient(server.URL, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.RefundPayment(context.Background(), validRefundRequest())
+
+			require.Error(t, err)
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+		})
+	}
+}
+
+func TestRefundPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Timeout = time.Nanosecond
+	client, err := mockbank.NewClient(server.URL, httpClient)
+	require.NoError(t, err)
+
+	_, err = client.RefundPayment(context.Background(), validRefundRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
 type timeoutRoundTripper struct{}
 
 func (timeoutRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
@@ -474,5 +590,14 @@ func validVoidRequest() app.BankVoidRequest {
 	return app.BankVoidRequest{
 		OperationKey:        "bok_123",
 		BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000",
+	}
+}
+
+func validRefundRequest() app.BankRefundRequest {
+	return app.BankRefundRequest{
+		OperationKey:  "bok_123",
+		BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001",
+		AmountCents:   1299,
+		Currency:      "USD",
 	}
 }

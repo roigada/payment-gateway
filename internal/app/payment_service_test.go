@@ -775,6 +775,188 @@ func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testin
 	assert.Equal(t, 1, bank.captureCalls)
 }
 
+func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+	payment := newCapturedDomainPayment(t, capturedAt)
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+	refundedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
+	service := newPaymentService(repo, bank, refundedAt)
+
+	refunded, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, app.BankRefundRequest{
+		OperationKey:  "bok_123",
+		BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001",
+		AmountCents:   1299,
+		Currency:      "USD",
+	}, bank.refundRequest)
+	assert.Equal(t, app.PaymentResult{
+		ID:          string(payment.ID()),
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "refunded",
+		CreatedAt:   capturedAt,
+		UpdatedAt:   refundedAt,
+	}, refunded)
+
+	saved, err := repo.FindByID(context.Background(), payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefunded, saved.Status())
+	assert.Equal(t, "ref_550e8400-e29b-41d4-a716-446655440002", saved.BankRefundID())
+	assert.Equal(t, "bok_123", saved.RefundBankOperationKey())
+}
+
+func TestRefundPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newCapturedDomainPayment(t, time.Now())
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+	service := newPaymentService(repo, bank, time.Now())
+
+	_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "",
+	})
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+	assert.Zero(t, bank.refundRequest)
+}
+
+func TestRefundPaymentRejectsNonCapturedStatusesWithoutCallingBank(t *testing.T) {
+	statuses := []domain.PaymentStatus{
+		domain.PaymentStatusPending,
+		domain.PaymentStatusAuthorized,
+		domain.PaymentStatusDeclined,
+		domain.PaymentStatusVoided,
+		domain.PaymentStatusRefunded,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			payment := loadDomainPaymentForStatus(t, status)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+			service := newPaymentService(repo, bank, time.Now())
+
+			_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "public-refund-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+			assert.Zero(t, bank.refundRequest)
+		})
+	}
+}
+
+func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		kind app.PaymentErrorKind
+	}{
+		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
+		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+			payment := newCapturedDomainPayment(t, capturedAt)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			service := newPaymentService(repo, &bankFake{refundErr: tt.err}, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
+
+			_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "public-refund-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			require.NoError(t, findErr)
+			assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
+			assert.Equal(t, capturedAt, saved.UpdatedAt())
+			assert.Empty(t, saved.BankRefundID())
+			assert.Empty(t, saved.RefundBankOperationKey())
+		})
+	}
+}
+
+func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
+	command := app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	}
+	first, err := service.RefundPayment(context.Background(), command)
+	require.NoError(t, err)
+	bank.refundResult = app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}
+
+	replayed, err := service.RefundPayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, first, replayed)
+	assert.Equal(t, 1, bank.refundCalls)
+}
+
+func TestRefundPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	secondPayment := loadDomainPaymentForStatus(t, domain.PaymentStatusCaptured)
+	secondPayment, err := domain.LoadPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
+		"order-2",
+		"customer-1",
+		1299,
+		domain.CurrencyUSD,
+		domain.PaymentStatusCaptured,
+		"auth_550e8400-e29b-41d4-a716-446655440004",
+		"bok_550e8400-e29b-41d4-a716-446655440005",
+		"fingerprint-1",
+		"cap_550e8400-e29b-41d4-a716-446655440006",
+		"bok_550e8400-e29b-41d4-a716-446655440007",
+		"",
+		"",
+		"",
+		"",
+		"",
+		payment.CreatedAt(),
+		payment.CreatedAt(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
+	_, err = service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	})
+	require.NoError(t, err)
+
+	_, err = service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(secondPayment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	})
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.Equal(t, 1, bank.refundCalls)
+}
+
 func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 	validPaymentRepository := testsupport.NewPaymentRepository()
 	validIdempotency := testsupport.NewIdempotencyRepository()
@@ -942,6 +1124,10 @@ func (f *bankAuthorizerFake) VoidPayment(_ context.Context, request app.BankVoid
 	return f.voidResult, f.voidErr
 }
 
+func (f *bankAuthorizerFake) RefundPayment(context.Context, app.BankRefundRequest) (app.BankRefundResult, error) {
+	return app.BankRefundResult{}, errors.New("unexpected refund call")
+}
+
 type bankFake struct {
 	authorizeRequest app.BankAuthorizationRequest
 	authorizeResult  app.BankAuthorizationResult
@@ -955,6 +1141,10 @@ type bankFake struct {
 	voidResult       app.BankVoidResult
 	voidErr          error
 	voidCalls        int
+	refundRequest    app.BankRefundRequest
+	refundResult     app.BankRefundResult
+	refundErr        error
+	refundCalls      int
 }
 
 func (f *bankFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
@@ -975,6 +1165,12 @@ func (f *bankFake) VoidPayment(_ context.Context, request app.BankVoidRequest) (
 	return f.voidResult, f.voidErr
 }
 
+func (f *bankFake) RefundPayment(_ context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
+	f.refundRequest = request
+	f.refundCalls++
+	return f.refundResult, f.refundErr
+}
+
 func newAuthorizedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
 	t.Helper()
 
@@ -992,6 +1188,18 @@ func newAuthorizedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
 	return payment
 }
 
+func newCapturedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
+	t.Helper()
+
+	payment := newAuthorizedDomainPayment(t, now)
+	require.NoError(t, payment.Capture(
+		"cap_550e8400-e29b-41d4-a716-446655440001",
+		"bok_550e8400-e29b-41d4-a716-446655440002",
+		now,
+	))
+	return payment
+}
+
 func loadDomainPaymentForStatus(t *testing.T, status domain.PaymentStatus) *domain.Payment {
 	t.Helper()
 
@@ -1000,6 +1208,8 @@ func loadDomainPaymentForStatus(t *testing.T, status domain.PaymentStatus) *doma
 		bankAuthorizationID     string
 		captureBankOperationKey string
 		bankCaptureID           string
+		refundBankOperationKey  string
+		bankRefundID            string
 		voidBankOperationKey    string
 		bankVoidID              string
 		declineReason           domain.DeclineReason
@@ -1023,6 +1233,8 @@ func loadDomainPaymentForStatus(t *testing.T, status domain.PaymentStatus) *doma
 		bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
 		bankCaptureID = "cap_550e8400-e29b-41d4-a716-446655440002"
 		captureBankOperationKey = "bok_550e8400-e29b-41d4-a716-446655440003"
+		bankRefundID = "ref_550e8400-e29b-41d4-a716-446655440004"
+		refundBankOperationKey = "bok_550e8400-e29b-41d4-a716-446655440005"
 	}
 	payment, err := domain.LoadPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
@@ -1036,6 +1248,8 @@ func loadDomainPaymentForStatus(t *testing.T, status domain.PaymentStatus) *doma
 		"fingerprint-1",
 		bankCaptureID,
 		captureBankOperationKey,
+		bankRefundID,
+		refundBankOperationKey,
 		bankVoidID,
 		voidBankOperationKey,
 		declineReason,

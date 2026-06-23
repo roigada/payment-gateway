@@ -32,13 +32,15 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     authorization_card_fingerprint,
 		     bank_capture_id,
 		     capture_bank_operation_key,
+		     bank_refund_id,
+		     refund_bank_operation_key,
 		     bank_void_id,
 		     void_bank_operation_key,
 		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
@@ -50,6 +52,8 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.AuthorizationCardFingerprint(),
 		nullableString(payment.BankCaptureID()),
 		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(payment.BankRefundID()),
+		nullableString(payment.RefundBankOperationKey()),
 		nullableString(payment.BankVoidID()),
 		nullableString(payment.VoidBankOperationKey()),
 		nullableString(string(payment.DeclineReason())),
@@ -58,6 +62,40 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func (r *PaymentRepository) UpdateRefundResult(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        bank_refund_id = $3,
+		        refund_bank_operation_key = $4,
+		        updated_at = $5
+		  WHERE id = $1
+		    AND status = $6`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankRefundID()),
+		nullableString(payment.RefundBankOperationKey()),
+		payment.UpdatedAt(),
+		domain.PaymentStatusCaptured,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := r.FindByID(ctx, payment.ID())
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
 }
@@ -176,6 +214,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
 		captureBankOperationKey       sql.NullString
+		bankRefundID                  sql.NullString
+		refundBankOperationKey        sql.NullString
 		bankVoidID                    sql.NullString
 		voidBankOperationKey          sql.NullString
 		declineReason                 sql.NullString
@@ -194,6 +234,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        authorization_card_fingerprint,
 		        bank_capture_id,
 		        capture_bank_operation_key,
+		        bank_refund_id,
+		        refund_bank_operation_key,
 		        bank_void_id,
 		        void_bank_operation_key,
 		        decline_reason,
@@ -213,6 +255,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&authorizationCardFingerprint,
 		&bankCaptureID,
 		&captureBankOperationKey,
+		&bankRefundID,
+		&refundBankOperationKey,
 		&bankVoidID,
 		&voidBankOperationKey,
 		&declineReason,
@@ -238,6 +282,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
 		nullStringValue(captureBankOperationKey),
+		nullStringValue(bankRefundID),
+		nullStringValue(refundBankOperationKey),
 		nullStringValue(bankVoidID),
 		nullStringValue(voidBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
@@ -264,6 +310,8 @@ func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPayments
 		        authorization_card_fingerprint,
 		        bank_capture_id,
 		        capture_bank_operation_key,
+		        bank_refund_id,
+		        refund_bank_operation_key,
 		        bank_void_id,
 		        void_bank_operation_key,
 		        decline_reason,
@@ -315,6 +363,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
 		captureBankOperationKey       sql.NullString
+		bankRefundID                  sql.NullString
+		refundBankOperationKey        sql.NullString
 		bankVoidID                    sql.NullString
 		voidBankOperationKey          sql.NullString
 		declineReason                 sql.NullString
@@ -333,6 +383,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		&authorizationCardFingerprint,
 		&bankCaptureID,
 		&captureBankOperationKey,
+		&bankRefundID,
+		&refundBankOperationKey,
 		&bankVoidID,
 		&voidBankOperationKey,
 		&declineReason,
@@ -355,6 +407,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
 		nullStringValue(captureBankOperationKey),
+		nullStringValue(bankRefundID),
+		nullStringValue(refundBankOperationKey),
 		nullStringValue(bankVoidID),
 		nullStringValue(voidBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
