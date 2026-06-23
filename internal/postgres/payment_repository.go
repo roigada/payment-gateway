@@ -32,11 +32,13 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     authorization_card_fingerprint,
 		     bank_capture_id,
 		     capture_bank_operation_key,
+		     bank_void_id,
+		     void_bank_operation_key,
 		     decline_reason,
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
@@ -48,12 +50,48 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.AuthorizationCardFingerprint(),
 		nullableString(payment.BankCaptureID()),
 		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(payment.BankVoidID()),
+		nullableString(payment.VoidBankOperationKey()),
 		nullableString(string(payment.DeclineReason())),
 		payment.CreatedAt(),
 		payment.UpdatedAt(),
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        bank_void_id = $3,
+		        void_bank_operation_key = $4,
+		        updated_at = $5
+		  WHERE id = $1
+		    AND status = $6`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankVoidID()),
+		payment.VoidBankOperationKey(),
+		payment.UpdatedAt(),
+		domain.PaymentStatusAuthorized,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := r.FindByID(ctx, payment.ID())
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
 }
@@ -138,6 +176,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
 		captureBankOperationKey       sql.NullString
+		bankVoidID                    sql.NullString
+		voidBankOperationKey          sql.NullString
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -154,6 +194,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        authorization_card_fingerprint,
 		        bank_capture_id,
 		        capture_bank_operation_key,
+		        bank_void_id,
+		        void_bank_operation_key,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -171,6 +213,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&authorizationCardFingerprint,
 		&bankCaptureID,
 		&captureBankOperationKey,
+		&bankVoidID,
+		&voidBankOperationKey,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -194,6 +238,8 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
 		nullStringValue(captureBankOperationKey),
+		nullStringValue(bankVoidID),
+		nullStringValue(voidBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,
@@ -218,6 +264,8 @@ func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPayments
 		        authorization_card_fingerprint,
 		        bank_capture_id,
 		        capture_bank_operation_key,
+		        bank_void_id,
+		        void_bank_operation_key,
 		        decline_reason,
 		        created_at,
 		        updated_at
@@ -267,6 +315,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
 		captureBankOperationKey       sql.NullString
+		bankVoidID                    sql.NullString
+		voidBankOperationKey          sql.NullString
 		declineReason                 sql.NullString
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
@@ -283,6 +333,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		&authorizationCardFingerprint,
 		&bankCaptureID,
 		&captureBankOperationKey,
+		&bankVoidID,
+		&voidBankOperationKey,
 		&declineReason,
 		&createdAt,
 		&updatedAt,
@@ -303,6 +355,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
 		nullStringValue(captureBankOperationKey),
+		nullStringValue(bankVoidID),
+		nullStringValue(voidBankOperationKey),
 		domain.DeclineReason(nullStringValue(declineReason)),
 		createdAt.Time,
 		updatedAt.Time,

@@ -140,6 +140,33 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.voidPaymentResult = newVoidedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void", "", map[string]string{
+		"Idempotency-Key": "void-key-1",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, app.VoidPaymentCommand{
+		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
+		IdempotencyKey: "void-key-1",
+	}, api.payments.voidPaymentCommand)
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "voided",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
 func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -542,6 +569,9 @@ type paymentUseCasesFake struct {
 	capturePaymentResult      app.PaymentResult
 	capturePaymentErr         error
 	capturePaymentPanic       any
+	voidPaymentCommand        app.VoidPaymentCommand
+	voidPaymentResult         app.PaymentResult
+	voidPaymentErr            error
 	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
@@ -584,6 +614,11 @@ func (f *paymentUseCasesFake) CapturePayment(_ context.Context, command app.Capt
 	return f.capturePaymentResult, f.capturePaymentErr
 }
 
+func (f *paymentUseCasesFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentResult, error) {
+	f.voidPaymentCommand = command
+	return f.voidPaymentResult, f.voidPaymentErr
+}
+
 func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
 	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
@@ -618,5 +653,11 @@ func newDeclinedPayment(id string) app.PaymentResult {
 func newPendingPayment(id string) app.PaymentResult {
 	payment := newPayment(id)
 	payment.Status = "pending"
+	return payment
+}
+
+func newVoidedPayment(id string) app.PaymentResult {
+	payment := newPayment(id)
+	payment.Status = "voided"
 	return payment
 }

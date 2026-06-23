@@ -125,6 +125,44 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }
 
+func TestPaymentRepositoryUpdatesVoidedPayment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repository.Create(ctx, payment))
+
+	voidedAt := now.Add(time.Minute)
+	require.NoError(t, payment.MarkVoided(
+		"void_550e8400-e29b-41d4-a716-446655440003",
+		"bok_550e8400-e29b-41d4-a716-446655440002",
+		voidedAt,
+	))
+	require.NoError(t, repository.UpdateVoidResult(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusVoided, saved.Status())
+	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440003", saved.BankVoidID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440002", saved.VoidBankOperationKey())
+	assert.True(t, saved.UpdatedAt().Equal(voidedAt), "updated_at should round-trip as the void transition instant")
+}
+
 func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -337,6 +375,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 			filepath.Join("..", "..", "migrations", "000002_add_declined_payments_and_idempotency.up.sql"),
 			filepath.Join("..", "..", "migrations", "000003_add_pending_authorization_retry.up.sql"),
 			filepath.Join("..", "..", "migrations", "000004_add_captured_payments.up.sql"),
+			filepath.Join("..", "..", "migrations", "000005_add_voided_payments.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

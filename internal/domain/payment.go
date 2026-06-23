@@ -15,6 +15,7 @@ var (
 	ErrInvalidAmount                       = errors.New("invalid amount")
 	ErrInvalidBankAuthorizationID          = errors.New("invalid bank authorization id")
 	ErrInvalidBankCaptureID                = errors.New("invalid bank capture id")
+	ErrInvalidBankVoidID                   = errors.New("invalid bank void id")
 	ErrInvalidBankOperationKey             = errors.New("invalid bank operation key")
 	ErrInvalidAuthorizationCardFingerprint = errors.New("invalid authorization card fingerprint")
 	ErrInvalidDeclineReason                = errors.New("invalid decline reason")
@@ -56,6 +57,8 @@ type Payment struct {
 	authorizationCardFingerprint  string
 	bankCaptureID                 string
 	captureBankOperationKey       string
+	bankVoidID                    string
+	voidBankOperationKey          string
 	declineReason                 DeclineReason
 	createdAt                     time.Time
 	updatedAt                     time.Time
@@ -82,6 +85,8 @@ func NewPendingPayment(
 		"",
 		"",
 		"",
+		"",
+		"",
 		now,
 	)
 }
@@ -105,6 +110,8 @@ func NewAuthorizedPayment(
 		bankAuthorizationID,
 		authorizationBankOperationKey,
 		authorizationCardFingerprint,
+		"",
+		"",
 		"",
 		"",
 		"",
@@ -136,6 +143,8 @@ func NewDeclinedPayment(
 		authorizationCardFingerprint,
 		"",
 		"",
+		"",
+		"",
 		declineReason,
 		now,
 	)
@@ -153,6 +162,8 @@ func LoadPayment(
 	authorizationCardFingerprint string,
 	bankCaptureID string,
 	captureBankOperationKey string,
+	bankVoidID string,
+	voidBankOperationKey string,
 	declineReason DeclineReason,
 	createdAt time.Time,
 	updatedAt time.Time,
@@ -173,6 +184,12 @@ func LoadPayment(
 		if strings.TrimSpace(bankAuthorizationID) != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidBankAuthorizationID
 		}
+		if strings.TrimSpace(bankVoidID) != "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		if strings.TrimSpace(voidBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
+		}
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
 		}
@@ -181,27 +198,48 @@ func LoadPayment(
 		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", createdAt)
+		if strings.TrimSpace(bankVoidID) != "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", voidBankOperationKey, "", createdAt)
 	case PaymentStatusDeclined:
 		if strings.TrimSpace(bankAuthorizationID) != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidBankAuthorizationID
+		}
+		if strings.TrimSpace(bankVoidID) != "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		if strings.TrimSpace(voidBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		payment, err = NewDeclinedPayment(id, orderID, customerID, amountCents, declineReason, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	case PaymentStatusCaptured:
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, bankCaptureID, captureBankOperationKey, "", createdAt)
+		if strings.TrimSpace(bankVoidID) != "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		if strings.TrimSpace(voidBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
+		}
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, bankCaptureID, captureBankOperationKey, "", "", "", createdAt)
 	case PaymentStatusVoided:
 		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", createdAt)
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, "", "", bankVoidID, voidBankOperationKey, "", createdAt)
 	case PaymentStatusRefunded:
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
 		}
-		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, bankCaptureID, captureBankOperationKey, "", createdAt)
+		if strings.TrimSpace(bankVoidID) != "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		if strings.TrimSpace(voidBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
+		}
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationBankOperationKey, authorizationCardFingerprint, bankCaptureID, captureBankOperationKey, "", "", "", createdAt)
 	default:
 		return nil, ErrInvalidPaymentStatus
 	}
@@ -224,6 +262,8 @@ func newPayment(
 	authorizationCardFingerprint string,
 	bankCaptureID string,
 	captureBankOperationKey string,
+	bankVoidID string,
+	voidBankOperationKey string,
 	declineReason DeclineReason,
 	now time.Time,
 ) (*Payment, error) {
@@ -267,6 +307,18 @@ func newPayment(
 			return nil, err
 		}
 	}
+	if bankVoidID != "" {
+		bankVoidID, err = normalizeRequired(bankVoidID, ErrInvalidBankVoidID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if voidBankOperationKey != "" {
+		voidBankOperationKey, err = normalizeRequired(voidBankOperationKey, ErrInvalidBankOperationKey)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if now.IsZero() {
 		return nil, ErrInvalidPaymentTimestamp
 	}
@@ -283,12 +335,13 @@ func newPayment(
 		authorizationCardFingerprint:  authorizationCardFingerprint,
 		bankCaptureID:                 bankCaptureID,
 		captureBankOperationKey:       captureBankOperationKey,
+		bankVoidID:                    bankVoidID,
+		voidBankOperationKey:          voidBankOperationKey,
 		declineReason:                 declineReason,
 		createdAt:                     now,
 		updatedAt:                     now,
 	}, nil
 }
-
 func (p *Payment) MarkAuthorized(bankAuthorizationID string, now time.Time) error {
 	if p.status != PaymentStatusPending {
 		return ErrInvalidPaymentStatus
@@ -358,6 +411,29 @@ func (p *Payment) Capture(bankCaptureID string, captureBankOperationKey string, 
 	return nil
 }
 
+func (p *Payment) MarkVoided(bankVoidID string, voidBankOperationKey string, now time.Time) error {
+	if p.status != PaymentStatusAuthorized {
+		return ErrInvalidPaymentStatus
+	}
+	bankVoidID, err := normalizeRequired(bankVoidID, ErrInvalidBankVoidID)
+	if err != nil {
+		return err
+	}
+	voidBankOperationKey, err = normalizeRequired(voidBankOperationKey, ErrInvalidBankOperationKey)
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		return ErrInvalidPaymentTimestamp
+	}
+	p.status = PaymentStatusVoided
+	p.bankVoidID = bankVoidID
+	p.voidBankOperationKey = voidBankOperationKey
+	p.declineReason = ""
+	p.updatedAt = now
+	return nil
+}
+
 func validatePaymentID(id PaymentID) error {
 	uuidPart, ok := strings.CutPrefix(string(id), "pay_")
 	if !ok || !isDashedUUID(uuidPart) {
@@ -419,6 +495,8 @@ func (p *Payment) AuthorizationBankOperationKey() string { return p.authorizatio
 func (p *Payment) AuthorizationCardFingerprint() string  { return p.authorizationCardFingerprint }
 func (p *Payment) BankCaptureID() string                 { return p.bankCaptureID }
 func (p *Payment) CaptureBankOperationKey() string       { return p.captureBankOperationKey }
+func (p *Payment) BankVoidID() string                    { return p.bankVoidID }
+func (p *Payment) VoidBankOperationKey() string          { return p.voidBankOperationKey }
 func (p *Payment) DeclineReason() DeclineReason          { return p.declineReason }
 func (p *Payment) CreatedAt() time.Time                  { return p.createdAt }
 func (p *Payment) UpdatedAt() time.Time                  { return p.updatedAt }
