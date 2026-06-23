@@ -125,7 +125,7 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }
 
-func TestPaymentRepositoryUpdatesVoidOperationKeyAndResult(t *testing.T) {
+func TestPaymentRepositoryUpdatesVoidedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -147,15 +147,12 @@ func TestPaymentRepositoryUpdatesVoidOperationKeyAndResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, repository.Create(ctx, payment))
 
-	require.NoError(t, payment.RecordVoidBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
-	require.NoError(t, repository.UpdateVoidOperationKey(ctx, payment))
-	savedAttempt, err := repository.FindByID(ctx, payment.ID())
-	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusAuthorized, savedAttempt.Status())
-	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440002", savedAttempt.VoidBankOperationKey())
-	assert.Empty(t, savedAttempt.BankVoidID())
-
-	require.NoError(t, payment.MarkVoided("void_550e8400-e29b-41d4-a716-446655440003", payment.VoidBankOperationKey(), now.Add(time.Minute)))
+	voidedAt := now.Add(time.Minute)
+	require.NoError(t, payment.MarkVoided(
+		"void_550e8400-e29b-41d4-a716-446655440003",
+		"bok_550e8400-e29b-41d4-a716-446655440002",
+		voidedAt,
+	))
 	require.NoError(t, repository.UpdateVoidResult(ctx, payment))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
@@ -163,7 +160,7 @@ func TestPaymentRepositoryUpdatesVoidOperationKeyAndResult(t *testing.T) {
 	assert.Equal(t, domain.PaymentStatusVoided, saved.Status())
 	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440003", saved.BankVoidID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440002", saved.VoidBankOperationKey())
-	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the void transition instant")
+	assert.True(t, saved.UpdatedAt().Equal(voidedAt), "updated_at should round-trip as the void transition instant")
 }
 
 func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T) {

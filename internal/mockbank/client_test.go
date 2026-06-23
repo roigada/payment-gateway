@@ -372,16 +372,19 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 		name   string
 		status int
 		body   string
+		kind   app.PaymentErrorKind
 	}{
 		{
 			name:   "bad request",
 			status: http.StatusBadRequest,
 			body:   `{"error":"already_voided","message":"already voided"}`,
+			kind:   app.PaymentErrorInvalidInput,
 		},
 		{
 			name:   "internal bank error",
 			status: http.StatusInternalServerError,
 			body:   `{"error":"internal_error","message":"try again"}`,
+			kind:   app.PaymentErrorBankUnavailable,
 		},
 	}
 
@@ -399,7 +402,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.VoidPayment(context.Background(), validVoidRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
 		})
 	}
 }

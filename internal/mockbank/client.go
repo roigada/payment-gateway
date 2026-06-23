@@ -162,19 +162,28 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusOK {
-		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
+	switch response.StatusCode {
+	case http.StatusOK:
+		var payload voidResponse
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if strings.TrimSpace(payload.VoidID) == "" {
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void response missing void id"))
+		}
+
+		return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
+	case http.StatusBadRequest:
+		reason, err := decodeBadRequestInvalidInputReason(response)
+		if err != nil {
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if reason != "" {
+			return app.BankVoidResult{}, app.NewInvalidPaymentInput(reason, nil)
+		}
 	}
 
-	var payload voidResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
-	}
-	if strings.TrimSpace(payload.VoidID) == "" {
-		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void response missing void id"))
-	}
-
-	return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
+	return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
 }
 
 func isTimeout(err error) bool {

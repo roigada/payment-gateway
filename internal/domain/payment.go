@@ -411,21 +411,6 @@ func (p *Payment) Capture(bankCaptureID string, captureBankOperationKey string, 
 	return nil
 }
 
-func (p *Payment) RecordVoidBankOperationKey(voidBankOperationKey string) error {
-	if p.status != PaymentStatusAuthorized {
-		return ErrInvalidPaymentStatus
-	}
-	if p.voidBankOperationKey != "" {
-		return nil
-	}
-	voidBankOperationKey, err := normalizeRequired(voidBankOperationKey, ErrInvalidBankOperationKey)
-	if err != nil {
-		return err
-	}
-	p.voidBankOperationKey = voidBankOperationKey
-	return nil
-}
-
 func (p *Payment) MarkVoided(bankVoidID string, voidBankOperationKey string, now time.Time) error {
 	if p.status != PaymentStatusAuthorized {
 		return ErrInvalidPaymentStatus

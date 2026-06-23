@@ -62,37 +62,6 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 	return nil
 }
 
-func (r *PaymentRepository) UpdateVoidOperationKey(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET void_bank_operation_key = $2,
-		        updated_at = $3
-		  WHERE id = $1
-		    AND status = $4
-		    AND void_bank_operation_key IS NULL`,
-		payment.ID(),
-		payment.VoidBankOperationKey(),
-		payment.UpdatedAt(),
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
-}
-
 func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domain.Payment) error {
 	result, err := r.db.ExecContext(
 		ctx,

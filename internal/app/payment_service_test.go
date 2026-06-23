@@ -432,20 +432,135 @@ func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testin
 }
 
 func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
+	statuses := []domain.PaymentStatus{
+		domain.PaymentStatusPending,
+		domain.PaymentStatusDeclined,
+		domain.PaymentStatusCaptured,
+		domain.PaymentStatusVoided,
+		domain.PaymentStatusRefunded,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			payment := loadDomainPaymentForStatus(t, status)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
+			service := newPaymentService(repo, bank, time.Now())
+
+			_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "void-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+			assert.Zero(t, bank.voidCalls)
+		})
+	}
+}
+
+func TestVoidPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	payment := mustDeclinedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", now)
+	payment := newAuthorizedDomainPayment(t, time.Now())
 	require.NoError(t, repo.Create(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
-	service := newPaymentService(repo, bank, now)
+	service := newPaymentService(repo, bank, time.Now())
 
 	_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
 		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "",
+	})
+
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+	assert.Zero(t, bank.voidRequest)
+}
+
+func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		kind app.PaymentErrorKind
+	}{
+		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
+		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := testsupport.NewPaymentRepository()
+			authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+			payment := newAuthorizedDomainPayment(t, authorizedAt)
+			require.NoError(t, repo.Create(context.Background(), payment))
+			service := newPaymentService(repo, &bankAuthorizerFake{voidErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+
+			_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+				PaymentID:      string(payment.ID()),
+				IdempotencyKey: "void-key-1",
+			})
+
+			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			require.NoError(t, findErr)
+			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+			assert.Equal(t, authorizedAt, saved.UpdatedAt())
+			assert.Empty(t, saved.BankVoidID())
+			assert.Empty(t, saved.VoidBankOperationKey())
+		})
+	}
+}
+
+func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	command := app.VoidPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "void-key-1",
+	}
+	first, err := service.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+	bank.voidResult = app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}
+
+	replayed, err := service.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, first, replayed)
+	assert.Equal(t, 1, bank.voidCalls)
+}
+
+func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	secondPayment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
+		"order-2",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440002",
+		"bok_550e8400-e29b-41d4-a716-446655440003",
+		payment.AuthorizationCardFingerprint(),
+		payment.CreatedAt(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	_, err = service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "void-key-1",
+	})
+	require.NoError(t, err)
+
+	_, err = service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+		PaymentID:      string(secondPayment.ID()),
 		IdempotencyKey: "void-key-1",
 	})
 
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
-	assert.Zero(t, bank.voidCalls)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.Equal(t, 1, bank.voidCalls)
 }
 
 func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {

@@ -76,7 +76,6 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *domain.Payment) error
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
 	UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error
-	UpdateVoidOperationKey(ctx context.Context, payment *domain.Payment) error
 	UpdateVoidResult(ctx context.Context, payment *domain.Payment) error
 	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
 	UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error
@@ -450,14 +449,13 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		return PaymentResult{}, NewInvalidPaymentInput("payment id is required", nil)
 	}
 
-	operation := voidPaymentOperation + ":" + command.PaymentID
-	requestFingerprint := voidPaymentRequestFingerprint(command)
-	record, found, err := s.idempotency.FindCompleted(ctx, operation, command.IdempotencyKey)
+	fingerprint := voidPaymentRequestFingerprint(command, s.fingerprintSecret)
+	record, found, err := s.idempotency.FindCompleted(ctx, voidPaymentOperation, command.IdempotencyKey)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
 	if found {
-		if record.RequestFingerprint != requestFingerprint {
+		if record.RequestFingerprint != fingerprint {
 			return PaymentResult{}, NewPaymentIdempotencyConflict(nil)
 		}
 		return record.Result, nil
@@ -471,26 +469,16 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
-	voidBankOperationKey := payment.VoidBankOperationKey()
-	if voidBankOperationKey == "" {
-		voidBankOperationKey = s.bankOperationKeys.NewBankOperationKey()
-		if err := payment.RecordVoidBankOperationKey(voidBankOperationKey); err != nil {
-			return PaymentResult{}, asPaymentError(err)
-		}
-		if err := s.paymentRepository.UpdateVoidOperationKey(ctx, payment); err != nil {
-			return PaymentResult{}, asPaymentError(err)
-		}
-	}
-
+	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	bankResult, err := s.bank.VoidPayment(ctx, BankVoidRequest{
-		OperationKey:        voidBankOperationKey,
+		OperationKey:        bankOperationKey,
 		BankAuthorizationID: payment.BankAuthorizationID(),
 	})
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
 
-	if err := payment.MarkVoided(bankResult.BankVoidID, voidBankOperationKey, s.clock.Now()); err != nil {
+	if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
 	if err := s.paymentRepository.UpdateVoidResult(ctx, payment); err != nil {
@@ -499,9 +487,9 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 
 	result := newPaymentResult(payment)
 	if err := s.idempotency.SaveCompleted(ctx, IdempotencyRecord{
-		Operation:          operation,
+		Operation:          voidPaymentOperation,
 		Key:                command.IdempotencyKey,
-		RequestFingerprint: requestFingerprint,
+		RequestFingerprint: fingerprint,
 		Result:             result,
 	}); err != nil {
 		return PaymentResult{}, asPaymentError(err)
@@ -624,8 +612,10 @@ func capturePaymentRequestFingerprint(command CapturePaymentCommand, secret stri
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func voidPaymentRequestFingerprint(command VoidPaymentCommand) string {
-	return voidPaymentOperation + "\n" + command.PaymentID
+func voidPaymentRequestFingerprint(command VoidPaymentCommand, secret string) string {
+	hash := hmac.New(sha256.New, []byte(secret))
+	_, _ = fmt.Fprintf(hash, "%s\n%s", voidPaymentOperation, command.PaymentID)
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func authorizationCardFingerprint(card CardDetails, secret string) string {
