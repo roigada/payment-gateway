@@ -277,7 +277,8 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}{
 		{name: "amount mismatch", code: "amount_mismatch", kind: app.PaymentErrorInvalidInput},
 		{name: "authorization not found", code: "authorization_not_found", kind: app.PaymentErrorInvalidInput},
-		{name: "authorization already used", code: "authorization_already_used", kind: app.PaymentErrorInvalidInput},
+		{name: "authorization already used", code: "authorization_already_used", kind: app.PaymentErrorBankStateConflict},
+		{name: "already captured", code: "already_captured", kind: app.PaymentErrorBankStateConflict},
 		{name: "internal", code: "internal_error", kind: app.PaymentErrorBankUnavailable},
 	}
 
@@ -378,7 +379,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			name:   "bad request",
 			status: http.StatusBadRequest,
 			body:   `{"error":"already_voided","message":"already voided"}`,
-			kind:   app.PaymentErrorInvalidInput,
+			kind:   app.PaymentErrorBankStateConflict,
 		},
 		{
 			name:   "internal bank error",
@@ -494,7 +495,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 			name:   "already refunded",
 			status: http.StatusBadRequest,
 			body:   `{"error":"already_refunded","message":"already refunded"}`,
-			kind:   app.PaymentErrorInvalidInput,
+			kind:   app.PaymentErrorBankStateConflict,
 		},
 		{
 			name:   "internal bank error",

@@ -10,6 +10,7 @@ const (
 	PaymentErrorIdempotencyConflict   PaymentErrorKind = "idempotency_conflict"
 	PaymentErrorIdempotencyInProgress PaymentErrorKind = "idempotency_in_progress"
 	PaymentErrorInvalidStatusConflict PaymentErrorKind = "invalid_status_conflict"
+	PaymentErrorBankStateConflict     PaymentErrorKind = "bank_state_conflict"
 	PaymentErrorBankUnavailable       PaymentErrorKind = "bank_unavailable"
 	PaymentErrorBankTimeout           PaymentErrorKind = "bank_timeout"
 	PaymentErrorInternal              PaymentErrorKind = "internal"
@@ -57,6 +58,14 @@ func NewPaymentInvalidStatusConflict(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorInvalidStatusConflict,
 		message: "payment status does not allow this operation",
+		cause:   cause,
+	}
+}
+
+func NewPaymentBankStateConflict(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorBankStateConflict,
+		message: "bank state conflicts with local payment state",
 		cause:   cause,
 	}
 }

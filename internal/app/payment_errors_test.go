@@ -49,6 +49,12 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 			message: "payment status does not allow this operation",
 		},
 		{
+			name:    "bank state conflict",
+			err:     app.NewPaymentBankStateConflict(cause),
+			kind:    app.PaymentErrorBankStateConflict,
+			message: "bank state conflicts with local payment state",
+		},
+		{
 			name:    "bank unavailable",
 			err:     app.NewPaymentBankUnavailable(cause),
 			kind:    app.PaymentErrorBankUnavailable,

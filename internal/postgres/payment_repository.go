@@ -100,6 +100,23 @@ func (r *PaymentRepository) UpdateRefundResult(ctx context.Context, payment *dom
 	return nil
 }
 
+func (r *PaymentRepository) SaveRefundBankOperationKey(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET refund_bank_operation_key = $2
+		  WHERE id = $1
+		    AND status = $3`,
+		payment.ID(),
+		nullableString(payment.RefundBankOperationKey()),
+		domain.PaymentStatusCaptured,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
+}
+
 func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domain.Payment) error {
 	result, err := r.db.ExecContext(
 		ctx,
@@ -107,6 +124,7 @@ func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domai
 		    SET status = $2,
 		        bank_void_id = $3,
 		        void_bank_operation_key = $4,
+		        capture_bank_operation_key = NULL,
 		        updated_at = $5
 		  WHERE id = $1
 		    AND status = $6`,
@@ -132,6 +150,23 @@ func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domai
 		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
+}
+
+func (r *PaymentRepository) SaveVoidBankOperationKey(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET void_bank_operation_key = $2
+		  WHERE id = $1
+		    AND status = $3`,
+		payment.ID(),
+		nullableString(payment.VoidBankOperationKey()),
+		domain.PaymentStatusAuthorized,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
 }
 
 func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error {
@@ -175,6 +210,7 @@ func (r *PaymentRepository) UpdateCaptureResult(ctx context.Context, payment *do
 		    SET status = $2,
 		        bank_capture_id = $3,
 		        capture_bank_operation_key = $4,
+		        void_bank_operation_key = NULL,
 		        updated_at = $5
 		  WHERE id = $1
 		    AND status = $6`,
@@ -200,6 +236,23 @@ func (r *PaymentRepository) UpdateCaptureResult(ctx context.Context, payment *do
 		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
+}
+
+func (r *PaymentRepository) SaveCaptureBankOperationKey(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET capture_bank_operation_key = $2
+		  WHERE id = $1
+		    AND status = $3`,
+		payment.ID(),
+		nullableString(payment.CaptureBankOperationKey()),
+		domain.PaymentStatusAuthorized,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
 }
 
 func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
@@ -457,6 +510,21 @@ func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payme
 	}
 	if affected == 0 {
 		return app.NewPaymentNotFound(string(payment.ID()), sql.ErrNoRows)
+	}
+	return nil
+}
+
+func ensurePaymentUpdateAffected(ctx context.Context, r *PaymentRepository, result sql.Result, id domain.PaymentID) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := r.FindByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return nil
 }

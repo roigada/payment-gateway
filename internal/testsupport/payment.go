@@ -65,6 +65,17 @@ func (r *PaymentRepository) UpdateVoidResult(_ context.Context, payment *domain.
 	return nil
 }
 
+func (r *PaymentRepository) SaveVoidBankOperationKey(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusAuthorized {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return r.update(payment)
+}
+
 func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
@@ -103,7 +114,29 @@ func (r *PaymentRepository) UpdateCaptureResult(_ context.Context, payment *doma
 	return r.update(payment)
 }
 
+func (r *PaymentRepository) SaveCaptureBankOperationKey(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusAuthorized {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return r.update(payment)
+}
+
 func (r *PaymentRepository) UpdateRefundResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusCaptured {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return r.update(payment)
+}
+
+func (r *PaymentRepository) SaveRefundBankOperationKey(_ context.Context, payment *domain.Payment) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)

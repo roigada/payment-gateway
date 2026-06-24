@@ -20,6 +20,7 @@ const (
 	errorCodeIdempotencyInProgress = "idempotency_key_in_progress"
 	errorCodePaymentStatusConflict = "payment_status_conflict"
 	errorCodePaymentNotFound       = "payment_not_found"
+	errorCodeBankStateConflict     = "bank_state_conflict"
 	errorCodeBankUnavailable       = "bank_unavailable"
 	errorCodeBankTimeout           = "bank_timeout"
 )
@@ -315,6 +316,8 @@ func writePaymentServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorNotFound:
 		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, "payment was not found")
+	case app.PaymentErrorBankStateConflict:
+		writeError(w, http.StatusBadGateway, errorCodeBankStateConflict, "bank state conflicts with local payment state")
 	case app.PaymentErrorBankUnavailable:
 		writeError(w, http.StatusBadGateway, errorCodeBankUnavailable, "bank is unavailable")
 	case app.PaymentErrorBankTimeout:

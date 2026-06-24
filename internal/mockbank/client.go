@@ -125,9 +125,12 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 
 		return app.BankCaptureResult{BankCaptureID: payload.CaptureID}, nil
 	case http.StatusBadRequest:
-		reason, err := decodeBadRequestInvalidInputReason(response)
+		reason, conflict, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if conflict {
+			return app.BankCaptureResult{}, app.NewPaymentBankStateConflict(nil)
 		}
 		if reason != "" {
 			return app.BankCaptureResult{}, app.NewInvalidPaymentInput(reason, nil)
@@ -174,9 +177,12 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 
 		return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
 	case http.StatusBadRequest:
-		reason, err := decodeBadRequestInvalidInputReason(response)
+		reason, conflict, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if conflict {
+			return app.BankVoidResult{}, app.NewPaymentBankStateConflict(nil)
 		}
 		if reason != "" {
 			return app.BankVoidResult{}, app.NewInvalidPaymentInput(reason, nil)
@@ -224,9 +230,12 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 
 		return app.BankRefundResult{BankRefundID: payload.RefundID}, nil
 	case http.StatusBadRequest:
-		reason, err := decodeBadRequestInvalidInputReason(response)
+		reason, conflict, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if conflict {
+			return app.BankRefundResult{}, app.NewPaymentBankStateConflict(nil)
 		}
 		if reason != "" {
 			return app.BankRefundResult{}, app.NewInvalidPaymentInput(reason, nil)
@@ -287,12 +296,17 @@ type authorizationErrorResponse struct {
 }
 
 func decodeBadRequestInvalidInputReason(response *http.Response) (string, error) {
+	reason, _, err := decodeBadRequestReason(response)
+	return reason, err
+}
+
+func decodeBadRequestReason(response *http.Response) (string, bool, error) {
 	var payload authorizationErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	return invalidInputReasonForBadRequest(payload.Error), nil
+	return invalidInputReasonForBadRequest(payload.Error), isBankStateConflict(payload.Error), nil
 }
 
 func invalidInputReasonForBadRequest(code string) string {
@@ -307,12 +321,21 @@ func invalidInputReasonForBadRequest(code string) string {
 		return "amount must be greater than zero"
 	case "amount_mismatch":
 		return "amount does not match bank authorization"
-	case "authorization_not_found", "authorization_expired", "authorization_already_used", "already_captured", "already_voided":
+	case "authorization_not_found", "authorization_expired":
 		return "bank authorization cannot be captured"
-	case "capture_not_found", "already_refunded":
+	case "capture_not_found":
 		return "bank capture cannot be refunded"
 	default:
 		return ""
+	}
+}
+
+func isBankStateConflict(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "authorization_already_used", "already_captured", "already_voided", "already_refunded":
+		return true
+	default:
+		return false
 	}
 }
 
