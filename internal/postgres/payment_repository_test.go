@@ -163,6 +163,39 @@ func TestPaymentRepositoryUpdatesVoidedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(voidedAt), "updated_at should round-trip as the void transition instant")
 }
 
+func TestPaymentRepositorySavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repository.Create(ctx, payment))
+	require.NoError(t, payment.SetVoidBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
+
+	require.NoError(t, repository.SaveVoidBankOperationKey(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+	assert.Empty(t, saved.BankVoidID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440002", saved.VoidBankOperationKey())
+	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should stay unchanged")
+}
+
 func TestPaymentRepositorySearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -241,6 +274,39 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should be the capture instant")
 }
 
+func TestPaymentRepositorySavesCaptureBankOperationKeyWithoutChangingStatus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		authorizedAt,
+	)
+	require.NoError(t, err)
+	require.NoError(t, repository.Create(ctx, payment))
+	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
+
+	require.NoError(t, repository.SaveCaptureBankOperationKey(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+	assert.Empty(t, saved.BankCaptureID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440002", saved.CaptureBankOperationKey())
+	assert.True(t, saved.UpdatedAt().Equal(authorizedAt), "updated_at should stay unchanged")
+}
+
 func TestPaymentRepositoryUpdatesRefundedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -286,6 +352,45 @@ func TestPaymentRepositoryUpdatesRefundedPayment(t *testing.T) {
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440005", saved.RefundBankOperationKey())
 	assert.True(t, saved.CreatedAt().Equal(authorizedAt), "created_at should be unchanged")
 	assert.True(t, saved.UpdatedAt().Equal(refundedAt), "updated_at should be the refund instant")
+}
+
+func TestPaymentRepositorySavesRefundBankOperationKeyWithoutChangingStatus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	repository := postgres.NewPaymentRepository(db)
+	ctx := context.Background()
+	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewAuthorizedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440000",
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-1",
+		authorizedAt,
+	)
+	require.NoError(t, err)
+	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
+	require.NoError(t, payment.Capture(
+		"cap_550e8400-e29b-41d4-a716-446655440002",
+		"bok_550e8400-e29b-41d4-a716-446655440003",
+		capturedAt,
+	))
+	require.NoError(t, repository.Create(ctx, payment))
+	require.NoError(t, payment.SetRefundBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440004"))
+
+	require.NoError(t, repository.SaveRefundBankOperationKey(ctx, payment))
+
+	saved, err := repository.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
+	assert.Empty(t, saved.BankRefundID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440004", saved.RefundBankOperationKey())
+	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should stay unchanged")
 }
 
 func TestIdempotencyRepositoryPersistsCompletedDeclinedResult(t *testing.T) {

@@ -84,9 +84,12 @@ type PaymentRepository interface {
 	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
 	UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error
 	UpdateVoidResult(ctx context.Context, payment *domain.Payment) error
+	SaveVoidBankOperationKey(ctx context.Context, payment *domain.Payment) error
 	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
 	UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error
+	SaveCaptureBankOperationKey(ctx context.Context, payment *domain.Payment) error
 	UpdateRefundResult(ctx context.Context, payment *domain.Payment) error
+	SaveRefundBankOperationKey(ctx context.Context, payment *domain.Payment) error
 }
 
 type IdempotencyRepository interface {
@@ -419,7 +422,11 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
+	bankOperationKey, err := s.captureBankOperationKey(ctx, payment)
+	if err != nil {
+		s.releaseIdempotency(ctx, capturePaymentOperation, command.IdempotencyKey)
+		return PaymentResult{}, err
+	}
 	bankResult, err := s.bank.CapturePayment(ctx, BankCaptureRequest{
 		OperationKey:        bankOperationKey,
 		BankAuthorizationID: payment.BankAuthorizationID(),
@@ -513,7 +520,11 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
+	bankOperationKey, err := s.voidBankOperationKey(ctx, payment)
+	if err != nil {
+		s.releaseIdempotency(ctx, voidPaymentOperation, command.IdempotencyKey)
+		return PaymentResult{}, err
+	}
 	bankResult, err := s.bank.VoidPayment(ctx, BankVoidRequest{
 		OperationKey:        bankOperationKey,
 		BankAuthorizationID: payment.BankAuthorizationID(),
@@ -575,7 +586,11 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 	}
 
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
+	bankOperationKey, err := s.refundBankOperationKey(ctx, payment)
+	if err != nil {
+		s.releaseIdempotency(ctx, refundPaymentOperation, command.IdempotencyKey)
+		return PaymentResult{}, err
+	}
 	bankResult, err := s.bank.RefundPayment(ctx, BankRefundRequest{
 		OperationKey:  bankOperationKey,
 		BankCaptureID: payment.BankCaptureID(),
@@ -630,6 +645,45 @@ func (s *PaymentService) claimIdempotency(ctx context.Context, operation string,
 
 func (s *PaymentService) releaseIdempotency(ctx context.Context, operation string, key string) {
 	_ = s.idempotency.Release(ctx, operation, key)
+}
+
+func (s *PaymentService) captureBankOperationKey(ctx context.Context, payment *domain.Payment) (string, error) {
+	if payment.CaptureBankOperationKey() != "" {
+		return payment.CaptureBankOperationKey(), nil
+	}
+	if err := payment.SetCaptureBankOperationKey(s.bankOperationKeys.NewBankOperationKey()); err != nil {
+		return "", asPaymentError(err)
+	}
+	if err := s.paymentRepository.SaveCaptureBankOperationKey(ctx, payment); err != nil {
+		return "", asPaymentError(err)
+	}
+	return payment.CaptureBankOperationKey(), nil
+}
+
+func (s *PaymentService) voidBankOperationKey(ctx context.Context, payment *domain.Payment) (string, error) {
+	if payment.VoidBankOperationKey() != "" {
+		return payment.VoidBankOperationKey(), nil
+	}
+	if err := payment.SetVoidBankOperationKey(s.bankOperationKeys.NewBankOperationKey()); err != nil {
+		return "", asPaymentError(err)
+	}
+	if err := s.paymentRepository.SaveVoidBankOperationKey(ctx, payment); err != nil {
+		return "", asPaymentError(err)
+	}
+	return payment.VoidBankOperationKey(), nil
+}
+
+func (s *PaymentService) refundBankOperationKey(ctx context.Context, payment *domain.Payment) (string, error) {
+	if payment.RefundBankOperationKey() != "" {
+		return payment.RefundBankOperationKey(), nil
+	}
+	if err := payment.SetRefundBankOperationKey(s.bankOperationKeys.NewBankOperationKey()); err != nil {
+		return "", asPaymentError(err)
+	}
+	if err := s.paymentRepository.SaveRefundBankOperationKey(ctx, payment); err != nil {
+		return "", asPaymentError(err)
+	}
+	return payment.RefundBankOperationKey(), nil
 }
 
 func validateCardDetails(card CardDetails) error {

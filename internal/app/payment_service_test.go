@@ -531,6 +531,7 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 	}{
 		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
 		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+		{name: "bank state conflict", err: app.NewPaymentBankStateConflict(errors.New("already voided")), kind: app.PaymentErrorBankStateConflict},
 	}
 
 	for _, tt := range tests {
@@ -552,9 +553,34 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 			assert.Equal(t, authorizedAt, saved.UpdatedAt())
 			assert.Empty(t, saved.BankVoidID())
-			assert.Empty(t, saved.VoidBankOperationKey())
+			assert.Equal(t, "bok_123", saved.VoidBankOperationKey())
 		})
 	}
+}
+
+func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	firstBank := &bankAuthorizerFake{voidErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
+	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
+
+	_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "void-key-1",
+	})
+	require.Error(t, err)
+
+	secondBank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
+	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
+	result, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "void-key-1",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "bok_first", secondBank.voidRequest.OperationKey)
+	assert.Equal(t, "voided", result.Status)
 }
 
 func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
@@ -744,6 +770,7 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 	}{
 		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
 		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+		{name: "bank state conflict", err: app.NewPaymentBankStateConflict(errors.New("already captured")), kind: app.PaymentErrorBankStateConflict},
 	}
 
 	for _, tt := range tests {
@@ -765,9 +792,34 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 			assert.Equal(t, authorizedAt, saved.UpdatedAt())
 			assert.Empty(t, saved.BankCaptureID())
-			assert.Empty(t, saved.CaptureBankOperationKey())
+			assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
 		})
 	}
+}
+
+func TestCapturePaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	firstBank := &bankFake{captureErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
+	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
+
+	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+	require.Error(t, err)
+
+	secondBank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
+	result, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-capture-key-1",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "bok_first", secondBank.captureRequest.OperationKey)
+	assert.Equal(t, "captured", result.Status)
 }
 
 func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
@@ -916,6 +968,7 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 	}{
 		{name: "unavailable", err: app.NewPaymentBankUnavailable(errors.New("connection refused")), kind: app.PaymentErrorBankUnavailable},
 		{name: "timeout", err: app.NewPaymentBankTimeout(context.DeadlineExceeded), kind: app.PaymentErrorBankTimeout},
+		{name: "bank state conflict", err: app.NewPaymentBankStateConflict(errors.New("already refunded")), kind: app.PaymentErrorBankStateConflict},
 	}
 
 	for _, tt := range tests {
@@ -937,9 +990,34 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 			assert.Equal(t, capturedAt, saved.UpdatedAt())
 			assert.Empty(t, saved.BankRefundID())
-			assert.Empty(t, saved.RefundBankOperationKey())
+			assert.Equal(t, "bok_123", saved.RefundBankOperationKey())
 		})
 	}
+}
+
+func TestRefundPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	require.NoError(t, repo.Create(context.Background(), payment))
+	firstBank := &bankFake{refundErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
+	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
+
+	_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	})
+	require.Error(t, err)
+
+	secondBank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 13, 1, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
+	result, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
+		PaymentID:      string(payment.ID()),
+		IdempotencyKey: "public-refund-key-1",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "bok_first", secondBank.refundRequest.OperationKey)
+	assert.Equal(t, "refunded", result.Status)
 }
 
 func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
@@ -1136,15 +1214,35 @@ func validRetryAuthorizationCommand(paymentID string) app.RetryAuthorizationComm
 }
 
 func newPaymentService(repo app.PaymentRepository, bank app.BankClient, now time.Time) *app.PaymentService {
+	return newPaymentServiceWithBankOperationKeys(
+		repo,
+		bank,
+		now,
+		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
+	)
+}
+
+func newPaymentServiceWithBankOperationKeys(repo app.PaymentRepository, bank app.BankClient, now time.Time, bankOperationKeys app.BankOperationKeyGenerator) *app.PaymentService {
 	return app.NewPaymentService(
 		repo,
 		testsupport.NewIdempotencyRepository(),
 		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")},
-		testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"},
+		bankOperationKeys,
 		bank,
 		testsupport.FixedClock{Time: now},
 		"fingerprint-secret",
 	)
+}
+
+type sequenceBankOperationKeyGenerator struct {
+	keys []string
+	next int
+}
+
+func (g *sequenceBankOperationKeyGenerator) NewBankOperationKey() string {
+	key := g.keys[g.next]
+	g.next++
+	return key
 }
 
 type bankAuthorizerFake struct {
