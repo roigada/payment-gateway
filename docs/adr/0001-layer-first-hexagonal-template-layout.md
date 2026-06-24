@@ -1,3 +1,3 @@
-# Layer-first hexagonal template layout
+# Layer-first hexagonal layout
 
-This template uses a small layer-first Go layout: `cmd/taskapi` wires the application, `internal/domain` owns task invariants, `internal/app` owns use cases and ports, and `internal/postgres` and `internal/httpapi` implement adapters. This keeps the starter structure easy to read and copy while preserving dependency direction between domain, application, and adapters.
+The payment gateway uses a small layer-first Go layout: `cmd/payment-gateway` wires the application, `internal/domain` owns Payment invariants and lifecycle transitions, `internal/app` owns use cases and ports, and `internal/postgres`, `internal/httpapi`, `internal/mockbank`, and `internal/uuidgen` implement adapters. This keeps the codebase easy to navigate while preserving dependency direction between domain, application, and adapters.

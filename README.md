@@ -1,6 +1,8 @@
 # Payment Gateway
 
-Payment Gateway is a Go service that will sit between an e-commerce Order Service and a Mock Bank. The current runtime shell starts the service with Payment Gateway configuration, exposes process health and database readiness endpoints, and keeps the existing hexagonal package layout while the payment behavior is implemented in vertical slices.
+Payment Gateway is a Go HTTP service that sits between an e-commerce Order Service and a Mock Bank. It owns Payment records, public idempotency, and the translation between gateway-owned Payment IDs and Mock Bank operation references.
+
+The public API authorizes, retries unknown authorization outcomes, captures, voids, refunds, fetches, and searches Payments. Amounts are expressed in cents, Currency is always `USD`, and successful responses use `payment` or `payments` envelopes.
 
 ## Structure
 
@@ -16,10 +18,21 @@ migrations           plain SQL database migrations
 
 The dependency direction is inward: adapters depend on the application and domain, while the domain does not depend on HTTP, Postgres, UUID libraries, or JSON.
 
+## Payment Model
+
+- A Payment has one gateway-owned Payment ID in the `pay_<uuid>` form.
+- A Payment belongs to one external `order_id` and one external `customer_id`.
+- A Payment has one `amount` in cents and the fixed `USD` currency.
+- Public statuses are `pending`, `authorized`, `declined`, `captured`, `voided`, and `refunded`.
+- `pending` only means the Mock Bank authorization outcome is unknown. It is not used for capture, void, or refund processing.
+- Capture, Void, and Refund are client-driven operations and always apply to the full Payment Amount. Partial capture, partial void, and partial refund are not supported.
+- Bank References, including Mock Bank authorization, capture, void, refund, and operation keys, are stored internally so the gateway can continue provider communication and recover retries. They are never returned in public API responses.
+
 ## Requirements
 
 - Go 1.26.1 or newer
 - Postgres
+- A Mock Bank service reachable through `MOCK_BANK_BASE_URL`
 - A tool for applying plain SQL migrations, such as `migrate`
 - Docker, if using the local Compose environment
 
@@ -43,7 +56,7 @@ export FINGERPRINT_SECRET='local-development-secret'
 export ADDR=':8080'
 ```
 
-The service validates that the Mock Bank base URL is configured, but Mock Bank unavailability does not prevent startup.
+The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
 ## Database
 
@@ -63,13 +76,22 @@ go run ./cmd/payment-gateway
 
 ## Run With Docker Compose
 
-Start the API and Postgres together for local development:
+Start Postgres, apply migrations, and run the API for local development:
 
 ```sh
 docker compose up
 ```
 
-The Compose environment runs Postgres, applies pending SQL migrations, and starts the API on `http://localhost:8080`.
+The Compose environment starts the API on `http://localhost:8080` with:
+
+```text
+ADDR=:8080
+DATABASE_URL=postgres://payment_gateway:payment_gateway@postgres:5432/payment_gateway?sslmode=disable
+MOCK_BANK_BASE_URL=http://mock-bank:9090
+FINGERPRINT_SECRET=local-development-secret
+```
+
+The Mock Bank is an external dependency. When using Compose, run or attach a Mock Bank service named `mock-bank` on the Compose network, or override `MOCK_BANK_BASE_URL` to a reachable Mock Bank URL.
 
 ## Operational Endpoints
 
@@ -83,6 +105,159 @@ Readiness checks Postgres and does not require Mock Bank availability:
 
 ```sh
 curl -i http://localhost:8080/readyz
+```
+
+## Public API
+
+Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
+
+### Authorize a Payment
+
+```sh
+curl -i http://localhost:8080/v1/payments \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: authorize-order-1001' \
+  -d '{
+    "order_id": "order-1001",
+    "customer_id": "customer-501",
+    "amount": 1299,
+    "card": {
+      "number": "4111111111111111",
+      "cvv": "123",
+      "expiry_month": 12,
+      "expiry_year": 2030
+    }
+  }'
+```
+
+Authorized response:
+
+```json
+{
+  "payment": {
+    "id": "pay_550e8400-e29b-41d4-a716-446655440000",
+    "order_id": "order-1001",
+    "customer_id": "customer-501",
+    "amount": 1299,
+    "currency": "USD",
+    "status": "authorized",
+    "created_at": "2026-06-18T12:00:00Z",
+    "updated_at": "2026-06-18T12:00:00Z"
+  }
+}
+```
+
+Authorization can also create a `declined` Payment with `decline_reason`, or a `pending` Payment when the Mock Bank authorization outcome is unknown:
+
+```json
+{
+  "payment": {
+    "id": "pay_550e8400-e29b-41d4-a716-446655440000",
+    "order_id": "order-1001",
+    "customer_id": "customer-501",
+    "amount": 1299,
+    "currency": "USD",
+    "status": "pending",
+    "created_at": "2026-06-18T12:00:00Z",
+    "updated_at": "2026-06-18T12:00:00Z"
+  }
+}
+```
+
+### Retry a Pending Authorization
+
+Authorization retry is only for Payments whose authorization outcome is `pending`.
+
+```sh
+curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: retry-auth-order-1001' \
+  -d '{
+    "card": {
+      "number": "4111111111111111",
+      "cvv": "123",
+      "expiry_month": 12,
+      "expiry_year": 2030
+    }
+  }'
+```
+
+### Capture, Void, and Refund
+
+Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client.
+
+```sh
+curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
+  -H 'Idempotency-Key: capture-order-1001'
+```
+
+```sh
+curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void \
+  -H 'Idempotency-Key: void-order-1001'
+```
+
+```sh
+curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund \
+  -H 'Idempotency-Key: refund-order-1001'
+```
+
+Captured response:
+
+```json
+{
+  "payment": {
+    "id": "pay_550e8400-e29b-41d4-a716-446655440000",
+    "order_id": "order-1001",
+    "customer_id": "customer-501",
+    "amount": 1299,
+    "currency": "USD",
+    "status": "captured",
+    "created_at": "2026-06-18T12:00:00Z",
+    "updated_at": "2026-06-18T12:30:00Z"
+  }
+}
+```
+
+### Fetch and Search Payments
+
+```sh
+curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000
+```
+
+```sh
+curl -i 'http://localhost:8080/v1/payments?order_id=order-1001&customer_id=customer-501&status=authorized'
+```
+
+Search responses use a `payments` envelope:
+
+```json
+{
+  "payments": [
+    {
+      "id": "pay_550e8400-e29b-41d4-a716-446655440000",
+      "order_id": "order-1001",
+      "customer_id": "customer-501",
+      "amount": 1299,
+      "currency": "USD",
+      "status": "authorized",
+      "created_at": "2026-06-18T12:00:00Z",
+      "updated_at": "2026-06-18T12:00:00Z"
+    }
+  ]
+}
+```
+
+### Error Envelope
+
+Errors use an `error` envelope with stable machine-readable codes:
+
+```json
+{
+  "error": {
+    "code": "payment_not_found",
+    "message": "payment was not found"
+  }
+}
 ```
 
 ## Test
