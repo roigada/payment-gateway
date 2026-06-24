@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -138,6 +139,77 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 		}
 	}`, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
+func TestPostPaymentsLogsSafeOperationalContext(t *testing.T) {
+	var logs bytes.Buffer
+	api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+
+	rec := api.request(t, http.MethodPost, "/v1/payments", `{
+		"order_id": "order-1",
+		"customer_id": "customer-1",
+		"amount": 1299,
+		"card": {
+			"number": "4999999999999998",
+			"cvv": "987",
+			"expiry_month": 11,
+			"expiry_year": 2099
+		}
+	}`, map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	entry := decodeLogEntry(t, logs.Bytes())
+	assert.Equal(t, "http request", entry["msg"])
+	assert.Equal(t, "authorize_payment", entry["operation"])
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", entry["payment_id"])
+	assert.Equal(t, "order-1", entry["order_id"])
+	assert.Equal(t, "customer-1", entry["customer_id"])
+	assert.Equal(t, "authorized", entry["payment_status"])
+	assert.Equal(t, float64(http.StatusCreated), entry["status"])
+	assert.Contains(t, entry, "duration_ms")
+
+	logText := logs.String()
+	assert.NotContains(t, logText, "4999999999999998")
+	assert.NotContains(t, logText, "987")
+	assert.NotContains(t, logText, "authorization-fingerprint")
+	assert.NotContains(t, logText, "request-fingerprint")
+	assert.NotContains(t, logText, "bank-operation-key")
+}
+
+func TestPostPaymentAuthorizationRetriesLogsSafeBankErrorContext(t *testing.T) {
+	var logs bytes.Buffer
+	api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api.payments.retryAuthorizationErr = app.NewPaymentBankUnavailable(errors.New("bank payload included card 4999999999999998 cvv 987 request-fingerprint-raw bank-operation-key-raw"))
+
+	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", `{
+		"card": {
+			"number": "4999999999999998",
+			"cvv": "987",
+			"expiry_month": 11,
+			"expiry_year": 2099
+		}
+	}`, map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "retry-key-1",
+	})
+
+	require.Equal(t, http.StatusBadGateway, rec.Code, "body: %s", rec.Body.String())
+	entry := decodeLogEntry(t, logs.Bytes())
+	assert.Equal(t, "ERROR", entry["level"])
+	assert.Equal(t, "retry_authorization", entry["operation"])
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", entry["payment_id"])
+	assert.Equal(t, "bank_unavailable", entry["gateway_error_code"])
+	assert.Equal(t, float64(http.StatusBadGateway), entry["status"])
+
+	logText := logs.String()
+	assert.NotContains(t, logText, "4999999999999998")
+	assert.NotContains(t, logText, "987")
+	assert.NotContains(t, logText, "request-fingerprint-raw")
+	assert.NotContains(t, logText, "bank-operation-key-raw")
 }
 
 func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
@@ -578,13 +650,19 @@ type paymentAPITest struct {
 func newPaymentAPITest(t *testing.T) *paymentAPITest {
 	t.Helper()
 
+	return newPaymentAPITestWithLogger(t, discardLogger())
+}
+
+func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPITest {
+	t.Helper()
+
 	payments := &paymentUseCasesFake{}
 	readiness := &readinessCheckerFake{}
 
 	return &paymentAPITest{
 		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewServer(payments, readiness, discardLogger()),
+		handler:   httpapi.NewServer(payments, readiness, logger),
 	}
 }
 
@@ -628,6 +706,14 @@ func assertErrorResponse(t *testing.T, rec *httptest.ResponseRecorder, code, mes
 	body := decodeJSON[errorResponse](t, rec)
 	assert.Equal(t, code, body.Error.Code)
 	assert.Equal(t, message, body.Error.Message)
+}
+
+func decodeLogEntry(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(data, &entry))
+	return entry
 }
 
 func discardLogger() *slog.Logger {
