@@ -26,7 +26,10 @@ const (
 )
 
 func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "authorize_payment")
+
 	if !isJSONRequest(r) {
+		logGatewayErrorCode(r, errorCodeUnsupportedMediaType)
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
 	}
@@ -44,13 +47,16 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSONRequest(w, r, &request); err != nil {
 		if errors.Is(err, errInvalidJSONBody) {
+			logGatewayErrorCode(r, errorCodeInvalidJSONBody)
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, invalidJSONBodyMessage)
 			return
 		}
 
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
+	addRequestLogAttrs(r, "order_id", request.OrderID, "customer_id", request.CustomerID)
 
 	payment, err := s.payments.AuthorizePayment(r.Context(), app.AuthorizePaymentCommand{
 		OrderID:        request.OrderID,
@@ -65,16 +71,21 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(payment.ID))
 	writeJSON(w, responseStatusOr(payment, http.StatusCreated), newPaymentEnvelope(payment))
 }
 
 func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "retry_authorization")
+	logPaymentID(r, r.PathValue("payment_id"))
+
 	if !isJSONRequest(r) {
+		logGatewayErrorCode(r, errorCodeUnsupportedMediaType)
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
 	}
@@ -89,10 +100,12 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSONRequest(w, r, &request); err != nil {
 		if errors.Is(err, errInvalidJSONBody) {
+			logGatewayErrorCode(r, errorCodeInvalidJSONBody)
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, invalidJSONBodyMessage)
 			return
 		}
 
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
@@ -108,20 +121,26 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "capture_payment")
+	logPaymentID(r, r.PathValue("payment_id"))
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errNonEmptyBody) {
+			logGatewayErrorCode(r, errorCodeInvalidJSONBody)
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
 		}
 
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
@@ -131,20 +150,26 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "void_payment")
+	logPaymentID(r, r.PathValue("payment_id"))
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errNonEmptyBody) {
+			logGatewayErrorCode(r, errorCodeInvalidJSONBody)
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
 		}
 
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
@@ -154,20 +179,26 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "refund_payment")
+	logPaymentID(r, r.PathValue("payment_id"))
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errNonEmptyBody) {
+			logGatewayErrorCode(r, errorCodeInvalidJSONBody)
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
 		}
 
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
@@ -177,35 +208,43 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
 }
 
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "get_payment")
+	logPaymentID(r, r.PathValue("id"))
+
 	payment, err := s.payments.GetPayment(r.Context(), app.GetPaymentQuery{
 		PaymentID: r.PathValue("id"),
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
+	logPaymentResult(r, payment)
 
 	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
 }
 
 func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
+	logPaymentOperation(r, "search_payments")
+
 	query := r.URL.Query()
 	for key := range query {
 		switch key {
 		case "order_id", "customer_id", "status":
 		default:
-			writePaymentServiceError(w, app.NewInvalidPaymentInput("unsupported payment search filter", nil))
+			writePaymentServiceError(w, r, app.NewInvalidPaymentInput("unsupported payment search filter", nil))
 			return
 		}
 	}
+	addRequestLogAttrs(r, "order_id", query.Get("order_id"), "customer_id", query.Get("customer_id"), "payment_status", query.Get("status"))
 
 	payments, err := s.payments.SearchPayments(r.Context(), app.SearchPaymentsQuery{
 		OrderID:    query.Get("order_id"),
@@ -213,7 +252,7 @@ func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
 		Status:     query.Get("status"),
 	})
 	if err != nil {
-		writePaymentServiceError(w, err)
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -298,31 +337,41 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 	})
 }
 
-func writePaymentServiceError(w http.ResponseWriter, err error) {
+func writePaymentServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	kind, ok := app.PaymentErrorKindOf(err)
 	if !ok {
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, http.StatusText(http.StatusInternalServerError))
 		return
 	}
 
 	switch kind {
 	case app.PaymentErrorInvalidInput:
+		logGatewayErrorCode(r, errorCodeValidation)
 		writeError(w, http.StatusUnprocessableEntity, errorCodeValidation, "payment request is invalid")
 	case app.PaymentErrorIdempotencyConflict:
+		logGatewayErrorCode(r, errorCodeIdempotencyConflict)
 		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key was already used with a different request")
 	case app.PaymentErrorIdempotencyInProgress:
+		logGatewayErrorCode(r, errorCodeIdempotencyInProgress)
 		writeError(w, http.StatusConflict, errorCodeIdempotencyInProgress, "idempotency key is already in progress")
 	case app.PaymentErrorInvalidStatusConflict:
+		logGatewayErrorCode(r, errorCodePaymentStatusConflict)
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorNotFound:
+		logGatewayErrorCode(r, errorCodePaymentNotFound)
 		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, "payment was not found")
 	case app.PaymentErrorBankStateConflict:
+		logGatewayErrorCode(r, errorCodeBankStateConflict)
 		writeError(w, http.StatusBadGateway, errorCodeBankStateConflict, "bank state conflicts with local payment state")
 	case app.PaymentErrorBankUnavailable:
+		logGatewayErrorCode(r, errorCodeBankUnavailable)
 		writeError(w, http.StatusBadGateway, errorCodeBankUnavailable, "bank is unavailable")
 	case app.PaymentErrorBankTimeout:
+		logGatewayErrorCode(r, errorCodeBankTimeout)
 		writeError(w, http.StatusGatewayTimeout, errorCodeBankTimeout, "bank request timed out")
 	default:
+		logGatewayErrorCode(r, errorCodeInternalServer)
 		writeError(w, http.StatusInternalServerError, errorCodeInternalServer, "internal server error")
 	}
 }
