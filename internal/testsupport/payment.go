@@ -151,24 +151,47 @@ func (c FixedClock) Now() time.Time {
 }
 
 type IdempotencyRepository struct {
-	records map[string]app.IdempotencyRecord
+	records map[string]idempotencyEntry
 }
 
 func NewIdempotencyRepository() *IdempotencyRepository {
-	return &IdempotencyRepository{records: make(map[string]app.IdempotencyRecord)}
+	return &IdempotencyRepository{records: make(map[string]idempotencyEntry)}
 }
 
-func (r *IdempotencyRepository) FindCompleted(_ context.Context, operation string, key string) (app.IdempotencyRecord, bool, error) {
-	record, ok := r.records[idempotencyMapKey(operation, key)]
+func (r *IdempotencyRepository) Claim(_ context.Context, operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus, error) {
+	mapKey := idempotencyMapKey(operation, key)
+	entry, ok := r.records[mapKey]
 	if !ok {
-		return app.IdempotencyRecord{}, false, nil
+		record := app.IdempotencyRecord{
+			Operation:          operation,
+			Key:                key,
+			RequestFingerprint: requestFingerprint,
+		}
+		r.records[mapKey] = idempotencyEntry{
+			status: app.IdempotencyInProgress,
+			record: cloneIdempotencyRecord(record),
+		}
+		return record, app.IdempotencyClaimed, nil
 	}
-	return cloneIdempotencyRecord(record), true, nil
+	return cloneIdempotencyRecord(entry.record), entry.status, nil
 }
 
-func (r *IdempotencyRepository) SaveCompleted(_ context.Context, record app.IdempotencyRecord) error {
-	r.records[idempotencyMapKey(record.Operation, record.Key)] = cloneIdempotencyRecord(record)
+func (r *IdempotencyRepository) Complete(_ context.Context, record app.IdempotencyRecord) error {
+	r.records[idempotencyMapKey(record.Operation, record.Key)] = idempotencyEntry{
+		status: app.IdempotencyCompleted,
+		record: cloneIdempotencyRecord(record),
+	}
 	return nil
+}
+
+func (r *IdempotencyRepository) Release(_ context.Context, operation string, key string) error {
+	delete(r.records, idempotencyMapKey(operation, key))
+	return nil
+}
+
+type idempotencyEntry struct {
+	status app.IdempotencyClaimStatus
+	record app.IdempotencyRecord
 }
 
 func idempotencyMapKey(operation string, key string) string {
@@ -181,6 +204,7 @@ func cloneIdempotencyRecord(record app.IdempotencyRecord) app.IdempotencyRecord 
 		Key:                record.Key,
 		RequestFingerprint: record.RequestFingerprint,
 		Result:             record.Result,
+		ResponseStatus:     record.ResponseStatus,
 	}
 }
 

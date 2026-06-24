@@ -8,6 +8,7 @@ const (
 	PaymentErrorInvalidInput          PaymentErrorKind = "invalid_input"
 	PaymentErrorNotFound              PaymentErrorKind = "not_found"
 	PaymentErrorIdempotencyConflict   PaymentErrorKind = "idempotency_conflict"
+	PaymentErrorIdempotencyInProgress PaymentErrorKind = "idempotency_in_progress"
 	PaymentErrorInvalidStatusConflict PaymentErrorKind = "invalid_status_conflict"
 	PaymentErrorBankUnavailable       PaymentErrorKind = "bank_unavailable"
 	PaymentErrorBankTimeout           PaymentErrorKind = "bank_timeout"
@@ -40,6 +41,14 @@ func NewPaymentIdempotencyConflict(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorIdempotencyConflict,
 		message: "idempotency key was already used with a different request",
+		cause:   cause,
+	}
+}
+
+func NewPaymentIdempotencyInProgress(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorIdempotencyInProgress,
+		message: "idempotency key is already in progress",
 		cause:   cause,
 	}
 }
