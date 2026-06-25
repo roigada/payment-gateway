@@ -10,6 +10,7 @@ const (
 	PaymentErrorIdempotencyConflict   PaymentErrorKind = "idempotency_conflict"
 	PaymentErrorIdempotencyInProgress PaymentErrorKind = "idempotency_in_progress"
 	PaymentErrorInvalidStatusConflict PaymentErrorKind = "invalid_status_conflict"
+	PaymentErrorAuthorizationExpired  PaymentErrorKind = "authorization_expired"
 	PaymentErrorBankStateConflict     PaymentErrorKind = "bank_state_conflict"
 	PaymentErrorBankUnavailable       PaymentErrorKind = "bank_unavailable"
 	PaymentErrorBankTimeout           PaymentErrorKind = "bank_timeout"
@@ -58,6 +59,14 @@ func NewPaymentInvalidStatusConflict(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorInvalidStatusConflict,
 		message: "payment status does not allow this operation",
+		cause:   cause,
+	}
+}
+
+func NewPaymentAuthorizationExpired(cause error) error {
+	return &PaymentError{
+		kind:    PaymentErrorAuthorizationExpired,
+		message: "authorization expired",
 		cause:   cause,
 	}
 }

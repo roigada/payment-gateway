@@ -55,7 +55,10 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, app.BankAuthorizationResult{BankAuthorizationID: "auth_550e8400-e29b-41d4-a716-446655440000"}, result)
+	assert.Equal(t, app.BankAuthorizationResult{
+		BankAuthorizationID:    "auth_550e8400-e29b-41d4-a716-446655440000",
+		AuthorizationExpiresAt: time.Date(2026, 6, 18, 16, 0, 0, 0, time.UTC),
+	}, result)
 	assert.Equal(t, "/api/v1/authorizations", gotPath)
 	assert.Equal(t, "bok_123", gotIdempotencyKey)
 	assert.Equal(t, map[string]any{
@@ -301,6 +304,22 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
+func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"authorization_expired","message":"authorization expired"}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+}
+
 func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)
@@ -406,6 +425,22 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
 		})
 	}
+}
+
+func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"authorization_expired","message":"authorization expired"}`))
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+
+	_, err = client.VoidPayment(context.Background(), validVoidRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
 func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {

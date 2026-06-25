@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/domain"
@@ -28,6 +29,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     currency,
 		     status,
 		     bank_authorization_id,
+		     authorization_expires_at,
 		     authorization_bank_operation_key,
 		     authorization_card_fingerprint,
 		     bank_capture_id,
@@ -40,7 +42,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		     created_at,
 		     updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		payment.ID(),
 		payment.OrderID(),
 		payment.CustomerID(),
@@ -48,6 +50,7 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 		payment.Currency(),
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
+		nullableTime(payment.AuthorizationExpiresAt()),
 		payment.AuthorizationBankOperationKey(),
 		payment.AuthorizationCardFingerprint(),
 		nullableString(payment.BankCaptureID()),
@@ -152,6 +155,68 @@ func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domai
 	return nil
 }
 
+func (r *PaymentRepository) UpdateExpiredResult(ctx context.Context, payment *domain.Payment) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        capture_bank_operation_key = NULL,
+		        void_bank_operation_key = NULL,
+		        updated_at = $3
+		  WHERE id = $1
+		    AND status = $4`,
+		payment.ID(),
+		payment.Status(),
+		payment.UpdatedAt(),
+		domain.PaymentStatusAuthorized,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := r.FindByID(ctx, payment.ID())
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return nil
+}
+
+func (r *PaymentRepository) RefreshExpiredAuthorizations(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $4,
+		        capture_bank_operation_key = NULL,
+		        void_bank_operation_key = NULL,
+		        updated_at = $3
+		  WHERE id IN (
+		        SELECT id
+		          FROM payments
+		         WHERE status = $5
+		           AND authorization_expires_at <= $3
+		           AND capture_bank_operation_key IS NULL
+		           AND void_bank_operation_key IS NULL
+		           AND ($1 = '' OR order_id = $1)
+		           AND ($2 = '' OR customer_id = $2)
+		  )`,
+		query.OrderID,
+		query.CustomerID,
+		now,
+		domain.PaymentStatusExpired,
+		domain.PaymentStatusAuthorized,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
 func (r *PaymentRepository) SaveVoidBankOperationKey(ctx context.Context, payment *domain.Payment) error {
 	result, err := r.db.ExecContext(
 		ctx,
@@ -175,13 +240,15 @@ func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payme
 		`UPDATE payments
 		    SET status = $2,
 		        bank_authorization_id = $3,
-		        decline_reason = $4,
-		        updated_at = $5
+		        authorization_expires_at = $4,
+		        decline_reason = $5,
+		        updated_at = $6
 		  WHERE id = $1
-		    AND status = $6`,
+		    AND status = $7`,
 		payment.ID(),
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
+		nullableTime(payment.AuthorizationExpiresAt()),
 		nullableString(string(payment.DeclineReason())),
 		payment.UpdatedAt(),
 		domain.PaymentStatusPending,
@@ -263,6 +330,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		currency                      string
 		status                        domain.PaymentStatus
 		bankAuthorizationID           sql.NullString
+		authorizationExpiresAt        sql.NullTime
 		authorizationBankOperationKey string
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
@@ -283,6 +351,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		        currency,
 		        status,
 		        bank_authorization_id,
+		        authorization_expires_at,
 		        authorization_bank_operation_key,
 		        authorization_card_fingerprint,
 		        bank_capture_id,
@@ -304,6 +373,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		&currency,
 		&status,
 		&bankAuthorizationID,
+		&authorizationExpiresAt,
 		&authorizationBankOperationKey,
 		&authorizationCardFingerprint,
 		&bankCaptureID,
@@ -331,6 +401,7 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (
 		currency,
 		status,
 		nullStringValue(bankAuthorizationID),
+		nullTimeValue(authorizationExpiresAt),
 		authorizationBankOperationKey,
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
@@ -359,6 +430,7 @@ func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPayments
 		        currency,
 		        status,
 		        bank_authorization_id,
+		        authorization_expires_at,
 		        authorization_bank_operation_key,
 		        authorization_card_fingerprint,
 		        bank_capture_id,
@@ -412,6 +484,7 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		currency                      string
 		status                        domain.PaymentStatus
 		bankAuthorizationID           sql.NullString
+		authorizationExpiresAt        sql.NullTime
 		authorizationBankOperationKey string
 		authorizationCardFingerprint  string
 		bankCaptureID                 sql.NullString
@@ -432,6 +505,7 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		&currency,
 		&status,
 		&bankAuthorizationID,
+		&authorizationExpiresAt,
 		&authorizationBankOperationKey,
 		&authorizationCardFingerprint,
 		&bankCaptureID,
@@ -456,6 +530,7 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		currency,
 		status,
 		nullStringValue(bankAuthorizationID),
+		nullTimeValue(authorizationExpiresAt),
 		authorizationBankOperationKey,
 		authorizationCardFingerprint,
 		nullStringValue(bankCaptureID),
@@ -484,16 +559,18 @@ func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payme
 		`UPDATE payments
 		    SET status = $2,
 		        bank_authorization_id = $3,
-		        authorization_bank_operation_key = $4,
-		        authorization_card_fingerprint = $5,
-		        bank_capture_id = $6,
-		        capture_bank_operation_key = $7,
-		        decline_reason = $8,
-		        updated_at = $9
+		        authorization_expires_at = $4,
+		        authorization_bank_operation_key = $5,
+		        authorization_card_fingerprint = $6,
+		        bank_capture_id = $7,
+		        capture_bank_operation_key = $8,
+		        decline_reason = $9,
+		        updated_at = $10
 		  WHERE id = $1`,
 		payment.ID(),
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
+		nullableTime(payment.AuthorizationExpiresAt()),
 		payment.AuthorizationBankOperationKey(),
 		payment.AuthorizationCardFingerprint(),
 		nullableString(payment.BankCaptureID()),
@@ -534,6 +611,20 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func nullTimeValue(value sql.NullTime) time.Time {
+	if !value.Valid {
+		return time.Time{}
+	}
+	return value.Time
 }
 
 func nullStringValue(value sql.NullString) string {

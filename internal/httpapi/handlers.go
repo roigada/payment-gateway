@@ -269,15 +269,16 @@ func isJSONRequest(r *http.Request) bool {
 }
 
 type paymentPayload struct {
-	ID            string `json:"id"`
-	OrderID       string `json:"order_id"`
-	CustomerID    string `json:"customer_id"`
-	AmountCents   int64  `json:"amount"`
-	Currency      string `json:"currency"`
-	Status        string `json:"status"`
-	DeclineReason string `json:"decline_reason,omitempty"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	ID                     string `json:"id"`
+	OrderID                string `json:"order_id"`
+	CustomerID             string `json:"customer_id"`
+	AmountCents            int64  `json:"amount"`
+	Currency               string `json:"currency"`
+	Status                 string `json:"status"`
+	DeclineReason          string `json:"decline_reason,omitempty"`
+	AuthorizationExpiresAt string `json:"authorization_expires_at,omitempty"`
+	CreatedAt              string `json:"created_at"`
+	UpdatedAt              string `json:"updated_at"`
 }
 
 type paymentEnvelope struct {
@@ -289,17 +290,22 @@ type paymentsEnvelope struct {
 }
 
 func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
+	authorizationExpiresAt := ""
+	if !payment.AuthorizationExpiresAt.IsZero() {
+		authorizationExpiresAt = payment.AuthorizationExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	return paymentEnvelope{
 		Payment: paymentPayload{
-			ID:            payment.ID,
-			OrderID:       payment.OrderID,
-			CustomerID:    payment.CustomerID,
-			AmountCents:   payment.AmountCents,
-			Currency:      payment.Currency,
-			Status:        payment.Status,
-			DeclineReason: payment.DeclineReason,
-			CreatedAt:     payment.CreatedAt.UTC().Format(time.RFC3339Nano),
-			UpdatedAt:     payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			ID:                     payment.ID,
+			OrderID:                payment.OrderID,
+			CustomerID:             payment.CustomerID,
+			AmountCents:            payment.AmountCents,
+			Currency:               payment.Currency,
+			Status:                 payment.Status,
+			DeclineReason:          payment.DeclineReason,
+			AuthorizationExpiresAt: authorizationExpiresAt,
+			CreatedAt:              payment.CreatedAt.UTC().Format(time.RFC3339Nano),
+			UpdatedAt:              payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		},
 	}
 }
@@ -356,6 +362,9 @@ func writePaymentServiceError(w http.ResponseWriter, r *http.Request, err error)
 		logGatewayErrorCode(r, errorCodeIdempotencyInProgress)
 		writeError(w, http.StatusConflict, errorCodeIdempotencyInProgress, "idempotency key is already in progress")
 	case app.PaymentErrorInvalidStatusConflict:
+		logGatewayErrorCode(r, errorCodePaymentStatusConflict)
+		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
+	case app.PaymentErrorAuthorizationExpired:
 		logGatewayErrorCode(r, errorCodePaymentStatusConflict)
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorNotFound:

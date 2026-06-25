@@ -23,8 +23,9 @@ The dependency direction is inward: adapters depend on the application and domai
 - A Payment has one gateway-owned Payment ID in the `pay_<uuid>` form.
 - A Payment belongs to one external `order_id` and one external `customer_id`.
 - A Payment has one `amount` in cents and the fixed `USD` currency.
-- Public statuses are `pending`, `authorized`, `declined`, `captured`, `voided`, and `refunded`.
+- Public statuses are `pending`, `authorized`, `expired`, `declined`, `captured`, `voided`, and `refunded`.
 - `pending` only means the Mock Bank authorization outcome is unknown. It is not used for capture, void, or refund processing.
+- `expired` means an approved authorization can no longer be captured or voided. Authorized responses include `authorization_expires_at`.
 - Capture, Void, and Refund are client-driven operations and always apply to the full Payment Amount. Partial capture, partial void, and partial refund are not supported.
 - Bank References, including Mock Bank authorization, capture, void, refund, and operation keys, are stored internally so the gateway can continue provider communication and recover retries. They are never returned in public API responses.
 
@@ -141,6 +142,7 @@ Authorized response:
     "amount": 1299,
     "currency": "USD",
     "status": "authorized",
+    "authorization_expires_at": "2026-06-18T13:00:00Z",
     "created_at": "2026-06-18T12:00:00Z",
     "updated_at": "2026-06-18T12:00:00Z"
   }
@@ -184,7 +186,7 @@ curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-4466554400
 
 ### Capture, Void, and Refund
 
-Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client.
+Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client. Capture and Void are rejected after `authorization_expires_at`.
 
 ```sh
 curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
@@ -212,6 +214,7 @@ Captured response:
     "amount": 1299,
     "currency": "USD",
     "status": "captured",
+    "authorization_expires_at": "2026-06-18T13:00:00Z",
     "created_at": "2026-06-18T12:00:00Z",
     "updated_at": "2026-06-18T12:30:00Z"
   }
@@ -240,6 +243,7 @@ Search responses use a `payments` envelope:
       "amount": 1299,
       "currency": "USD",
       "status": "authorized",
+      "authorization_expires_at": "2026-06-18T13:00:00Z",
       "created_at": "2026-06-18T12:00:00Z",
       "updated_at": "2026-06-18T12:00:00Z"
     }

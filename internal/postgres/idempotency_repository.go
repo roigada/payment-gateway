@@ -141,28 +141,30 @@ func isUniqueViolation(err error) bool {
 }
 
 type paymentResultSnapshot struct {
-	ID            string    `json:"id"`
-	OrderID       string    `json:"order_id"`
-	CustomerID    string    `json:"customer_id"`
-	AmountCents   int64     `json:"amount"`
-	Currency      string    `json:"currency"`
-	Status        string    `json:"status"`
-	DeclineReason string    `json:"decline_reason,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                     string    `json:"id"`
+	OrderID                string    `json:"order_id"`
+	CustomerID             string    `json:"customer_id"`
+	AmountCents            int64     `json:"amount"`
+	Currency               string    `json:"currency"`
+	Status                 string    `json:"status"`
+	DeclineReason          string    `json:"decline_reason,omitempty"`
+	AuthorizationExpiresAt time.Time `json:"authorization_expires_at,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 func encodePaymentResultSnapshot(result app.PaymentResult) ([]byte, error) {
 	return json.Marshal(paymentResultSnapshot{
-		ID:            result.ID,
-		OrderID:       result.OrderID,
-		CustomerID:    result.CustomerID,
-		AmountCents:   result.AmountCents,
-		Currency:      result.Currency,
-		Status:        result.Status,
-		DeclineReason: result.DeclineReason,
-		CreatedAt:     result.CreatedAt,
-		UpdatedAt:     result.UpdatedAt,
+		ID:                     result.ID,
+		OrderID:                result.OrderID,
+		CustomerID:             result.CustomerID,
+		AmountCents:            result.AmountCents,
+		Currency:               result.Currency,
+		Status:                 result.Status,
+		DeclineReason:          result.DeclineReason,
+		AuthorizationExpiresAt: result.AuthorizationExpiresAt,
+		CreatedAt:              result.CreatedAt,
+		UpdatedAt:              result.UpdatedAt,
 	})
 }
 
@@ -173,14 +175,15 @@ func decodePaymentResultSnapshot(data []byte) (app.PaymentResult, error) {
 	}
 
 	return app.PaymentResult{
-		ID:            snapshot.ID,
-		OrderID:       snapshot.OrderID,
-		CustomerID:    snapshot.CustomerID,
-		AmountCents:   snapshot.AmountCents,
-		Currency:      snapshot.Currency,
-		Status:        snapshot.Status,
-		DeclineReason: snapshot.DeclineReason,
-		CreatedAt:     snapshot.CreatedAt,
-		UpdatedAt:     snapshot.UpdatedAt,
+		ID:                     snapshot.ID,
+		OrderID:                snapshot.OrderID,
+		CustomerID:             snapshot.CustomerID,
+		AmountCents:            snapshot.AmountCents,
+		Currency:               snapshot.Currency,
+		Status:                 snapshot.Status,
+		DeclineReason:          snapshot.DeclineReason,
+		AuthorizationExpiresAt: snapshot.AuthorizationExpiresAt,
+		CreatedAt:              snapshot.CreatedAt,
+		UpdatedAt:              snapshot.UpdatedAt,
 	}, nil
 }

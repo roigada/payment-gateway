@@ -32,6 +32,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		now.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		now,
@@ -49,6 +50,7 @@ func TestPaymentRepositoryPersistsAuthorizedPayment(t *testing.T) {
 	assert.Equal(t, domain.CurrencyUSD, saved.Currency())
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
+	assert.True(t, saved.AuthorizationExpiresAt().Equal(now.Add(time.Hour)), "authorization_expires_at should round-trip as the same instant")
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", saved.AuthorizationBankOperationKey())
 	assert.Equal(t, "fingerprint-1", saved.AuthorizationCardFingerprint())
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
@@ -113,7 +115,7 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, repository.Create(ctx, payment))
 
-	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Minute)))
+	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
 	require.NoError(t, repository.UpdateAuthorizationResult(ctx, payment))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
@@ -140,6 +142,7 @@ func TestPaymentRepositoryUpdatesVoidedPayment(t *testing.T) {
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		now.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		now,
@@ -178,6 +181,7 @@ func TestPaymentRepositorySavesVoidBankOperationKeyWithoutChangingStatus(t *test
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		now.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		now,
@@ -248,6 +252,7 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		authorizedAt.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		authorizedAt,
@@ -289,6 +294,7 @@ func TestPaymentRepositorySavesCaptureBankOperationKeyWithoutChangingStatus(t *t
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		authorizedAt.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		authorizedAt,
@@ -322,6 +328,7 @@ func TestPaymentRepositoryUpdatesRefundedPayment(t *testing.T) {
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		authorizedAt.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		authorizedAt,
@@ -369,6 +376,7 @@ func TestPaymentRepositorySavesRefundBankOperationKeyWithoutChangingStatus(t *te
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		authorizedAt.Add(time.Hour),
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		authorizedAt,
@@ -488,6 +496,7 @@ func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID
 			customerID,
 			1299,
 			fmt.Sprintf("auth_00000000-0000-4000-8000-%012d", sequence),
+			now.Add(time.Hour),
 			bankOperationKey,
 			cardFingerprint,
 			now,
@@ -556,12 +565,6 @@ func newTestDatabase(t *testing.T) *sql.DB {
 		tcpostgres.WithPassword("payment_gateway"),
 		tcpostgres.WithInitScripts(
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
-			filepath.Join("..", "..", "migrations", "000002_add_declined_payments_and_idempotency.up.sql"),
-			filepath.Join("..", "..", "migrations", "000003_add_pending_authorization_retry.up.sql"),
-			filepath.Join("..", "..", "migrations", "000004_add_captured_payments.up.sql"),
-			filepath.Join("..", "..", "migrations", "000005_add_voided_payments.up.sql"),
-			filepath.Join("..", "..", "migrations", "000006_add_refunded_payments.up.sql"),
-			filepath.Join("..", "..", "migrations", "000007_harden_idempotency_records.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)
