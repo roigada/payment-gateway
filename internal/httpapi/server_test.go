@@ -57,6 +57,32 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
+	api := newPaymentAPITest(t)
+	payment := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	payment.AuthorizationExpiresAt = time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
+	api.payments.authorizePaymentResult = payment
+	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+		"Content-Type":    "application/json",
+		"Idempotency-Key": "public-key-1",
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.JSONEq(t, `{
+		"payment": {
+			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
+			"order_id": "order-1",
+			"customer_id": "customer-1",
+			"amount": 1299,
+			"currency": "USD",
+			"status": "authorized",
+			"authorization_expires_at": "2026-06-18T13:00:00Z",
+			"created_at": "2026-06-18T12:00:00Z",
+			"updated_at": "2026-06-18T12:00:00Z"
+		}
+	}`, rec.Body.String())
+}
+
 func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")

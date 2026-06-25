@@ -49,6 +49,41 @@ func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment
 	return r.update(payment)
 }
 
+func (r *PaymentRepository) UpdateExpiredResult(_ context.Context, payment *domain.Payment) error {
+	existing, ok := r.payments[payment.ID()]
+	if !ok {
+		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	}
+	if existing.Status() != domain.PaymentStatusAuthorized {
+		return app.NewPaymentInvalidStatusConflict(nil)
+	}
+	return r.update(payment)
+}
+
+func (r *PaymentRepository) RefreshExpiredAuthorizations(_ context.Context, query app.SearchPaymentsQuery, now time.Time) error {
+	for _, payment := range r.payments {
+		if query.OrderID != "" && payment.OrderID() != query.OrderID {
+			continue
+		}
+		if query.CustomerID != "" && payment.CustomerID() != query.CustomerID {
+			continue
+		}
+		if !payment.AuthorizationExpired(now) {
+			continue
+		}
+		if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
+			continue
+		}
+		if err := payment.MarkExpired(now); err != nil {
+			return err
+		}
+		if err := r.update(payment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *PaymentRepository) UpdateVoidResult(_ context.Context, payment *domain.Payment) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
@@ -250,6 +285,7 @@ func clonePayment(payment *domain.Payment) (*domain.Payment, error) {
 		payment.Currency(),
 		payment.Status(),
 		payment.BankAuthorizationID(),
+		payment.AuthorizationExpiresAt(),
 		payment.AuthorizationBankOperationKey(),
 		payment.AuthorizationCardFingerprint(),
 		payment.BankCaptureID(),

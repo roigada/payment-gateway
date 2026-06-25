@@ -17,8 +17,12 @@ A **Payment** whose authorization outcome is not yet known because the **Mock Ba
 _Avoid_: Failed, processing
 
 **Authorized**:
-A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and can be captured or voided.
+A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and can still be captured or voided.
 _Avoid_: Approved, held
+
+**Expired**:
+A **Payment** whose authorization was approved by the **Mock Bank** but can no longer be captured or voided because its authorization hold expired.
+_Avoid_: Timed out, stale, failed
 
 **Declined**:
 A **Payment** whose authorization was refused by the **Mock Bank**.
@@ -72,6 +76,10 @@ _Avoid_: Card network, issuer, acquirer
 An identity assigned by the **Mock Bank** to an approved authorization. A Bank Authorization ID is used to continue authorization-related communication with the **Mock Bank**, but it is not a **Payment ID**.
 _Avoid_: Bank Reference, Payment ID, public ID
 
+**Authorization Expiration Time**:
+The moment after which an approved authorization for a **Payment** can no longer be captured or voided.
+_Avoid_: Timeout, deadline, stale time
+
 **Authorize**:
 To ask the **Mock Bank** to reserve the full **Amount** for a **Payment**.
 _Avoid_: Charge, pay
@@ -117,4 +125,4 @@ _Avoid_: Idempotency Key, request ID
 - A **Payment** has exactly one **Currency**.
 - A **Payment** has exactly one **Payment Status**.
 - Multiple **Payments** may reference the same **Order ID**.
-- Public **Payment Status** values are `pending`, `authorized`, `declined`, `captured`, `voided`, and `refunded`.
+- Public **Payment Status** values are `pending`, `authorized`, `expired`, `declined`, `captured`, `voided`, and `refunded`.

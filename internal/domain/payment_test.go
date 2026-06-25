@@ -11,6 +11,7 @@ import (
 
 func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Hour)
 
 	payment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
@@ -18,6 +19,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *tes
 		" customer-1 ",
 		1299,
 		" bank-auth-id-1 ",
+		expiresAt,
 		" bok-1 ",
 		" fingerprint-1 ",
 		now,
@@ -32,6 +34,7 @@ func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *tes
 	assert.Equal(t, domain.PaymentStatusAuthorized, payment.Status())
 	assert.Empty(t, payment.DeclineReason())
 	assert.Equal(t, "bank-auth-id-1", payment.BankAuthorizationID())
+	assert.Equal(t, expiresAt, payment.AuthorizationExpiresAt())
 	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
 	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
 	assert.Equal(t, now, payment.CreatedAt())
@@ -92,12 +95,14 @@ func TestNewDeclinedPaymentCreatesPaymentWithGatewayDeclineReason(t *testing.T) 
 
 func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	expiresAt := authorizedAt.Add(time.Hour)
 	payment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		expiresAt,
 		"bok_550e8400-e29b-41d4-a716-446655440001",
 		"fingerprint-1",
 		authorizedAt,
@@ -113,6 +118,7 @@ func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
 
 	assert.Equal(t, domain.PaymentStatusCaptured, payment.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", payment.BankAuthorizationID())
+	assert.Equal(t, expiresAt, payment.AuthorizationExpiresAt())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", payment.AuthorizationBankOperationKey())
 	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", payment.BankCaptureID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", payment.CaptureBankOperationKey())
@@ -144,6 +150,10 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 				bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
 				declineReason = ""
 			}
+			authorizationExpiresAt := time.Time{}
+			if bankAuthorizationID != "" {
+				authorizationExpiresAt = authorizedAt.Add(time.Hour)
+			}
 			payment, err := domain.LoadPayment(
 				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 				"order-1",
@@ -152,6 +162,7 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 				domain.CurrencyUSD,
 				tt.status,
 				bankAuthorizationID,
+				authorizationExpiresAt,
 				"bok_550e8400-e29b-41d4-a716-446655440001",
 				"fingerprint-1",
 				"",
@@ -175,12 +186,14 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 
 func TestRefundCapturedPaymentStoresPrivateRefundFields(t *testing.T) {
 	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	expiresAt := createdAt.Add(time.Hour)
 	payment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		expiresAt,
 		"bok-auth",
 		"fingerprint-1",
 		createdAt,
@@ -238,6 +251,7 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 					domain.CurrencyUSD,
 					tt.status,
 					"auth_550e8400-e29b-41d4-a716-446655440000",
+					capturedAt.Add(time.Hour),
 					"bok-auth",
 					"fingerprint-1",
 					"cap_550e8400-e29b-41d4-a716-446655440001",
@@ -257,6 +271,7 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 					"customer-1",
 					1299,
 					"auth_550e8400-e29b-41d4-a716-446655440000",
+					capturedAt.Add(time.Hour),
 					"bok-auth",
 					"fingerprint-1",
 					capturedAt,
@@ -273,12 +288,14 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 
 func TestPaymentVoidMovesAuthorizedPaymentToVoided(t *testing.T) {
 	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	expiresAt := createdAt.Add(2 * time.Hour)
 	payment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
 		1299,
 		"auth_550e8400-e29b-41d4-a716-446655440000",
+		expiresAt,
 		"bok-auth",
 		"fingerprint-1",
 		createdAt,
@@ -316,6 +333,7 @@ func TestPaymentVoidRejectsInvalidTransition(t *testing.T) {
 
 func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Hour)
 
 	tests := []struct {
 		name                string
@@ -324,27 +342,29 @@ func TestNewAuthorizedPaymentRejectsInvalidValues(t *testing.T) {
 		customer            string
 		amount              int64
 		bankAuthorizationID string
+		expiresAt           time.Time
 		bok                 string
 		fingerprint         string
 		now                 time.Time
 		wantErr             error
 	}{
-		{name: "payment id without prefix", id: "550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id without uuid", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id with undashed uuid", id: "pay_550e8400e29b41d4a716446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id with urn uuid", id: "pay_urn:uuid:550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "order id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidOrderID},
-		{name: "customer id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidCustomerID},
-		{name: "amount", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAmount},
-		{name: "bank authorization id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
-		{name: "bank operation key", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "authorization card fingerprint", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
-		{name: "timestamp", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{name: "payment id without prefix", id: "550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id without uuid", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id with undashed uuid", id: "pay_550e8400e29b41d4a716446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "payment id with urn uuid", id: "pay_urn:uuid:550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
+		{name: "order id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidOrderID},
+		{name: "customer id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidCustomerID},
+		{name: "amount", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAmount},
+		{name: "bank authorization id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
+		{name: "authorization expiration", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: time.Time{}, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAuthorizationExpirationTime},
+		{name: "bank operation key", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
+		{name: "authorization card fingerprint", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
+		{name: "timestamp", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := domain.NewAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankAuthorizationID, tt.bok, tt.fingerprint, tt.now)
+			_, err := domain.NewAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankAuthorizationID, tt.expiresAt, tt.bok, tt.fingerprint, tt.now)
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}

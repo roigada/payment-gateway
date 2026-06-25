@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/domain"
@@ -70,8 +71,11 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 		if strings.TrimSpace(payload.AuthorizationID) == "" {
 			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization response missing authorization id"))
 		}
+		if payload.ExpiresAt.IsZero() {
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization response missing expires_at"))
+		}
 
-		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID}, nil
+		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID, AuthorizationExpiresAt: payload.ExpiresAt}, nil
 	case http.StatusBadRequest:
 		reason, err := decodeBadRequestInvalidInputReason(response)
 		if err != nil {
@@ -125,9 +129,12 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 
 		return app.BankCaptureResult{BankCaptureID: payload.CaptureID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, err := decodeBadRequestReason(response)
+		reason, conflict, expired, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if expired {
+			return app.BankCaptureResult{}, app.NewPaymentAuthorizationExpired(nil)
 		}
 		if conflict {
 			return app.BankCaptureResult{}, app.NewPaymentBankStateConflict(nil)
@@ -177,9 +184,12 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 
 		return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, err := decodeBadRequestReason(response)
+		reason, conflict, expired, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+		}
+		if expired {
+			return app.BankVoidResult{}, app.NewPaymentAuthorizationExpired(nil)
 		}
 		if conflict {
 			return app.BankVoidResult{}, app.NewPaymentBankStateConflict(nil)
@@ -230,7 +240,7 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 
 		return app.BankRefundResult{BankRefundID: payload.RefundID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, err := decodeBadRequestReason(response)
+		reason, conflict, _, err := decodeBadRequestReason(response)
 		if err != nil {
 			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
 		}
@@ -262,7 +272,8 @@ type authorizationRequest struct {
 }
 
 type authorizationResponse struct {
-	AuthorizationID string `json:"authorization_id"`
+	AuthorizationID string    `json:"authorization_id"`
+	ExpiresAt       time.Time `json:"expires_at"`
 }
 
 type captureRequest struct {
@@ -296,17 +307,17 @@ type authorizationErrorResponse struct {
 }
 
 func decodeBadRequestInvalidInputReason(response *http.Response) (string, error) {
-	reason, _, err := decodeBadRequestReason(response)
+	reason, _, _, err := decodeBadRequestReason(response)
 	return reason, err
 }
 
-func decodeBadRequestReason(response *http.Response) (string, bool, error) {
+func decodeBadRequestReason(response *http.Response) (string, bool, bool, error) {
 	var payload authorizationErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 
-	return invalidInputReasonForBadRequest(payload.Error), isBankStateConflict(payload.Error), nil
+	return invalidInputReasonForBadRequest(payload.Error), isBankStateConflict(payload.Error), isAuthorizationExpired(payload.Error), nil
 }
 
 func invalidInputReasonForBadRequest(code string) string {
@@ -321,13 +332,17 @@ func invalidInputReasonForBadRequest(code string) string {
 		return "amount must be greater than zero"
 	case "amount_mismatch":
 		return "amount does not match bank authorization"
-	case "authorization_not_found", "authorization_expired":
+	case "authorization_not_found":
 		return "bank authorization cannot be captured"
 	case "capture_not_found":
 		return "bank capture cannot be refunded"
 	default:
 		return ""
 	}
+}
+
+func isAuthorizationExpired(code string) bool {
+	return strings.EqualFold(strings.TrimSpace(code), "authorization_expired")
 }
 
 func isBankStateConflict(code string) bool {
