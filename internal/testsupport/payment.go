@@ -38,23 +38,12 @@ func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*d
 	return clonePayment(payment)
 }
 
-func (r *PaymentRepository) UpdateAuthorizationResult(_ context.Context, payment *domain.Payment) error {
+func (r *PaymentRepository) SaveIfStatus(_ context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
 	}
-	if existing.Status() != domain.PaymentStatusPending {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return r.update(payment)
-}
-
-func (r *PaymentRepository) UpdateExpiredResult(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
-	}
-	if existing.Status() != domain.PaymentStatusAuthorized {
+	if existing.Status() != expectedStatus {
 		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return r.update(payment)
@@ -84,28 +73,22 @@ func (r *PaymentRepository) RefreshExpiredAuthorizations(_ context.Context, quer
 	return nil
 }
 
-func (r *PaymentRepository) UpdateVoidResult(_ context.Context, payment *domain.Payment) error {
+func (r *PaymentRepository) SaveBankOperationKey(_ context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
 	}
-	if existing.Status() != domain.PaymentStatusAuthorized {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	cloned, err := clonePayment(payment)
-	if err != nil {
-		return err
-	}
-	r.payments[payment.ID()] = cloned
-	return nil
-}
 
-func (r *PaymentRepository) SaveVoidBankOperationKey(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
+	var expectedStatus domain.PaymentStatus
+	switch operation {
+	case app.BankOperationKeyCapture, app.BankOperationKeyVoid:
+		expectedStatus = domain.PaymentStatusAuthorized
+	case app.BankOperationKeyRefund:
+		expectedStatus = domain.PaymentStatusCaptured
+	default:
+		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
 	}
-	if existing.Status() != domain.PaymentStatusAuthorized {
+	if existing.Status() != expectedStatus {
 		return app.NewPaymentInvalidStatusConflict(nil)
 	}
 	return r.update(payment)
@@ -136,50 +119,6 @@ func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQu
 		matches = matches[:100]
 	}
 	return matches, nil
-}
-
-func (r *PaymentRepository) UpdateCaptureResult(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
-	}
-	if existing.Status() != domain.PaymentStatusAuthorized {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return r.update(payment)
-}
-
-func (r *PaymentRepository) SaveCaptureBankOperationKey(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
-	}
-	if existing.Status() != domain.PaymentStatusAuthorized {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return r.update(payment)
-}
-
-func (r *PaymentRepository) UpdateRefundResult(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
-	}
-	if existing.Status() != domain.PaymentStatusCaptured {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return r.update(payment)
-}
-
-func (r *PaymentRepository) SaveRefundBankOperationKey(_ context.Context, payment *domain.Payment) error {
-	existing, ok := r.payments[payment.ID()]
-	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
-	}
-	if existing.Status() != domain.PaymentStatusCaptured {
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return r.update(payment)
 }
 
 func (r *PaymentRepository) update(payment *domain.Payment) error {

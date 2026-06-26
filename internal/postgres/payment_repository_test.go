@@ -116,7 +116,7 @@ func TestPaymentRepositoryUpdatesPendingAuthorizationResult(t *testing.T) {
 	require.NoError(t, repository.Create(ctx, payment))
 
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
-	require.NoError(t, repository.UpdateAuthorizationResult(ctx, payment))
+	require.NoError(t, repository.SaveIfStatus(ctx, payment, domain.PaymentStatusPending))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestPaymentRepositoryUpdatesVoidedPayment(t *testing.T) {
 		"bok_550e8400-e29b-41d4-a716-446655440002",
 		voidedAt,
 	))
-	require.NoError(t, repository.UpdateVoidResult(ctx, payment))
+	require.NoError(t, repository.SaveIfStatus(ctx, payment, domain.PaymentStatusAuthorized))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestPaymentRepositorySavesVoidBankOperationKeyWithoutChangingStatus(t *test
 	require.NoError(t, repository.Create(ctx, payment))
 	require.NoError(t, payment.SetVoidBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
 
-	require.NoError(t, repository.SaveVoidBankOperationKey(ctx, payment))
+	require.NoError(t, repository.SaveBankOperationKey(ctx, payment, app.BankOperationKeyVoid))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestPaymentRepositoryUpdatesCapturedPayment(t *testing.T) {
 		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
 	))
-	require.NoError(t, repository.UpdateCaptureResult(ctx, payment))
+	require.NoError(t, repository.SaveIfStatus(ctx, payment, domain.PaymentStatusAuthorized))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -303,7 +303,7 @@ func TestPaymentRepositorySavesCaptureBankOperationKeyWithoutChangingStatus(t *t
 	require.NoError(t, repository.Create(ctx, payment))
 	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
 
-	require.NoError(t, repository.SaveCaptureBankOperationKey(ctx, payment))
+	require.NoError(t, repository.SaveBankOperationKey(ctx, payment, app.BankOperationKeyCapture))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestPaymentRepositoryUpdatesRefundedPayment(t *testing.T) {
 		"bok_550e8400-e29b-41d4-a716-446655440005",
 		refundedAt,
 	))
-	require.NoError(t, repository.UpdateRefundResult(ctx, payment))
+	require.NoError(t, repository.SaveIfStatus(ctx, payment, domain.PaymentStatusCaptured))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
@@ -391,7 +391,7 @@ func TestPaymentRepositorySavesRefundBankOperationKeyWithoutChangingStatus(t *te
 	require.NoError(t, repository.Create(ctx, payment))
 	require.NoError(t, payment.SetRefundBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440004"))
 
-	require.NoError(t, repository.SaveRefundBankOperationKey(ctx, payment))
+	require.NoError(t, repository.SaveBankOperationKey(ctx, payment, app.BankOperationKeyRefund))
 
 	saved, err := repository.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
