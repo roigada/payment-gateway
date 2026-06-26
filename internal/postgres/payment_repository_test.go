@@ -482,6 +482,107 @@ func TestIdempotencyRepositoryReturnsInProgressForDuplicateClaim(t *testing.T) {
 	assert.Equal(t, app.IdempotencyClaimed, status)
 }
 
+func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCompletionFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment, err := domain.NewPendingPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-1",
+		"customer-1",
+		1299,
+		"bok_550e8400-e29b-41d4-a716-446655440000",
+		"fingerprint-1",
+		now,
+	)
+	require.NoError(t, err)
+	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+		Operation:          "authorize_payment",
+		Key:                "public-key-1",
+		RequestFingerprint: "fingerprint-1",
+		Payment:            payment,
+	})
+	require.NoError(t, err)
+	require.Equal(t, app.IdempotencyClaimed, claim.Status)
+	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
+
+	err = store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
+		Record: app.IdempotencyRecord{
+			Operation:          "authorize_payment",
+			Key:                "public-key-1",
+			RequestFingerprint: "different-fingerprint",
+			ResponseStatus:     201,
+			Result:             newRepositoryPaymentResult(payment, 201),
+		},
+		Payment:        payment,
+		ExpectedStatus: domain.PaymentStatusPending,
+	})
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	saved, err := store.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
+	assert.Empty(t, saved.BankAuthorizationID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440000", saved.AuthorizationBankOperationKey())
+	_, status, err := postgres.NewIdempotencyRepository(db).Claim(ctx, "authorize_payment", "public-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	assert.Equal(t, app.IdempotencyInProgress, status)
+}
+
+func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompletionFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment := newRepositoryPayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
+	require.NoError(t, store.Create(ctx, payment))
+	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+		Operation:            "capture_payment",
+		Key:                  "public-capture-key-1",
+		RequestFingerprint:   "fingerprint-1",
+		PaymentID:            payment.ID(),
+		ExpectedStatus:       domain.PaymentStatusAuthorized,
+		BankOperationKeyKind: app.BankOperationKeyCapture,
+		BankOperationKey:     "bok_550e8400-e29b-41d4-a716-446655440010",
+	})
+	require.NoError(t, err)
+	require.Equal(t, app.IdempotencyClaimed, claim.Status)
+	require.NoError(t, claim.Payment.Capture("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment.CaptureBankOperationKey(), now.Add(time.Minute)))
+
+	err = store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
+		Record: app.IdempotencyRecord{
+			Operation:          "capture_payment",
+			Key:                "public-capture-key-1",
+			RequestFingerprint: "different-fingerprint",
+			ResponseStatus:     200,
+			Result:             newRepositoryPaymentResult(claim.Payment, 200),
+		},
+		Payment:        claim.Payment,
+		ExpectedStatus: domain.PaymentStatusAuthorized,
+	})
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	saved, err := store.FindByID(ctx, payment.ID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+	assert.Empty(t, saved.BankCaptureID())
+	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440010", saved.CaptureBankOperationKey())
+	_, status, err := postgres.NewIdempotencyRepository(db).Claim(ctx, "capture_payment", "public-capture-key-1", "fingerprint-1")
+	require.NoError(t, err)
+	assert.Equal(t, app.IdempotencyInProgress, status)
+}
+
 func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID string, status domain.PaymentStatus, now time.Time) *domain.Payment {
 	t.Helper()
 
@@ -519,6 +620,22 @@ func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID
 	default:
 		t.Fatalf("unsupported status %q", status)
 		return nil
+	}
+}
+
+func newRepositoryPaymentResult(payment *domain.Payment, responseStatus int) app.PaymentResult {
+	return app.PaymentResult{
+		ID:                     string(payment.ID()),
+		OrderID:                payment.OrderID(),
+		CustomerID:             payment.CustomerID(),
+		AmountCents:            payment.AmountCents(),
+		Currency:               payment.Currency(),
+		Status:                 string(payment.Status()),
+		DeclineReason:          string(payment.DeclineReason()),
+		AuthorizationExpiresAt: payment.AuthorizationExpiresAt(),
+		CreatedAt:              payment.CreatedAt(),
+		UpdatedAt:              payment.UpdatedAt(),
+		ResponseStatus:         responseStatus,
 	}
 }
 
