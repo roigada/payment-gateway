@@ -69,122 +69,8 @@ func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment)
 	return nil
 }
 
-func (r *PaymentRepository) UpdateRefundResult(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $2,
-		        bank_refund_id = $3,
-		        refund_bank_operation_key = $4,
-		        updated_at = $5
-		  WHERE id = $1
-		    AND status = $6`,
-		payment.ID(),
-		payment.Status(),
-		nullableString(payment.BankRefundID()),
-		nullableString(payment.RefundBankOperationKey()),
-		payment.UpdatedAt(),
-		domain.PaymentStatusCaptured,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) SaveRefundBankOperationKey(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET refund_bank_operation_key = $2
-		  WHERE id = $1
-		    AND status = $3`,
-		payment.ID(),
-		nullableString(payment.RefundBankOperationKey()),
-		domain.PaymentStatusCaptured,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
-}
-
-func (r *PaymentRepository) UpdateVoidResult(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $2,
-		        bank_void_id = $3,
-		        void_bank_operation_key = $4,
-		        capture_bank_operation_key = NULL,
-		        updated_at = $5
-		  WHERE id = $1
-		    AND status = $6`,
-		payment.ID(),
-		payment.Status(),
-		nullableString(payment.BankVoidID()),
-		payment.VoidBankOperationKey(),
-		payment.UpdatedAt(),
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) UpdateExpiredResult(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $2,
-		        capture_bank_operation_key = NULL,
-		        void_bank_operation_key = NULL,
-		        updated_at = $3
-		  WHERE id = $1
-		    AND status = $4`,
-		payment.ID(),
-		payment.Status(),
-		payment.UpdatedAt(),
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
+func (r *PaymentRepository) SaveIfStatus(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	return updatePayment(ctx, r, payment, expectedStatus)
 }
 
 func (r *PaymentRepository) RefreshExpiredAuthorizations(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) error {
@@ -217,104 +103,35 @@ func (r *PaymentRepository) RefreshExpiredAuthorizations(ctx context.Context, qu
 	return nil
 }
 
-func (r *PaymentRepository) SaveVoidBankOperationKey(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET void_bank_operation_key = $2
-		  WHERE id = $1
-		    AND status = $3`,
-		payment.ID(),
-		nullableString(payment.VoidBankOperationKey()),
-		domain.PaymentStatusAuthorized,
+func (r *PaymentRepository) SaveBankOperationKey(ctx context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
+	var (
+		column         string
+		value          any
+		expectedStatus domain.PaymentStatus
 	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
+	switch operation {
+	case app.BankOperationKeyCapture:
+		column = "capture_bank_operation_key"
+		value = nullableString(payment.CaptureBankOperationKey())
+		expectedStatus = domain.PaymentStatusAuthorized
+	case app.BankOperationKeyVoid:
+		column = "void_bank_operation_key"
+		value = nullableString(payment.VoidBankOperationKey())
+		expectedStatus = domain.PaymentStatusAuthorized
+	case app.BankOperationKeyRefund:
+		column = "refund_bank_operation_key"
+		value = nullableString(payment.RefundBankOperationKey())
+		expectedStatus = domain.PaymentStatusCaptured
+	default:
+		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
 	}
-	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
-}
 
-func (r *PaymentRepository) UpdateAuthorizationResult(ctx context.Context, payment *domain.Payment) error {
 	result, err := r.db.ExecContext(
 		ctx,
-		`UPDATE payments
-		    SET status = $2,
-		        bank_authorization_id = $3,
-		        authorization_expires_at = $4,
-		        decline_reason = $5,
-		        updated_at = $6
-		  WHERE id = $1
-		    AND status = $7`,
+		`UPDATE payments SET `+column+` = $2 WHERE id = $1 AND status = $3`,
 		payment.ID(),
-		payment.Status(),
-		nullableString(payment.BankAuthorizationID()),
-		nullableTime(payment.AuthorizationExpiresAt()),
-		nullableString(string(payment.DeclineReason())),
-		payment.UpdatedAt(),
-		domain.PaymentStatusPending,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) UpdateCaptureResult(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $2,
-		        bank_capture_id = $3,
-		        capture_bank_operation_key = $4,
-		        void_bank_operation_key = NULL,
-		        updated_at = $5
-		  WHERE id = $1
-		    AND status = $6`,
-		payment.ID(),
-		payment.Status(),
-		nullableString(payment.BankCaptureID()),
-		nullableString(payment.CaptureBankOperationKey()),
-		payment.UpdatedAt(),
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := r.FindByID(ctx, payment.ID())
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentInvalidStatusConflict(nil)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) SaveCaptureBankOperationKey(ctx context.Context, payment *domain.Payment) error {
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET capture_bank_operation_key = $2
-		  WHERE id = $1
-		    AND status = $3`,
-		payment.ID(),
-		nullableString(payment.CaptureBankOperationKey()),
-		domain.PaymentStatusAuthorized,
+		value,
+		expectedStatus,
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
@@ -549,12 +366,8 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 	return payment, nil
 }
 
-type paymentUpdater interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payment) error {
-	result, err := db.ExecContext(
+func updatePayment(ctx context.Context, r *PaymentRepository, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	result, err := r.db.ExecContext(
 		ctx,
 		`UPDATE payments
 		    SET status = $2,
@@ -564,9 +377,14 @@ func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payme
 		        authorization_card_fingerprint = $6,
 		        bank_capture_id = $7,
 		        capture_bank_operation_key = $8,
-		        decline_reason = $9,
-		        updated_at = $10
-		  WHERE id = $1`,
+		        bank_refund_id = $9,
+		        refund_bank_operation_key = $10,
+		        bank_void_id = $11,
+		        void_bank_operation_key = $12,
+		        decline_reason = $13,
+		        updated_at = $14
+		  WHERE id = $1
+		    AND status = $15`,
 		payment.ID(),
 		payment.Status(),
 		nullableString(payment.BankAuthorizationID()),
@@ -575,20 +393,18 @@ func updatePayment(ctx context.Context, db paymentUpdater, payment *domain.Payme
 		payment.AuthorizationCardFingerprint(),
 		nullableString(payment.BankCaptureID()),
 		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(payment.BankRefundID()),
+		nullableString(payment.RefundBankOperationKey()),
+		nullableString(payment.BankVoidID()),
+		nullableString(payment.VoidBankOperationKey()),
 		nullableString(string(payment.DeclineReason())),
 		payment.UpdatedAt(),
+		expectedStatus,
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		return app.NewPaymentNotFound(string(payment.ID()), sql.ErrNoRows)
-	}
-	return nil
+	return ensurePaymentUpdateAffected(ctx, r, result, payment.ID())
 }
 
 func ensurePaymentUpdateAffected(ctx context.Context, r *PaymentRepository, result sql.Result, id domain.PaymentID) error {

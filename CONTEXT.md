@@ -13,7 +13,7 @@ The stable gateway-owned identity of a **Payment**. It uses the `pay_<uuid>` for
 _Avoid_: Transaction ID, order ID, bank ID
 
 **Pending**:
-A **Payment** whose authorization outcome is not yet known because the **Mock Bank** did not return a definitive approval or decline.
+A **Payment** whose authorization outcome is not yet known because the **Mock Bank** has not produced a definitive approval or decline.
 _Avoid_: Failed, processing
 
 **Authorized**:

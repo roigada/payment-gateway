@@ -55,6 +55,25 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
+func TestAuthorizePaymentPersistsPendingPaymentBeforeCallingBank(t *testing.T) {
+	repo := testsupport.NewPaymentRepository()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	bank.onAuthorize = func() {
+		saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+		require.NoError(t, err)
+		assert.Equal(t, domain.PaymentStatusPending, saved.Status())
+		assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
+		assert.NotEmpty(t, saved.AuthorizationCardFingerprint())
+	}
+	service := newPaymentService(repo, bank, now)
+
+	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, bank.calls)
+}
+
 func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}}
@@ -436,7 +455,7 @@ func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.
 	assert.Equal(t, 1, bank.calls)
 }
 
-func TestAuthorizePaymentNormalizesBankErrorWithoutStoringPayment(t *testing.T) {
+func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testing.T) {
 	repo := testsupport.NewPaymentRepository()
 	bankErr := errors.New("bank unavailable")
 	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, time.Now())
@@ -445,8 +464,10 @@ func TestAuthorizePaymentNormalizesBankErrorWithoutStoringPayment(t *testing.T) 
 
 	assert.ErrorIs(t, err, bankErr)
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInternal))
-	_, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
-	assert.True(t, app.IsPaymentErrorKind(findErr, app.PaymentErrorNotFound))
+	saved, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
+	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
 func TestGetPaymentReturnsPublicResult(t *testing.T) {
@@ -483,6 +504,17 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 		CreatedAt:              now,
 		UpdatedAt:              now,
 	}, result)
+}
+
+func TestGetPaymentRequiresPaymentID(t *testing.T) {
+	service := newPaymentService(testsupport.NewPaymentRepository(), &bankAuthorizerFake{}, time.Now())
+
+	_, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
+		PaymentID: " ",
+	})
+
+	require.Error(t, err)
+	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 }
 
 func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
@@ -1436,6 +1468,7 @@ type bankAuthorizerFake struct {
 	result      app.BankAuthorizationResult
 	err         error
 	calls       int
+	onAuthorize func()
 	voidRequest app.BankVoidRequest
 	voidResult  app.BankVoidResult
 	voidErr     error
@@ -1445,6 +1478,9 @@ type bankAuthorizerFake struct {
 func (f *bankAuthorizerFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
 	f.request = request
 	f.calls++
+	if f.onAuthorize != nil {
+		f.onAuthorize()
+	}
 	if f.result.BankAuthorizationID != "" && f.result.AuthorizationExpiresAt.IsZero() {
 		f.result.AuthorizationExpiresAt = defaultAuthorizationExpiresAt()
 	}
