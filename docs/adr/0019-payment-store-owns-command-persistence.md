@@ -2,6 +2,8 @@
 
 Payment command persistence crosses Payment rows and public idempotency rows, so the application layer uses one broad `PaymentStore` port instead of separate payment and idempotency repositories.
 
+The Postgres adapter exposes this as one concrete `PaymentStore`. It does not expose a separate idempotency repository or row-level payment mutation repository for command flows. Idempotency rows are still stored in Postgres, but their SQL is an internal implementation detail of the store.
+
 `PaymentStore` owns command persistence through three app-facing methods:
 
 - `ClaimPaymentCommand` claims the public Idempotency Key and durably stores or reuses pre-bank recovery facts before a Mock Bank call.

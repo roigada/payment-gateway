@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 	"github.com/roigada/payment-gateway/internal/domain"
 )
 
-type PaymentRepository struct {
+type PaymentStore struct {
 	db *sql.DB
 }
 
@@ -19,15 +20,11 @@ type sqlExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func NewPaymentRepository(db *sql.DB) *PaymentRepository {
-	return &PaymentRepository{db: db}
+func NewPaymentStore(db *sql.DB) *PaymentStore {
+	return &PaymentStore{db: db}
 }
 
-func NewPaymentStore(db *sql.DB) *PaymentRepository {
-	return NewPaymentRepository(db)
-}
-
-func (r *PaymentRepository) ClaimPaymentCommand(ctx context.Context, command app.ClaimPaymentCommand) (app.PaymentCommandClaim, error) {
+func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, command app.ClaimPaymentCommand) (app.PaymentCommandClaim, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
@@ -80,7 +77,7 @@ func (r *PaymentRepository) ClaimPaymentCommand(ctx context.Context, command app
 	return claim, nil
 }
 
-func (r *PaymentRepository) CompletePaymentCommand(ctx context.Context, command app.CompletePaymentCommand) error {
+func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, command app.CompletePaymentCommand) error {
 	responseBody, err := encodePaymentResultSnapshot(command.Record.Result)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
@@ -127,7 +124,7 @@ func (r *PaymentRepository) CompletePaymentCommand(ctx context.Context, command 
 	return nil
 }
 
-func (r *PaymentRepository) ReleasePaymentCommand(ctx context.Context, operation string, key string) error {
+func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, operation string, key string) error {
 	_, err := r.db.ExecContext(
 		ctx,
 		`DELETE FROM idempotency_records
@@ -139,13 +136,6 @@ func (r *PaymentRepository) ReleasePaymentCommand(ctx context.Context, operation
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
-	}
-	return nil
-}
-
-func (r *PaymentRepository) Create(ctx context.Context, payment *domain.Payment) error {
-	if err := insertPayment(ctx, r.db, payment); err != nil {
-		return err
 	}
 	return nil
 }
@@ -201,15 +191,11 @@ func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Paymen
 	return nil
 }
 
-func (r *PaymentRepository) SaveIfStatus(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+func (r *PaymentStore) ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
 	return updatePayment(ctx, r.db, payment, expectedStatus)
 }
 
-func (r *PaymentRepository) ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
-	return updatePayment(ctx, r.db, payment, expectedStatus)
-}
-
-func (r *PaymentRepository) RefreshExpiredAuthorizations(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) error {
+func (r *PaymentStore) RefreshExpiredAuthorizations(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) error {
 	_, err := r.db.ExecContext(
 		ctx,
 		`UPDATE payments
@@ -237,42 +223,6 @@ func (r *PaymentRepository) RefreshExpiredAuthorizations(ctx context.Context, qu
 		return app.NewInternalPaymentError(err)
 	}
 	return nil
-}
-
-func (r *PaymentRepository) SaveBankOperationKey(ctx context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
-	var (
-		column         string
-		value          any
-		expectedStatus domain.PaymentStatus
-	)
-	switch operation {
-	case app.BankOperationKeyCapture:
-		column = "capture_bank_operation_key"
-		value = nullableString(payment.CaptureBankOperationKey())
-		expectedStatus = domain.PaymentStatusAuthorized
-	case app.BankOperationKeyVoid:
-		column = "void_bank_operation_key"
-		value = nullableString(payment.VoidBankOperationKey())
-		expectedStatus = domain.PaymentStatusAuthorized
-	case app.BankOperationKeyRefund:
-		column = "refund_bank_operation_key"
-		value = nullableString(payment.RefundBankOperationKey())
-		expectedStatus = domain.PaymentStatusCaptured
-	default:
-		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
-	}
-
-	result, err := r.db.ExecContext(
-		ctx,
-		`UPDATE payments SET `+column+` = $2 WHERE id = $1 AND status = $3`,
-		payment.ID(),
-		value,
-		expectedStatus,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return ensurePaymentUpdateAffected(ctx, r.db, result, payment.ID())
 }
 
 func claimIdempotency(ctx context.Context, exec sqlExecutor, operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus, error) {
@@ -392,7 +342,7 @@ func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *doma
 	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
 }
 
-func (r *PaymentRepository) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
+func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	return findPaymentByID(ctx, r.db, id, false)
 }
 
@@ -498,7 +448,7 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	return payment, nil
 }
 
-func (r *PaymentRepository) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
+func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	rows, err := r.db.QueryContext(
 		ctx,
 		`SELECT id,
@@ -709,4 +659,52 @@ func nullStringValue(value sql.NullString) string {
 		return ""
 	}
 	return value.String
+}
+
+type paymentResultSnapshot struct {
+	ID                     string    `json:"id"`
+	OrderID                string    `json:"order_id"`
+	CustomerID             string    `json:"customer_id"`
+	AmountCents            int64     `json:"amount"`
+	Currency               string    `json:"currency"`
+	Status                 string    `json:"status"`
+	DeclineReason          string    `json:"decline_reason,omitempty"`
+	AuthorizationExpiresAt time.Time `json:"authorization_expires_at,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
+}
+
+func encodePaymentResultSnapshot(result app.PaymentResult) ([]byte, error) {
+	return json.Marshal(paymentResultSnapshot{
+		ID:                     result.ID,
+		OrderID:                result.OrderID,
+		CustomerID:             result.CustomerID,
+		AmountCents:            result.AmountCents,
+		Currency:               result.Currency,
+		Status:                 result.Status,
+		DeclineReason:          result.DeclineReason,
+		AuthorizationExpiresAt: result.AuthorizationExpiresAt,
+		CreatedAt:              result.CreatedAt,
+		UpdatedAt:              result.UpdatedAt,
+	})
+}
+
+func decodePaymentResultSnapshot(data []byte) (app.PaymentResult, error) {
+	var snapshot paymentResultSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return app.PaymentResult{}, err
+	}
+
+	return app.PaymentResult{
+		ID:                     snapshot.ID,
+		OrderID:                snapshot.OrderID,
+		CustomerID:             snapshot.CustomerID,
+		AmountCents:            snapshot.AmountCents,
+		Currency:               snapshot.Currency,
+		Status:                 snapshot.Status,
+		DeclineReason:          snapshot.DeclineReason,
+		AuthorizationExpiresAt: snapshot.AuthorizationExpiresAt,
+		CreatedAt:              snapshot.CreatedAt,
+		UpdatedAt:              snapshot.UpdatedAt,
+	}, nil
 }

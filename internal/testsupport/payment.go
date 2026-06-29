@@ -10,19 +10,19 @@ import (
 	"github.com/roigada/payment-gateway/internal/domain"
 )
 
-type PaymentRepository struct {
+type PaymentStore struct {
 	payments map[domain.PaymentID]*domain.Payment
 	records  map[string]idempotencyEntry
 }
 
-func NewPaymentRepository() *PaymentRepository {
-	return &PaymentRepository{
+func NewPaymentStore() *PaymentStore {
+	return &PaymentStore{
 		payments: make(map[domain.PaymentID]*domain.Payment),
 		records:  make(map[string]idempotencyEntry),
 	}
 }
 
-func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) error {
+func (r *PaymentStore) SeedPayment(_ context.Context, payment *domain.Payment) error {
 	if _, ok := r.payments[payment.ID()]; ok {
 		return errors.New("payment already exists")
 	}
@@ -34,7 +34,7 @@ func (r *PaymentRepository) Create(_ context.Context, payment *domain.Payment) e
 	return nil
 }
 
-func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
+func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	payment, ok := r.payments[id]
 	if !ok {
 		return nil, app.NewPaymentNotFound(string(id), nil)
@@ -42,7 +42,7 @@ func (r *PaymentRepository) FindByID(_ context.Context, id domain.PaymentID) (*d
 	return clonePayment(payment)
 }
 
-func (r *PaymentRepository) SaveIfStatus(_ context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+func (r *PaymentStore) saveIfStatus(_ context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
@@ -53,11 +53,11 @@ func (r *PaymentRepository) SaveIfStatus(_ context.Context, payment *domain.Paym
 	return r.update(payment)
 }
 
-func (r *PaymentRepository) ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
-	return r.SaveIfStatus(ctx, payment, expectedStatus)
+func (r *PaymentStore) ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	return r.saveIfStatus(ctx, payment, expectedStatus)
 }
 
-func (r *PaymentRepository) RefreshExpiredAuthorizations(_ context.Context, query app.SearchPaymentsQuery, now time.Time) error {
+func (r *PaymentStore) RefreshExpiredAuthorizations(_ context.Context, query app.SearchPaymentsQuery, now time.Time) error {
 	for _, payment := range r.payments {
 		if query.OrderID != "" && payment.OrderID() != query.OrderID {
 			continue
@@ -81,7 +81,7 @@ func (r *PaymentRepository) RefreshExpiredAuthorizations(_ context.Context, quer
 	return nil
 }
 
-func (r *PaymentRepository) SaveBankOperationKey(_ context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
+func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
@@ -102,7 +102,7 @@ func (r *PaymentRepository) SaveBankOperationKey(_ context.Context, payment *dom
 	return r.update(payment)
 }
 
-func (r *PaymentRepository) ClaimPaymentCommand(_ context.Context, command app.ClaimPaymentCommand) (app.PaymentCommandClaim, error) {
+func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, command app.ClaimPaymentCommand) (app.PaymentCommandClaim, error) {
 	record, status := r.claim(command.Operation, command.Key, command.RequestFingerprint)
 	claim := app.PaymentCommandClaim{Record: record, Status: status}
 	if status != app.IdempotencyClaimed {
@@ -110,7 +110,7 @@ func (r *PaymentRepository) ClaimPaymentCommand(_ context.Context, command app.C
 	}
 
 	if command.Payment != nil {
-		if err := r.Create(context.Background(), command.Payment); err != nil {
+		if err := r.SeedPayment(context.Background(), command.Payment); err != nil {
 			delete(r.records, idempotencyMapKey(command.Operation, command.Key))
 			return app.PaymentCommandClaim{}, err
 		}
@@ -139,7 +139,7 @@ func (r *PaymentRepository) ClaimPaymentCommand(_ context.Context, command app.C
 			delete(r.records, idempotencyMapKey(command.Operation, command.Key))
 			return app.PaymentCommandClaim{}, err
 		}
-		if err := r.SaveBankOperationKey(context.Background(), payment, command.BankOperationKeyKind); err != nil {
+		if err := r.saveBankOperationKey(context.Background(), payment, command.BankOperationKeyKind); err != nil {
 			delete(r.records, idempotencyMapKey(command.Operation, command.Key))
 			return app.PaymentCommandClaim{}, err
 		}
@@ -148,19 +148,19 @@ func (r *PaymentRepository) ClaimPaymentCommand(_ context.Context, command app.C
 	return claim, nil
 }
 
-func (r *PaymentRepository) CompletePaymentCommand(_ context.Context, command app.CompletePaymentCommand) error {
-	if err := r.SaveIfStatus(context.Background(), command.Payment, command.ExpectedStatus); err != nil {
+func (r *PaymentStore) CompletePaymentCommand(_ context.Context, command app.CompletePaymentCommand) error {
+	if err := r.saveIfStatus(context.Background(), command.Payment, command.ExpectedStatus); err != nil {
 		return err
 	}
 	return r.complete(command.Record)
 }
 
-func (r *PaymentRepository) ReleasePaymentCommand(_ context.Context, operation string, key string) error {
+func (r *PaymentStore) ReleasePaymentCommand(_ context.Context, operation string, key string) error {
 	delete(r.records, idempotencyMapKey(operation, key))
 	return nil
 }
 
-func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
+func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
 		if query.OrderID != "" && payment.OrderID() != query.OrderID {
@@ -187,7 +187,7 @@ func (r *PaymentRepository) Search(_ context.Context, query app.SearchPaymentsQu
 	return matches, nil
 }
 
-func (r *PaymentRepository) update(payment *domain.Payment) error {
+func (r *PaymentStore) update(payment *domain.Payment) error {
 	if _, ok := r.payments[payment.ID()]; !ok {
 		return app.NewPaymentNotFound(string(payment.ID()), nil)
 	}
@@ -223,20 +223,7 @@ func (c FixedClock) Now() time.Time {
 	return c.Time
 }
 
-type IdempotencyRepository struct {
-	records map[string]idempotencyEntry
-}
-
-func NewIdempotencyRepository() *IdempotencyRepository {
-	return &IdempotencyRepository{records: make(map[string]idempotencyEntry)}
-}
-
-func (r *IdempotencyRepository) Claim(_ context.Context, operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus, error) {
-	record, status := r.claim(operation, key, requestFingerprint)
-	return record, status, nil
-}
-
-func (r *IdempotencyRepository) claim(operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus) {
+func (r *PaymentStore) claim(operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus) {
 	mapKey := idempotencyMapKey(operation, key)
 	entry, ok := r.records[mapKey]
 	if !ok {
@@ -254,29 +241,12 @@ func (r *IdempotencyRepository) claim(operation string, key string, requestFinge
 	return cloneIdempotencyRecord(entry.record), entry.status
 }
 
-func (r *IdempotencyRepository) Complete(_ context.Context, record app.IdempotencyRecord) error {
-	return r.complete(record)
-}
-
-func (r *IdempotencyRepository) complete(record app.IdempotencyRecord) error {
+func (r *PaymentStore) complete(record app.IdempotencyRecord) error {
 	r.records[idempotencyMapKey(record.Operation, record.Key)] = idempotencyEntry{
 		status: app.IdempotencyCompleted,
 		record: cloneIdempotencyRecord(record),
 	}
 	return nil
-}
-
-func (r *IdempotencyRepository) Release(_ context.Context, operation string, key string) error {
-	delete(r.records, idempotencyMapKey(operation, key))
-	return nil
-}
-
-func (r *PaymentRepository) claim(operation string, key string, requestFingerprint string) (app.IdempotencyRecord, app.IdempotencyClaimStatus) {
-	return (&IdempotencyRepository{records: r.records}).claim(operation, key, requestFingerprint)
-}
-
-func (r *PaymentRepository) complete(record app.IdempotencyRecord) error {
-	return (&IdempotencyRepository{records: r.records}).complete(record)
 }
 
 func setBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind, key string) error {

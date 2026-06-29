@@ -15,7 +15,7 @@ import (
 )
 
 func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
@@ -56,7 +56,7 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 }
 
 func TestAuthorizePaymentPersistsPendingPaymentBeforeCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	bank.onAuthorize = func() {
@@ -75,7 +75,7 @@ func TestAuthorizePaymentPersistsPendingPaymentBeforeCallingBank(t *testing.T) {
 }
 
 func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
@@ -105,7 +105,7 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 }
 
 func TestAuthorizePaymentStoresPendingPaymentAndReleasesClaimForUnknownBankOutcome(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bankErr := app.NewPaymentBankTimeout(context.DeadlineExceeded)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, now)
@@ -125,7 +125,7 @@ func TestAuthorizePaymentStoresPendingPaymentAndReleasesClaimForUnknownBankOutco
 }
 
 func TestAuthorizePaymentStoresExpiredPaymentWhenBankAuthorizationAlreadyExpired(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{
 		BankAuthorizationID:    "bank-auth-id-1",
@@ -145,12 +145,12 @@ func TestAuthorizePaymentStoresExpiredPaymentWhenBankAuthorizationAlreadyExpired
 
 func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	firstRepo := testsupport.NewPaymentRepository()
+	firstRepo := testsupport.NewPaymentStore()
 	firstService := newPaymentService(firstRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	_, err := firstService.AuthorizePayment(context.Background(), validAuthorizeCommand())
 	require.Error(t, err)
 
-	secondRepo := testsupport.NewPaymentRepository()
+	secondRepo := testsupport.NewPaymentStore()
 	secondService := newPaymentService(secondRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	secondCommand := validAuthorizeCommand()
 	secondCommand.AmountCents = 2599
@@ -165,7 +165,7 @@ func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 }
 
 func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
@@ -196,7 +196,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
 }
 
 func TestRetryAuthorizationResolvesPendingPaymentToExpiredWhenApprovedAuthorizationAlreadyExpired(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
@@ -216,7 +216,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToExpiredWhenApprovedAuthorizat
 }
 
 func TestRetryAuthorizationResolvesPendingPaymentToDeclined(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
@@ -234,7 +234,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToDeclined(t *testing.T) {
 }
 
 func TestRetryAuthorizationLeavesPendingPaymentPendingAndReleasesClaimForUnknownBankOutcome(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
@@ -255,7 +255,7 @@ func TestRetryAuthorizationLeavesPendingPaymentPendingAndReleasesClaimForUnknown
 }
 
 func TestRetryAuthorizationRejectsFingerprintMismatchWithoutCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 	require.Error(t, err)
@@ -272,7 +272,7 @@ func TestRetryAuthorizationRejectsFingerprintMismatchWithoutCallingBank(t *testi
 }
 
 func TestRetryAuthorizationRejectsNonPendingPaymentWithoutCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	service := newPaymentService(repo, &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	authorized, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestRetryAuthorizationRejectsNonPendingPaymentWithoutCallingBank(t *testing
 }
 
 func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, now)
@@ -304,7 +304,7 @@ func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t
 }
 
 func TestAuthorizePaymentReplaysWhenOnlyCVVDiffers(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	first := validAuthorizeCommand()
@@ -321,7 +321,7 @@ func TestAuthorizePaymentReplaysWhenOnlyCVVDiffers(t *testing.T) {
 }
 
 func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	first := validAuthorizeCommand()
@@ -337,7 +337,7 @@ func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *test
 }
 
 func TestAuthorizePaymentRejectsInProgressIdempotencyKeyBeforeCallingBank(t *testing.T) {
-	store := &alwaysInProgressPaymentStore{PaymentStore: testsupport.NewPaymentRepository()}
+	store := &alwaysInProgressPaymentStore{PaymentStore: testsupport.NewPaymentStore()}
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := app.NewPaymentService(
 		store,
@@ -355,7 +355,7 @@ func TestAuthorizePaymentRejectsInProgressIdempotencyKeyBeforeCallingBank(t *tes
 }
 
 func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	command := validAuthorizeCommand()
@@ -383,7 +383,7 @@ func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t 
 
 func TestAuthorizePaymentRequiresIdempotencyKeyBeforeCallingBank(t *testing.T) {
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
-	service := newPaymentService(testsupport.NewPaymentRepository(), bank, time.Now())
+	service := newPaymentService(testsupport.NewPaymentStore(), bank, time.Now())
 	command := validAuthorizeCommand()
 	command.IdempotencyKey = ""
 
@@ -410,7 +410,7 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
-			service := newPaymentService(testsupport.NewPaymentRepository(), bank, time.Now())
+			service := newPaymentService(testsupport.NewPaymentStore(), bank, time.Now())
 			command := validAuthorizeCommand()
 			tt.mutate(&command)
 
@@ -423,7 +423,7 @@ func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
 }
 
 func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.T) {
-	store := testsupport.NewPaymentRepository()
+	store := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := app.NewPaymentService(
 		store,
@@ -447,7 +447,7 @@ func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.
 }
 
 func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	bankErr := errors.New("bank unavailable")
 	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, time.Now())
 
@@ -462,7 +462,7 @@ func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testin
 }
 
 func TestGetPaymentReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
@@ -476,7 +476,7 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 		now,
 	)
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, now)
 
 	result, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
@@ -498,7 +498,7 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 }
 
 func TestGetPaymentRequiresPaymentID(t *testing.T) {
-	service := newPaymentService(testsupport.NewPaymentRepository(), &bankAuthorizerFake{}, time.Now())
+	service := newPaymentService(testsupport.NewPaymentStore(), &bankAuthorizerFake{}, time.Now())
 
 	_, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
 		PaymentID: " ",
@@ -509,10 +509,10 @@ func TestGetPaymentRequiresPaymentID(t *testing.T) {
 }
 
 func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := newAuthorizedDomainPayment(t, authorizedAt)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, payment.AuthorizationExpiresAt())
 
 	result, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
@@ -529,10 +529,10 @@ func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
 }
 
 func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := mustAuthorizedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", now)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 	service := newPaymentService(repo, bank, now.Add(time.Minute))
 
@@ -577,9 +577,9 @@ func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			payment := loadDomainPaymentForStatus(t, status)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 			service := newPaymentService(repo, bank, time.Now())
 
@@ -595,9 +595,9 @@ func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
 }
 
 func TestVoidPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Now())
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 	service := newPaymentService(repo, bank, time.Now())
 
@@ -623,10 +623,10 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 			payment := newAuthorizedDomainPayment(t, authorizedAt)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankAuthorizerFake{voidErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 
 			_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
@@ -646,9 +646,9 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 }
 
 func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	firstBank := &bankAuthorizerFake{voidErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
@@ -671,9 +671,9 @@ func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.
 }
 
 func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 	command := app.VoidPaymentCommand{
@@ -692,9 +692,9 @@ func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testi
 }
 
 func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	secondPayment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
 		"order-2",
@@ -707,7 +707,7 @@ func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T
 		payment.CreatedAt(),
 	)
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 	_, err = service.VoidPayment(context.Background(), app.VoidPaymentCommand{
@@ -726,11 +726,11 @@ func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T
 }
 
 func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	newer := mustAuthorizedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440001", "order-1", "customer-1", time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
 	older := mustDeclinedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), older))
-	require.NoError(t, repo.Create(context.Background(), newer))
+	require.NoError(t, repo.SeedPayment(context.Background(), older))
+	require.NoError(t, repo.SeedPayment(context.Background(), newer))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, newer.CreatedAt())
 
 	results, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
@@ -746,10 +746,10 @@ func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
 }
 
 func TestSearchPaymentsRefreshesExpiredAuthorizationsBeforeFiltering(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := mustAuthorizedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", authorizedAt)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, payment.AuthorizationExpiresAt())
 
 	authorized, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
@@ -780,7 +780,7 @@ func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := newPaymentService(testsupport.NewPaymentRepository(), &bankAuthorizerFake{}, time.Now())
+			service := newPaymentService(testsupport.NewPaymentStore(), &bankAuthorizerFake{}, time.Now())
 
 			_, err := service.SearchPayments(context.Background(), tt.query)
 
@@ -790,10 +790,10 @@ func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
 }
 
 func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := newAuthorizedDomainPayment(t, authorizedAt)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, capturedAt)
@@ -831,9 +831,9 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 }
 
 func TestCapturePaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Now())
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Now())
 
@@ -847,9 +847,9 @@ func TestCapturePaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.
 }
 
 func TestCapturePaymentExpiresPaymentBeforeNewBankCallWhenAuthorizationExpired(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, payment.AuthorizationExpiresAt())
 
@@ -877,9 +877,9 @@ func TestCapturePaymentRejectsNonAuthorizedStatusesWithoutCallingBank(t *testing
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			payment := loadDomainPaymentForStatus(t, status)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 			service := newPaymentService(repo, bank, time.Now())
 
@@ -907,10 +907,10 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 			payment := newAuthorizedDomainPayment(t, authorizedAt)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankFake{captureErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 
 			_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
@@ -930,9 +930,9 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 }
 
 func TestCapturePaymentPersistsExpiredStatusWhenBankReportsAuthorizationExpired(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	now := payment.AuthorizationExpiresAt().Add(-time.Minute)
 	bank := &bankFake{captureErr: app.NewPaymentAuthorizationExpired(nil)}
 	service := newPaymentService(repo, bank, now)
@@ -957,9 +957,9 @@ func TestCapturePaymentPersistsExpiredStatusWhenBankReportsAuthorizationExpired(
 }
 
 func TestCapturePaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	firstBank := &bankFake{captureErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
@@ -982,9 +982,9 @@ func TestCapturePaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testi
 }
 
 func TestCapturePaymentReusesStoredBankOperationKeyAfterExpiration(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	firstBank := &bankFake{captureErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, payment.AuthorizationExpiresAt().Add(-time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
@@ -1009,13 +1009,13 @@ func TestCapturePaymentReusesStoredBankOperationKeyAfterExpiration(t *testing.T)
 }
 
 func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	var expiresAt time.Time
 	for i := 0; i < 105; i++ {
 		payment := mustAuthorizedPayment(t, fmt.Sprintf("pay_00000000-0000-4000-8000-%012d", i), "order-expired", "customer-1", base.Add(time.Duration(i)*time.Minute))
 		expiresAt = payment.AuthorizationExpiresAt()
-		require.NoError(t, repo.Create(context.Background(), payment))
+		require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	}
 	service := newPaymentService(repo, &bankAuthorizerFake{}, expiresAt)
 
@@ -1036,9 +1036,9 @@ func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(
 }
 
 func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 	command := app.CapturePaymentCommand{
@@ -1057,9 +1057,9 @@ func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *
 }
 
 func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	secondPayment, err := domain.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
 		"order-2",
@@ -1072,7 +1072,7 @@ func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testin
 		payment.CreatedAt(),
 	)
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
@@ -1091,10 +1091,10 @@ func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testin
 }
 
 func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 	payment := newCapturedDomainPayment(t, capturedAt)
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
 	refundedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, refundedAt)
@@ -1132,9 +1132,9 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 }
 
 func TestRefundPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newCapturedDomainPayment(t, time.Now())
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
 	service := newPaymentService(repo, bank, time.Now())
 
@@ -1158,9 +1158,9 @@ func TestRefundPaymentRejectsNonCapturedStatusesWithoutCallingBank(t *testing.T)
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			payment := loadDomainPaymentForStatus(t, status)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
 			service := newPaymentService(repo, bank, time.Now())
 
@@ -1188,10 +1188,10 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := testsupport.NewPaymentRepository()
+			repo := testsupport.NewPaymentStore()
 			capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 			payment := newCapturedDomainPayment(t, capturedAt)
-			require.NoError(t, repo.Create(context.Background(), payment))
+			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankFake{refundErr: tt.err}, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
 
 			_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
@@ -1211,9 +1211,9 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 }
 
 func TestRefundPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	firstBank := &bankFake{refundErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
@@ -1236,9 +1236,9 @@ func TestRefundPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testin
 }
 
 func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
 	command := app.RefundPaymentCommand{
@@ -1257,9 +1257,9 @@ func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *t
 }
 
 func TestRefundPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T) {
-	repo := testsupport.NewPaymentRepository()
+	repo := testsupport.NewPaymentStore()
 	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	require.NoError(t, repo.Create(context.Background(), payment))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	secondPayment := loadDomainPaymentForStatus(t, domain.PaymentStatusCaptured)
 	secondPayment, err := domain.LoadPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
@@ -1283,7 +1283,7 @@ func TestRefundPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing
 		payment.CreatedAt(),
 	)
 	require.NoError(t, err)
-	require.NoError(t, repo.Create(context.Background(), secondPayment))
+	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
 	_, err = service.RefundPayment(context.Background(), app.RefundPaymentCommand{
@@ -1302,7 +1302,7 @@ func TestRefundPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing
 }
 
 func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
-	validStore := testsupport.NewPaymentRepository()
+	validStore := testsupport.NewPaymentStore()
 	validPaymentIDs := testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")}
 	validBankOperationKeys := testsupport.FixedBankOperationKeyGenerator{Key: "bok_123"}
 	validBank := &bankFake{authorizeResult: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
