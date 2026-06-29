@@ -23,7 +23,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -41,7 +41,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 
 	insertPaymentFixture(t, db, payment)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, payment.ID(), saved.ID())
 	assert.Equal(t, "order-1", saved.OrderID())
@@ -56,7 +56,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
-	_, err = repository.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"))
+	_, err = store.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"))
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorNotFound))
 }
 
@@ -66,7 +66,7 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewDeclinedPayment(
@@ -83,7 +83,7 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 
 	insertPaymentFixture(t, db, payment)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusDeclined, saved.Status())
 	assert.Equal(t, domain.DeclineReasonExpiredCard, saved.DeclineReason())
@@ -100,7 +100,7 @@ func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewPendingPayment(
@@ -118,7 +118,7 @@ func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusPending)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
@@ -133,7 +133,7 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -158,7 +158,7 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusVoided, saved.Status())
 	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440003", saved.BankVoidID())
@@ -172,7 +172,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -192,7 +192,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyVoid)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankVoidID())
@@ -206,19 +206,19 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	base := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	for i := 0; i < 105; i++ {
-		payment := newRepositoryPayment(t, i, "order-1", "customer-1", domain.PaymentStatusAuthorized, base.Add(time.Duration(i)*time.Minute))
+		payment := newStorePayment(t, i, "order-1", "customer-1", domain.PaymentStatusAuthorized, base.Add(time.Duration(i)*time.Minute))
 		insertPaymentFixture(t, db, payment)
 	}
-	otherOrder := newRepositoryPayment(t, 105, "order-2", "customer-1", domain.PaymentStatusAuthorized, base.Add(105*time.Minute))
+	otherOrder := newStorePayment(t, 105, "order-2", "customer-1", domain.PaymentStatusAuthorized, base.Add(105*time.Minute))
 	insertPaymentFixture(t, db, otherOrder)
-	declined := newRepositoryPayment(t, 106, "order-1", "customer-1", domain.PaymentStatusDeclined, base.Add(106*time.Minute))
+	declined := newStorePayment(t, 106, "order-1", "customer-1", domain.PaymentStatusDeclined, base.Add(106*time.Minute))
 	insertPaymentFixture(t, db, declined)
 
-	authorized, err := repository.Search(ctx, app.SearchPaymentsQuery{
+	authorized, err := store.Search(ctx, app.SearchPaymentsQuery{
 		OrderID:    "order-1",
 		CustomerID: "customer-1",
 		Status:     "authorized",
@@ -229,7 +229,7 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000104"), authorized[0].ID())
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000005"), authorized[99].ID())
 
-	byCustomer, err := repository.Search(ctx, app.SearchPaymentsQuery{CustomerID: "customer-1"})
+	byCustomer, err := store.Search(ctx, app.SearchPaymentsQuery{CustomerID: "customer-1"})
 
 	require.NoError(t, err)
 	require.Len(t, byCustomer, 100)
@@ -243,7 +243,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -268,7 +268,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
@@ -285,7 +285,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -305,7 +305,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyCapture)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankCaptureID())
@@ -319,7 +319,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -350,7 +350,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusCaptured)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusRefunded, saved.Status())
 	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", saved.BankCaptureID())
@@ -367,7 +367,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 	}
 
 	db := newTestDatabase(t)
-	repository := postgres.NewPaymentStore(db)
+	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment, err := domain.NewAuthorizedPayment(
@@ -393,7 +393,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyRefund)
 
-	saved, err := repository.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Empty(t, saved.BankRefundID())
@@ -557,7 +557,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 			Key:                "public-key-1",
 			RequestFingerprint: "different-fingerprint",
 			ResponseStatus:     201,
-			Result:             newRepositoryPaymentResult(payment, 201),
+			Result:             newStorePaymentResult(payment, 201),
 		},
 		Payment:        payment,
 		ExpectedStatus: domain.PaymentStatusPending,
@@ -588,7 +588,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment := newRepositoryPayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
+	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
 	insertPaymentFixture(t, db, payment)
 	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
 		Operation:            "capture_payment",
@@ -609,7 +609,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 			Key:                "public-capture-key-1",
 			RequestFingerprint: "different-fingerprint",
 			ResponseStatus:     200,
-			Result:             newRepositoryPaymentResult(claim.Payment, 200),
+			Result:             newStorePaymentResult(claim.Payment, 200),
 		},
 		Payment:        claim.Payment,
 		ExpectedStatus: domain.PaymentStatusAuthorized,
@@ -631,7 +631,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	assert.Equal(t, app.IdempotencyInProgress, claimStatus.Status)
 }
 
-func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID string, status domain.PaymentStatus, now time.Time) *domain.Payment {
+func newStorePayment(t *testing.T, sequence int, orderID string, customerID string, status domain.PaymentStatus, now time.Time) *domain.Payment {
 	t.Helper()
 
 	id := domain.PaymentID(fmt.Sprintf("pay_00000000-0000-4000-8000-%012d", sequence))
@@ -671,7 +671,7 @@ func newRepositoryPayment(t *testing.T, sequence int, orderID string, customerID
 	}
 }
 
-func newRepositoryPaymentResult(payment *domain.Payment, responseStatus int) app.PaymentResult {
+func newStorePaymentResult(payment *domain.Payment, responseStatus int) app.PaymentResult {
 	return app.PaymentResult{
 		ID:                     string(payment.ID()),
 		OrderID:                payment.OrderID(),
@@ -715,7 +715,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 			Key:                "public-key-1",
 			RequestFingerprint: "fingerprint-1",
 			ResponseStatus:     201,
-			Result:             newRepositoryPaymentResult(payment, 201),
+			Result:             newStorePaymentResult(payment, 201),
 		},
 		Payment:        payment,
 		ExpectedStatus: domain.PaymentStatusPending,
