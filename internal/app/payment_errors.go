@@ -116,19 +116,18 @@ func (e *PaymentError) Unwrap() error {
 }
 
 func PaymentErrorKindOf(err error) (PaymentErrorKind, bool) {
-	var paymentErr *PaymentError
-	if errors.As(err, &paymentErr) {
+	if paymentErr, ok := errors.AsType[*PaymentError](err); ok {
 		return paymentErr.Kind(), true
 	}
 	return "", false
 }
 
-func IsPaymentErrorKind(err error, kind PaymentErrorKind) bool {
+func HasPaymentErrorKind(err error, kind PaymentErrorKind) bool {
 	actual, ok := PaymentErrorKindOf(err)
 	return ok && actual == kind
 }
 
-func asPaymentError(err error) error {
+func ensurePaymentError(err error) error {
 	if err == nil {
 		return nil
 	}

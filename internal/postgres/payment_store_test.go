@@ -57,7 +57,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
 	_, err = store.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"))
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorNotFound))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorNotFound))
 }
 
 func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
@@ -564,7 +564,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	})
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
@@ -616,7 +616,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	})
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
@@ -722,7 +722,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 	})
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	saved, err := store.FindByID(ctx, payment.ID())
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())

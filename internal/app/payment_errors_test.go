@@ -80,7 +80,7 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 
 			require.True(t, ok)
 			assert.Equal(t, tt.kind, kind)
-			assert.True(t, app.IsPaymentErrorKind(tt.err, tt.kind))
+			assert.True(t, app.HasPaymentErrorKind(tt.err, tt.kind))
 			assert.Equal(t, tt.message, tt.err.Error())
 			assert.ErrorIs(t, tt.err, cause)
 			assert.NotContains(t, tt.err.Error(), cause.Error())
