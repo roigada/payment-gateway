@@ -43,42 +43,42 @@ type PaymentResult struct {
 }
 
 type AuthorizePaymentCommand struct {
-	OrderID        string
-	CustomerID     string
-	AmountCents    int64
-	Card           CardDetails
-	IdempotencyKey string
+	orderID        string
+	customerID     string
+	amountCents    int64
+	card           CardDetails
+	idempotencyKey string
 }
 
 type RetryAuthorizationCommand struct {
-	PaymentID      string
-	Card           CardDetails
-	IdempotencyKey string
+	paymentID      domain.PaymentID
+	card           CardDetails
+	idempotencyKey string
 }
 
 type CapturePaymentCommand struct {
-	PaymentID      string
-	IdempotencyKey string
+	paymentID      domain.PaymentID
+	idempotencyKey string
 }
 
 type VoidPaymentCommand struct {
-	PaymentID      string
-	IdempotencyKey string
+	paymentID      domain.PaymentID
+	idempotencyKey string
 }
 
 type RefundPaymentCommand struct {
-	PaymentID      string
-	IdempotencyKey string
+	paymentID      domain.PaymentID
+	idempotencyKey string
 }
 
 type GetPaymentQuery struct {
-	PaymentID string
+	paymentID domain.PaymentID
 }
 
 type SearchPaymentsQuery struct {
-	OrderID    string
-	CustomerID string
-	Status     string
+	orderID    string
+	customerID string
+	status     domain.PaymentStatus
 }
 
 type CardDetails struct {
@@ -86,6 +86,108 @@ type CardDetails struct {
 	CVV         string
 	ExpiryMonth int
 	ExpiryYear  int
+}
+
+func NewAuthorizePaymentCommand(orderID string, customerID string, amountCents int64, card CardDetails, idempotencyKey string) (AuthorizePaymentCommand, error) {
+	command := AuthorizePaymentCommand{
+		orderID:        strings.TrimSpace(orderID),
+		customerID:     strings.TrimSpace(customerID),
+		amountCents:    amountCents,
+		card:           normalizeCardDetails(card),
+		idempotencyKey: strings.TrimSpace(idempotencyKey),
+	}
+	if err := validateRequired(command.idempotencyKey, "idempotency key is required"); err != nil {
+		return AuthorizePaymentCommand{}, err
+	}
+	if err := validateRequired(command.orderID, "order id is required"); err != nil {
+		return AuthorizePaymentCommand{}, err
+	}
+	if err := validateRequired(command.customerID, "customer id is required"); err != nil {
+		return AuthorizePaymentCommand{}, err
+	}
+	if command.amountCents <= 0 {
+		return AuthorizePaymentCommand{}, NewInvalidPaymentInput("amount must be greater than zero", nil)
+	}
+	if err := validateCardDetails(command.card); err != nil {
+		return AuthorizePaymentCommand{}, err
+	}
+	return command, nil
+}
+
+func NewRetryAuthorizationCommand(paymentID string, card CardDetails, idempotencyKey string) (RetryAuthorizationCommand, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	paymentID = strings.TrimSpace(paymentID)
+	if err := validateRequired(idempotencyKey, "idempotency key is required"); err != nil {
+		return RetryAuthorizationCommand{}, err
+	}
+	parsedPaymentID, err := parsePaymentID(paymentID)
+	if err != nil {
+		return RetryAuthorizationCommand{}, err
+	}
+	card = normalizeCardDetails(card)
+	if err := validateCardDetails(card); err != nil {
+		return RetryAuthorizationCommand{}, err
+	}
+	return RetryAuthorizationCommand{paymentID: parsedPaymentID, card: card, idempotencyKey: idempotencyKey}, nil
+}
+
+func NewCapturePaymentCommand(paymentID string, idempotencyKey string) (CapturePaymentCommand, error) {
+	id, key, err := parsePaymentOperationInput(paymentID, idempotencyKey)
+	if err != nil {
+		return CapturePaymentCommand{}, err
+	}
+	return CapturePaymentCommand{paymentID: id, idempotencyKey: key}, nil
+}
+
+func NewVoidPaymentCommand(paymentID string, idempotencyKey string) (VoidPaymentCommand, error) {
+	id, key, err := parsePaymentOperationInput(paymentID, idempotencyKey)
+	if err != nil {
+		return VoidPaymentCommand{}, err
+	}
+	return VoidPaymentCommand{paymentID: id, idempotencyKey: key}, nil
+}
+
+func NewRefundPaymentCommand(paymentID string, idempotencyKey string) (RefundPaymentCommand, error) {
+	id, key, err := parsePaymentOperationInput(paymentID, idempotencyKey)
+	if err != nil {
+		return RefundPaymentCommand{}, err
+	}
+	return RefundPaymentCommand{paymentID: id, idempotencyKey: key}, nil
+}
+
+func NewGetPaymentQuery(paymentID string) (GetPaymentQuery, error) {
+	parsedPaymentID, err := parsePaymentID(strings.TrimSpace(paymentID))
+	if err != nil {
+		return GetPaymentQuery{}, err
+	}
+	return GetPaymentQuery{paymentID: parsedPaymentID}, nil
+}
+
+func NewSearchPaymentsQuery(orderID string, customerID string, status string) (SearchPaymentsQuery, error) {
+	query := SearchPaymentsQuery{
+		orderID:    strings.TrimSpace(orderID),
+		customerID: strings.TrimSpace(customerID),
+		status:     domain.PaymentStatus(strings.TrimSpace(status)),
+	}
+	if query.orderID == "" && query.customerID == "" {
+		return SearchPaymentsQuery{}, NewInvalidPaymentInput("order id or customer id is required", nil)
+	}
+	if query.status != "" && !isValidPaymentStatus(query.status) {
+		return SearchPaymentsQuery{}, NewInvalidPaymentInput("payment status is invalid", nil)
+	}
+	return query, nil
+}
+
+func (q SearchPaymentsQuery) OrderID() string {
+	return q.orderID
+}
+
+func (q SearchPaymentsQuery) CustomerID() string {
+	return q.customerID
+}
+
+func (q SearchPaymentsQuery) Status() string {
+	return string(q.status)
 }
 
 type PaymentStore interface {
@@ -247,23 +349,18 @@ func NewPaymentService(
 }
 
 func (s *PaymentService) AuthorizePayment(ctx context.Context, command AuthorizePaymentCommand) (PaymentResult, error) {
-	command, err := prepareAuthorizePaymentCommand(command)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
 	fingerprint := authorizePaymentRequestFingerprint(command, s.fingerprintSecret)
-	authorizationCardFingerprint := authorizationCardFingerprint(command.Card, s.fingerprintSecret)
+	authorizationCardFingerprint := authorizationCardFingerprint(command.card, s.fingerprintSecret)
 	paymentID := s.paymentIDs.NewPaymentID()
 	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	now := s.clock.Now()
-	payment, err := domain.NewPendingPayment(paymentID, command.OrderID, command.CustomerID, command.AmountCents, bankOperationKey, authorizationCardFingerprint, now)
+	payment, err := domain.NewPendingPayment(paymentID, command.orderID, command.customerID, command.amountCents, bankOperationKey, authorizationCardFingerprint, now)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
 	claim, claimed, err := s.claimPaymentCommand(ctx, ClaimPaymentCommand{
 		Operation:          authorizePaymentOperation,
-		Key:                command.IdempotencyKey,
+		Key:                command.idempotencyKey,
 		RequestFingerprint: fingerprint,
 		Payment:            payment,
 	})
@@ -276,19 +373,19 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 
 	bankResult, err := s.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
 		OperationKey: bankOperationKey,
-		OrderID:      command.OrderID,
-		CustomerID:   command.CustomerID,
-		AmountCents:  command.AmountCents,
+		OrderID:      command.orderID,
+		CustomerID:   command.customerID,
+		AmountCents:  command.amountCents,
 		Currency:     domain.CurrencyUSD,
-		Card:         command.Card,
+		Card:         command.card,
 	})
 	if isUnknownAuthorizationOutcome(err) {
-		s.releasePaymentCommand(ctx, authorizePaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, authorizePaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
 	if err := applyAuthorizationOutcome(payment, bankResult, err, s.clock.Now()); err != nil {
-		s.releasePaymentCommand(ctx, authorizePaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, authorizePaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
@@ -297,7 +394,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	if err := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 		Record: IdempotencyRecord{
 			Operation:          authorizePaymentOperation,
-			Key:                command.IdempotencyKey,
+			Key:                command.idempotencyKey,
 			RequestFingerprint: fingerprint,
 			Result:             result,
 			ResponseStatus:     result.ResponseStatus,
@@ -312,20 +409,15 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 }
 
 func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAuthorizationCommand) (PaymentResult, error) {
-	command, err := prepareRetryAuthorizationCommand(command)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
 	operation := retryAuthorizationOperation
 	requestFingerprint := retryAuthorizationRequestFingerprint(command, s.fingerprintSecret)
 	claim, claimed, err := s.claimPaymentCommand(ctx, ClaimPaymentCommand{
 		Operation:                    operation,
-		Key:                          command.IdempotencyKey,
+		Key:                          command.idempotencyKey,
 		RequestFingerprint:           requestFingerprint,
-		PaymentID:                    domain.PaymentID(command.PaymentID),
+		PaymentID:                    command.paymentID,
 		ExpectedStatus:               domain.PaymentStatusPending,
-		AuthorizationCardFingerprint: authorizationCardFingerprint(command.Card, s.fingerprintSecret),
+		AuthorizationCardFingerprint: authorizationCardFingerprint(command.card, s.fingerprintSecret),
 	})
 	if err != nil {
 		return PaymentResult{}, err
@@ -342,15 +434,15 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		CustomerID:   payment.CustomerID(),
 		AmountCents:  payment.AmountCents(),
 		Currency:     payment.Currency(),
-		Card:         command.Card,
+		Card:         command.card,
 	})
 	if isUnknownAuthorizationOutcome(err) {
-		s.releasePaymentCommand(ctx, operation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, operation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
 	if err := applyAuthorizationOutcome(payment, bankResult, err, s.clock.Now()); err != nil {
-		s.releasePaymentCommand(ctx, operation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, operation, command.idempotencyKey)
 		return PaymentResult{}, err
 	}
 
@@ -359,7 +451,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 	if err := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 		Record: IdempotencyRecord{
 			Operation:          operation,
-			Key:                command.IdempotencyKey,
+			Key:                command.idempotencyKey,
 			RequestFingerprint: requestFingerprint,
 			Result:             result,
 			ResponseStatus:     result.ResponseStatus,
@@ -374,13 +466,8 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 }
 
 func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaymentCommand) (PaymentResult, error) {
-	command, err := prepareCapturePaymentCommand(command)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
 	fingerprint := capturePaymentRequestFingerprint(command, s.fingerprintSecret)
-	payment, err := s.store.FindByID(ctx, domain.PaymentID(command.PaymentID))
+	payment, err := s.store.FindByID(ctx, command.paymentID)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
@@ -401,9 +488,9 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	}
 	claim, claimed, err := s.claimPaymentCommand(ctx, ClaimPaymentCommand{
 		Operation:            capturePaymentOperation,
-		Key:                  command.IdempotencyKey,
+		Key:                  command.idempotencyKey,
 		RequestFingerprint:   fingerprint,
-		PaymentID:            domain.PaymentID(command.PaymentID),
+		PaymentID:            command.paymentID,
 		ExpectedStatus:       domain.PaymentStatusAuthorized,
 		BankOperationKeyKind: BankOperationKeyCapture,
 		BankOperationKey:     bankOperationKey,
@@ -425,7 +512,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	if err != nil {
 		if IsPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 			if markErr := payment.MarkExpired(s.clock.Now()); markErr != nil {
-				s.releasePaymentCommand(ctx, capturePaymentOperation, command.IdempotencyKey)
+				s.releasePaymentCommand(ctx, capturePaymentOperation, command.idempotencyKey)
 				return PaymentResult{}, asPaymentError(markErr)
 			}
 			result := newPaymentResult(payment)
@@ -433,7 +520,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 			if completeErr := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 				Record: IdempotencyRecord{
 					Operation:          capturePaymentOperation,
-					Key:                command.IdempotencyKey,
+					Key:                command.idempotencyKey,
 					RequestFingerprint: fingerprint,
 					Result:             result,
 					ResponseStatus:     result.ResponseStatus,
@@ -445,12 +532,12 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 			}
 			return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 		}
-		s.releasePaymentCommand(ctx, capturePaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, capturePaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
 	if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
-		s.releasePaymentCommand(ctx, capturePaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, capturePaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
@@ -459,7 +546,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	if err := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 		Record: IdempotencyRecord{
 			Operation:          capturePaymentOperation,
-			Key:                command.IdempotencyKey,
+			Key:                command.idempotencyKey,
 			RequestFingerprint: fingerprint,
 			Result:             result,
 			ResponseStatus:     result.ResponseStatus,
@@ -487,12 +574,7 @@ func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthoriza
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
-	query, err := prepareGetPaymentQuery(query)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
-	payment, err := s.store.FindByID(ctx, domain.PaymentID(query.PaymentID))
+	payment, err := s.store.FindByID(ctx, query.paymentID)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
@@ -504,10 +586,6 @@ func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) 
 }
 
 func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
-	query, err := prepareSearchPaymentsQuery(query)
-	if err != nil {
-		return nil, err
-	}
 	if err := s.store.RefreshExpiredAuthorizations(ctx, query, s.clock.Now()); err != nil {
 		return nil, asPaymentError(err)
 	}
@@ -525,13 +603,8 @@ func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPayment
 }
 
 func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCommand) (PaymentResult, error) {
-	command, err := prepareVoidPaymentCommand(command)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
 	fingerprint := voidPaymentRequestFingerprint(command, s.fingerprintSecret)
-	payment, err := s.store.FindByID(ctx, domain.PaymentID(command.PaymentID))
+	payment, err := s.store.FindByID(ctx, command.paymentID)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
@@ -552,9 +625,9 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	}
 	claim, claimed, err := s.claimPaymentCommand(ctx, ClaimPaymentCommand{
 		Operation:            voidPaymentOperation,
-		Key:                  command.IdempotencyKey,
+		Key:                  command.idempotencyKey,
 		RequestFingerprint:   fingerprint,
-		PaymentID:            domain.PaymentID(command.PaymentID),
+		PaymentID:            command.paymentID,
 		ExpectedStatus:       domain.PaymentStatusAuthorized,
 		BankOperationKeyKind: BankOperationKeyVoid,
 		BankOperationKey:     bankOperationKey,
@@ -574,7 +647,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	if err != nil {
 		if IsPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 			if markErr := payment.MarkExpired(s.clock.Now()); markErr != nil {
-				s.releasePaymentCommand(ctx, voidPaymentOperation, command.IdempotencyKey)
+				s.releasePaymentCommand(ctx, voidPaymentOperation, command.idempotencyKey)
 				return PaymentResult{}, asPaymentError(markErr)
 			}
 			result := newPaymentResult(payment)
@@ -582,7 +655,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 			if completeErr := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 				Record: IdempotencyRecord{
 					Operation:          voidPaymentOperation,
-					Key:                command.IdempotencyKey,
+					Key:                command.idempotencyKey,
 					RequestFingerprint: fingerprint,
 					Result:             result,
 					ResponseStatus:     result.ResponseStatus,
@@ -594,12 +667,12 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 			}
 			return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
 		}
-		s.releasePaymentCommand(ctx, voidPaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, voidPaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
 	if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
-		s.releasePaymentCommand(ctx, voidPaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, voidPaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
@@ -608,7 +681,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	if err := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 		Record: IdempotencyRecord{
 			Operation:          voidPaymentOperation,
-			Key:                command.IdempotencyKey,
+			Key:                command.idempotencyKey,
 			RequestFingerprint: fingerprint,
 			Result:             result,
 			ResponseStatus:     result.ResponseStatus,
@@ -623,13 +696,8 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 }
 
 func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymentCommand) (PaymentResult, error) {
-	command, err := prepareRefundPaymentCommand(command)
-	if err != nil {
-		return PaymentResult{}, err
-	}
-
 	fingerprint := refundPaymentRequestFingerprint(command, s.fingerprintSecret)
-	payment, err := s.store.FindByID(ctx, domain.PaymentID(command.PaymentID))
+	payment, err := s.store.FindByID(ctx, command.paymentID)
 	if err != nil {
 		return PaymentResult{}, asPaymentError(err)
 	}
@@ -639,9 +707,9 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	}
 	claim, claimed, err := s.claimPaymentCommand(ctx, ClaimPaymentCommand{
 		Operation:            refundPaymentOperation,
-		Key:                  command.IdempotencyKey,
+		Key:                  command.idempotencyKey,
 		RequestFingerprint:   fingerprint,
-		PaymentID:            domain.PaymentID(command.PaymentID),
+		PaymentID:            command.paymentID,
 		ExpectedStatus:       domain.PaymentStatusCaptured,
 		BankOperationKeyKind: BankOperationKeyRefund,
 		BankOperationKey:     bankOperationKey,
@@ -661,12 +729,12 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		Currency:      payment.Currency(),
 	})
 	if err != nil {
-		s.releasePaymentCommand(ctx, refundPaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, refundPaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
 	if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, s.clock.Now()); err != nil {
-		s.releasePaymentCommand(ctx, refundPaymentOperation, command.IdempotencyKey)
+		s.releasePaymentCommand(ctx, refundPaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
 	}
 
@@ -675,7 +743,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	if err := s.store.CompletePaymentCommand(ctx, CompletePaymentCommand{
 		Record: IdempotencyRecord{
 			Operation:          refundPaymentOperation,
-			Key:                command.IdempotencyKey,
+			Key:                command.idempotencyKey,
 			RequestFingerprint: fingerprint,
 			Result:             result,
 			ResponseStatus:     result.ResponseStatus,
@@ -738,92 +806,6 @@ func allDigits(value string) bool {
 	return true
 }
 
-func prepareAuthorizePaymentCommand(command AuthorizePaymentCommand) (AuthorizePaymentCommand, error) {
-	command = normalizeAuthorizePaymentCommand(command)
-	if err := validateRequired(command.IdempotencyKey, "idempotency key is required"); err != nil {
-		return AuthorizePaymentCommand{}, err
-	}
-	if err := validateRequired(command.OrderID, "order id is required"); err != nil {
-		return AuthorizePaymentCommand{}, err
-	}
-	if err := validateRequired(command.CustomerID, "customer id is required"); err != nil {
-		return AuthorizePaymentCommand{}, err
-	}
-	if command.AmountCents <= 0 {
-		return AuthorizePaymentCommand{}, NewInvalidPaymentInput("amount must be greater than zero", nil)
-	}
-	if err := validateCardDetails(command.Card); err != nil {
-		return AuthorizePaymentCommand{}, err
-	}
-	return command, nil
-}
-
-func prepareRetryAuthorizationCommand(command RetryAuthorizationCommand) (RetryAuthorizationCommand, error) {
-	command = normalizeRetryAuthorizationCommand(command)
-	if err := validateRequired(command.IdempotencyKey, "idempotency key is required"); err != nil {
-		return RetryAuthorizationCommand{}, err
-	}
-	if err := validateRequired(command.PaymentID, "payment id is required"); err != nil {
-		return RetryAuthorizationCommand{}, err
-	}
-	if err := validateCardDetails(command.Card); err != nil {
-		return RetryAuthorizationCommand{}, err
-	}
-	return command, nil
-}
-
-func prepareCapturePaymentCommand(command CapturePaymentCommand) (CapturePaymentCommand, error) {
-	command = normalizeCapturePaymentCommand(command)
-	if err := validateRequired(command.IdempotencyKey, "idempotency key is required"); err != nil {
-		return CapturePaymentCommand{}, err
-	}
-	if err := validateRequired(command.PaymentID, "payment id is required"); err != nil {
-		return CapturePaymentCommand{}, err
-	}
-	return command, nil
-}
-
-func prepareVoidPaymentCommand(command VoidPaymentCommand) (VoidPaymentCommand, error) {
-	command = normalizeVoidPaymentCommand(command)
-	if err := validateRequired(command.IdempotencyKey, "idempotency key is required"); err != nil {
-		return VoidPaymentCommand{}, err
-	}
-	if err := validateRequired(command.PaymentID, "payment id is required"); err != nil {
-		return VoidPaymentCommand{}, err
-	}
-	return command, nil
-}
-
-func prepareRefundPaymentCommand(command RefundPaymentCommand) (RefundPaymentCommand, error) {
-	command = normalizeRefundPaymentCommand(command)
-	if err := validateRequired(command.IdempotencyKey, "idempotency key is required"); err != nil {
-		return RefundPaymentCommand{}, err
-	}
-	if err := validateRequired(command.PaymentID, "payment id is required"); err != nil {
-		return RefundPaymentCommand{}, err
-	}
-	return command, nil
-}
-
-func prepareGetPaymentQuery(query GetPaymentQuery) (GetPaymentQuery, error) {
-	query = normalizeGetPaymentQuery(query)
-	if err := validateRequired(query.PaymentID, "payment id is required"); err != nil {
-		return GetPaymentQuery{}, err
-	}
-	return query, nil
-}
-
-func prepareSearchPaymentsQuery(query SearchPaymentsQuery) (SearchPaymentsQuery, error) {
-	query = normalizeSearchPaymentsQuery(query)
-	if query.OrderID == "" && query.CustomerID == "" {
-		return SearchPaymentsQuery{}, NewInvalidPaymentInput("order id or customer id is required", nil)
-	}
-	if query.Status != "" && !isValidPaymentStatus(query.Status) {
-		return SearchPaymentsQuery{}, NewInvalidPaymentInput("payment status is invalid", nil)
-	}
-	return query, nil
-}
-
 func validateRequired(value string, message string) error {
 	if value == "" {
 		return NewInvalidPaymentInput(message, nil)
@@ -831,55 +813,38 @@ func validateRequired(value string, message string) error {
 	return nil
 }
 
-func normalizeAuthorizePaymentCommand(command AuthorizePaymentCommand) AuthorizePaymentCommand {
-	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
-	command.OrderID = strings.TrimSpace(command.OrderID)
-	command.CustomerID = strings.TrimSpace(command.CustomerID)
-	command.Card.Number = strings.TrimSpace(command.Card.Number)
-	command.Card.CVV = strings.TrimSpace(command.Card.CVV)
-	return command
+func parsePaymentOperationInput(paymentID string, idempotencyKey string) (domain.PaymentID, string, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	paymentID = strings.TrimSpace(paymentID)
+	if err := validateRequired(idempotencyKey, "idempotency key is required"); err != nil {
+		return "", "", err
+	}
+	parsedPaymentID, err := parsePaymentID(paymentID)
+	if err != nil {
+		return "", "", err
+	}
+	return parsedPaymentID, idempotencyKey, nil
 }
 
-func normalizeRetryAuthorizationCommand(command RetryAuthorizationCommand) RetryAuthorizationCommand {
-	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
-	command.PaymentID = strings.TrimSpace(command.PaymentID)
-	command.Card.Number = strings.TrimSpace(command.Card.Number)
-	command.Card.CVV = strings.TrimSpace(command.Card.CVV)
-	return command
+func parsePaymentID(value string) (domain.PaymentID, error) {
+	if err := validateRequired(value, "payment id is required"); err != nil {
+		return "", err
+	}
+	paymentID, err := domain.ParsePaymentID(value)
+	if err != nil {
+		return "", NewInvalidPaymentInput("payment id is invalid", err)
+	}
+	return paymentID, nil
 }
 
-func normalizeCapturePaymentCommand(command CapturePaymentCommand) CapturePaymentCommand {
-	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
-	command.PaymentID = strings.TrimSpace(command.PaymentID)
-	return command
+func normalizeCardDetails(card CardDetails) CardDetails {
+	card.Number = strings.TrimSpace(card.Number)
+	card.CVV = strings.TrimSpace(card.CVV)
+	return card
 }
 
-func normalizeVoidPaymentCommand(command VoidPaymentCommand) VoidPaymentCommand {
-	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
-	command.PaymentID = strings.TrimSpace(command.PaymentID)
-	return command
-}
-
-func normalizeRefundPaymentCommand(command RefundPaymentCommand) RefundPaymentCommand {
-	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
-	command.PaymentID = strings.TrimSpace(command.PaymentID)
-	return command
-}
-
-func normalizeGetPaymentQuery(query GetPaymentQuery) GetPaymentQuery {
-	query.PaymentID = strings.TrimSpace(query.PaymentID)
-	return query
-}
-
-func normalizeSearchPaymentsQuery(query SearchPaymentsQuery) SearchPaymentsQuery {
-	query.OrderID = strings.TrimSpace(query.OrderID)
-	query.CustomerID = strings.TrimSpace(query.CustomerID)
-	query.Status = strings.TrimSpace(query.Status)
-	return query
-}
-
-func isValidPaymentStatus(status string) bool {
-	switch domain.PaymentStatus(status) {
+func isValidPaymentStatus(status domain.PaymentStatus) bool {
+	switch status {
 	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusExpired, domain.PaymentStatusDeclined, domain.PaymentStatusCaptured, domain.PaymentStatusVoided, domain.PaymentStatusRefunded:
 		return true
 	default:
@@ -893,12 +858,12 @@ func authorizePaymentRequestFingerprint(command AuthorizePaymentCommand, secret 
 		hash,
 		"%s\n%s\n%s\n%d\n%s\n%d\n%d",
 		authorizePaymentOperation,
-		command.OrderID,
-		command.CustomerID,
-		command.AmountCents,
-		command.Card.Number,
-		command.Card.ExpiryMonth,
-		command.Card.ExpiryYear,
+		command.orderID,
+		command.customerID,
+		command.amountCents,
+		command.card.Number,
+		command.card.ExpiryMonth,
+		command.card.ExpiryYear,
 	)
 	return hex.EncodeToString(hash.Sum(nil))
 }
@@ -909,29 +874,29 @@ func retryAuthorizationRequestFingerprint(command RetryAuthorizationCommand, sec
 		hash,
 		"%s\n%s\n%s\n%d\n%d",
 		retryAuthorizationOperation,
-		command.PaymentID,
-		command.Card.Number,
-		command.Card.ExpiryMonth,
-		command.Card.ExpiryYear,
+		command.paymentID,
+		command.card.Number,
+		command.card.ExpiryMonth,
+		command.card.ExpiryYear,
 	)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func capturePaymentRequestFingerprint(command CapturePaymentCommand, secret string) string {
 	hash := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(hash, "%s\n%s", capturePaymentOperation, command.PaymentID)
+	_, _ = fmt.Fprintf(hash, "%s\n%s", capturePaymentOperation, command.paymentID)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func voidPaymentRequestFingerprint(command VoidPaymentCommand, secret string) string {
 	hash := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(hash, "%s\n%s", voidPaymentOperation, command.PaymentID)
+	_, _ = fmt.Fprintf(hash, "%s\n%s", voidPaymentOperation, command.paymentID)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func refundPaymentRequestFingerprint(command RefundPaymentCommand, secret string) string {
 	hash := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(hash, "%s\n%s", refundPaymentOperation, command.PaymentID)
+	_, _ = fmt.Fprintf(hash, "%s\n%s", refundPaymentOperation, command.paymentID)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 

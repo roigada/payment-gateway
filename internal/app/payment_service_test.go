@@ -152,8 +152,8 @@ func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 
 	secondRepo := testsupport.NewPaymentStore()
 	secondService := newPaymentService(secondRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailable(errors.New("500"))}, now)
-	secondCommand := validAuthorizeCommand()
-	secondCommand.AmountCents = 2599
+	secondCommand, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 2599, validCardDetails(), "public-key-1")
+	require.NoError(t, err)
 	_, err = secondService.AuthorizePayment(context.Background(), secondCommand)
 	require.Error(t, err)
 
@@ -262,8 +262,10 @@ func TestRetryAuthorizationRejectsFingerprintMismatchWithoutCallingBank(t *testi
 
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service = newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
-	retry := validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000")
-	retry.Card.Number = "4000000000000002"
+	retryCard := validCardDetails()
+	retryCard.Number = "4000000000000002"
+	retry, err := app.NewRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000", retryCard, "retry-key-1")
+	require.NoError(t, err)
 
 	_, err = service.RetryAuthorization(context.Background(), retry)
 
@@ -311,8 +313,10 @@ func TestAuthorizePaymentReplaysWhenOnlyCVVDiffers(t *testing.T) {
 	_, err := service.AuthorizePayment(context.Background(), first)
 	require.NoError(t, err)
 
-	second := validAuthorizeCommand()
-	second.Card.CVV = "999"
+	secondCard := validCardDetails()
+	secondCard.CVV = "999"
+	second, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, secondCard, "public-key-1")
+	require.NoError(t, err)
 	replayed, err := service.AuthorizePayment(context.Background(), second)
 
 	require.NoError(t, err)
@@ -328,8 +332,8 @@ func TestAuthorizePaymentRejectsReusedIdempotencyKeyWithDifferentRequest(t *test
 	_, err := service.AuthorizePayment(context.Background(), first)
 	require.NoError(t, err)
 
-	second := validAuthorizeCommand()
-	second.AmountCents = 2599
+	second, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 2599, validCardDetails(), "public-key-1")
+	require.NoError(t, err)
 	_, err = service.AuthorizePayment(context.Background(), second)
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -358,12 +362,13 @@ func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t 
 	repo := testsupport.NewPaymentStore()
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-	command := validAuthorizeCommand()
-	command.IdempotencyKey = " public-key-1 "
-	command.OrderID = " order-1 "
-	command.CustomerID = " customer-1 "
-	command.Card.Number = " 4111111111111111 "
-	command.Card.CVV = " 123 "
+	command, err := app.NewAuthorizePaymentCommand(" order-1 ", " customer-1 ", 1299, app.CardDetails{
+		Number:      " 4111111111111111 ",
+		CVV:         " 123 ",
+		ExpiryMonth: 12,
+		ExpiryYear:  2030,
+	}, " public-key-1 ")
+	require.NoError(t, err)
 
 	payment, err := service.AuthorizePayment(context.Background(), command)
 	require.NoError(t, err)
@@ -381,40 +386,38 @@ func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t 
 	assert.Equal(t, 1, bank.calls)
 }
 
-func TestAuthorizePaymentRequiresIdempotencyKeyBeforeCallingBank(t *testing.T) {
+func TestNewAuthorizePaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
-	service := newPaymentService(testsupport.NewPaymentStore(), bank, time.Now())
-	command := validAuthorizeCommand()
-	command.IdempotencyKey = ""
 
-	_, err := service.AuthorizePayment(context.Background(), command)
+	_, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, validCardDetails(), "")
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 	assert.Zero(t, bank.request)
 }
 
-func TestAuthorizePaymentValidatesCommandBeforeCallingBank(t *testing.T) {
+func TestNewAuthorizePaymentCommandValidatesInput(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(*app.AuthorizePaymentCommand)
+		name           string
+		orderID        string
+		customerID     string
+		amountCents    int64
+		card           app.CardDetails
+		idempotencyKey string
 	}{
-		{name: "order id", mutate: func(c *app.AuthorizePaymentCommand) { c.OrderID = "" }},
-		{name: "customer id", mutate: func(c *app.AuthorizePaymentCommand) { c.CustomerID = "" }},
-		{name: "amount", mutate: func(c *app.AuthorizePaymentCommand) { c.AmountCents = 0 }},
-		{name: "card number", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.Number = "4111x" }},
-		{name: "cvv", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.CVV = "12x" }},
-		{name: "expiry month", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryMonth = 13 }},
-		{name: "expiry year", mutate: func(c *app.AuthorizePaymentCommand) { c.Card.ExpiryYear = 0 }},
+		{name: "order id", orderID: "", customerID: "customer-1", amountCents: 1299, card: validCardDetails(), idempotencyKey: "public-key-1"},
+		{name: "customer id", orderID: "order-1", customerID: "", amountCents: 1299, card: validCardDetails(), idempotencyKey: "public-key-1"},
+		{name: "amount", orderID: "order-1", customerID: "customer-1", amountCents: 0, card: validCardDetails(), idempotencyKey: "public-key-1"},
+		{name: "card number", orderID: "order-1", customerID: "customer-1", amountCents: 1299, card: app.CardDetails{Number: "4111x", CVV: "123", ExpiryMonth: 12, ExpiryYear: 2030}, idempotencyKey: "public-key-1"},
+		{name: "cvv", orderID: "order-1", customerID: "customer-1", amountCents: 1299, card: app.CardDetails{Number: "4111111111111111", CVV: "12x", ExpiryMonth: 12, ExpiryYear: 2030}, idempotencyKey: "public-key-1"},
+		{name: "expiry month", orderID: "order-1", customerID: "customer-1", amountCents: 1299, card: app.CardDetails{Number: "4111111111111111", CVV: "123", ExpiryMonth: 13, ExpiryYear: 2030}, idempotencyKey: "public-key-1"},
+		{name: "expiry year", orderID: "order-1", customerID: "customer-1", amountCents: 1299, card: app.CardDetails{Number: "4111111111111111", CVV: "123", ExpiryMonth: 12, ExpiryYear: 0}, idempotencyKey: "public-key-1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
-			service := newPaymentService(testsupport.NewPaymentStore(), bank, time.Now())
-			command := validAuthorizeCommand()
-			tt.mutate(&command)
 
-			_, err := service.AuthorizePayment(context.Background(), command)
+			_, err := app.NewAuthorizePaymentCommand(tt.orderID, tt.customerID, tt.amountCents, tt.card, tt.idempotencyKey)
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 			assert.Zero(t, bank.request)
@@ -433,14 +436,10 @@ func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.
 		testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)},
 		"fingerprint-secret",
 	)
-	invalid := validAuthorizeCommand()
-	invalid.AmountCents = 0
-	_, err := service.AuthorizePayment(context.Background(), invalid)
+	_, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 0, validCardDetails(), "public-key-1")
 	require.Error(t, err)
 
-	valid := validAuthorizeCommand()
-	valid.AmountCents = 1299
-	_, err = service.AuthorizePayment(context.Background(), valid)
+	_, err = service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, bank.calls)
@@ -479,9 +478,7 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, now)
 
-	result, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
-		PaymentID: "pay_550e8400-e29b-41d4-a716-446655440000",
-	})
+	result, err := service.GetPayment(context.Background(), mustGetPaymentQuery(t, "pay_550e8400-e29b-41d4-a716-446655440000"))
 
 	require.NoError(t, err)
 	assert.Equal(t, app.PaymentResult{
@@ -497,12 +494,8 @@ func TestGetPaymentReturnsPublicResult(t *testing.T) {
 	}, result)
 }
 
-func TestGetPaymentRequiresPaymentID(t *testing.T) {
-	service := newPaymentService(testsupport.NewPaymentStore(), &bankAuthorizerFake{}, time.Now())
-
-	_, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
-		PaymentID: " ",
-	})
+func TestNewGetPaymentQueryRequiresPaymentID(t *testing.T) {
+	_, err := app.NewGetPaymentQuery(" ")
 
 	require.Error(t, err)
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
@@ -515,9 +508,7 @@ func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, payment.AuthorizationExpiresAt())
 
-	result, err := service.GetPayment(context.Background(), app.GetPaymentQuery{
-		PaymentID: string(payment.ID()),
-	})
+	result, err := service.GetPayment(context.Background(), mustGetPaymentQuery(t, string(payment.ID())))
 
 	require.NoError(t, err)
 	assert.Equal(t, "expired", result.Status)
@@ -536,10 +527,7 @@ func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testin
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 	service := newPaymentService(repo, bank, now.Add(time.Minute))
 
-	result, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "void-key-1",
-	})
+	result, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 
 	require.NoError(t, err)
 	assert.Equal(t, app.BankVoidRequest{
@@ -583,10 +571,7 @@ func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
 			bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 			service := newPaymentService(repo, bank, time.Now())
 
-			_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "void-key-1",
-			})
+			_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
 			assert.Zero(t, bank.voidCalls)
@@ -594,17 +579,13 @@ func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
 	}
 }
 
-func TestVoidPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
+func TestNewVoidPaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Now())
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
-	service := newPaymentService(repo, bank, time.Now())
 
-	_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "",
-	})
+	_, err := app.NewVoidPaymentCommand(string(payment.ID()), "")
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 	assert.Zero(t, bank.voidRequest)
@@ -629,10 +610,7 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankAuthorizerFake{voidErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 
-			_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "void-key-1",
-			})
+			_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
 			saved, findErr := repo.FindByID(context.Background(), payment.ID())
@@ -652,18 +630,12 @@ func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.
 	firstBank := &bankAuthorizerFake{voidErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
-	_, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "void-key-1",
-	})
+	_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 	require.Error(t, err)
 
 	secondBank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
 	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
-	result, err := service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "void-key-1",
-	})
+	result, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "bok_first", secondBank.voidRequest.OperationKey)
@@ -676,10 +648,7 @@ func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testi
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	command := app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "void-key-1",
-	}
+	command := mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1")
 	first, err := service.VoidPayment(context.Background(), command)
 	require.NoError(t, err)
 	bank.voidResult = app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}
@@ -710,16 +679,10 @@ func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T
 	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	_, err = service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "void-key-1",
-	})
+	_, err = service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 	require.NoError(t, err)
 
-	_, err = service.VoidPayment(context.Background(), app.VoidPaymentCommand{
-		PaymentID:      string(secondPayment.ID()),
-		IdempotencyKey: "void-key-1",
-	})
+	_, err = service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(secondPayment.ID()), "void-key-1"))
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	assert.Equal(t, 1, bank.voidCalls)
@@ -733,11 +696,7 @@ func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
 	require.NoError(t, repo.SeedPayment(context.Background(), newer))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, newer.CreatedAt())
 
-	results, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
-		OrderID:    " order-1 ",
-		CustomerID: " customer-1 ",
-		Status:     " authorized ",
-	})
+	results, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, " order-1 ", " customer-1 ", " authorized "))
 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -752,37 +711,31 @@ func TestSearchPaymentsRefreshesExpiredAuthorizationsBeforeFiltering(t *testing.
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	service := newPaymentService(repo, &bankAuthorizerFake{}, payment.AuthorizationExpiresAt())
 
-	authorized, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
-		OrderID: "order-1",
-		Status:  "authorized",
-	})
+	authorized, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-1", "", "authorized"))
 	require.NoError(t, err)
 	assert.Empty(t, authorized)
 
-	expired, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
-		OrderID: "order-1",
-		Status:  "expired",
-	})
+	expired, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-1", "", "expired"))
 	require.NoError(t, err)
 	require.Len(t, expired, 1)
 	assert.Equal(t, "expired", expired[0].Status)
 }
 
-func TestSearchPaymentsRejectsInvalidFilters(t *testing.T) {
+func TestNewSearchPaymentsQueryRejectsInvalidFilters(t *testing.T) {
 	tests := []struct {
-		name  string
-		query app.SearchPaymentsQuery
+		name       string
+		orderID    string
+		customerID string
+		status     string
 	}{
-		{name: "unfiltered", query: app.SearchPaymentsQuery{}},
-		{name: "status only", query: app.SearchPaymentsQuery{Status: "authorized"}},
-		{name: "invalid status", query: app.SearchPaymentsQuery{OrderID: "order-1", Status: "unknown"}},
+		{name: "unfiltered"},
+		{name: "status only", status: "authorized"},
+		{name: "invalid status", orderID: "order-1", status: "unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := newPaymentService(testsupport.NewPaymentStore(), &bankAuthorizerFake{}, time.Now())
-
-			_, err := service.SearchPayments(context.Background(), tt.query)
+			_, err := app.NewSearchPaymentsQuery(tt.orderID, tt.customerID, tt.status)
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 		})
@@ -798,10 +751,7 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, capturedAt)
 
-	captured, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	captured, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 	require.NoError(t, err)
 
 	assert.Equal(t, app.BankCaptureRequest{
@@ -830,17 +780,13 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 	assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
 }
 
-func TestCapturePaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
+func TestNewCapturePaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Now())
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
-	service := newPaymentService(repo, bank, time.Now())
 
-	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "",
-	})
+	_, err := app.NewCapturePaymentCommand(string(payment.ID()), "")
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 	assert.Zero(t, bank.captureRequest)
@@ -853,10 +799,7 @@ func TestCapturePaymentExpiresPaymentBeforeNewBankCallWhenAuthorizationExpired(t
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, payment.AuthorizationExpiresAt())
 
-	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
 	assert.Zero(t, bank.captureCalls)
@@ -883,10 +826,7 @@ func TestCapturePaymentRejectsNonAuthorizedStatusesWithoutCallingBank(t *testing
 			bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 			service := newPaymentService(repo, bank, time.Now())
 
-			_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "public-capture-key-1",
-			})
+			_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
 			assert.Zero(t, bank.captureRequest)
@@ -913,10 +853,7 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankFake{captureErr: tt.err}, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
 
-			_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "public-capture-key-1",
-			})
+			_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
 			saved, findErr := repo.FindByID(context.Background(), payment.ID())
@@ -936,10 +873,7 @@ func TestCapturePaymentPersistsExpiredStatusWhenBankReportsAuthorizationExpired(
 	now := payment.AuthorizationExpiresAt().Add(-time.Minute)
 	bank := &bankFake{captureErr: app.NewPaymentAuthorizationExpired(nil)}
 	service := newPaymentService(repo, bank, now)
-	command := app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	}
+	command := mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1")
 
 	_, err := service.CapturePayment(context.Background(), command)
 
@@ -963,18 +897,12 @@ func TestCapturePaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testi
 	firstBank := &bankFake{captureErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
-	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 	require.Error(t, err)
 
 	secondBank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
-	result, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	result, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "bok_first", secondBank.captureRequest.OperationKey)
@@ -987,21 +915,15 @@ func TestCapturePaymentReusesStoredBankOperationKeyAfterExpiration(t *testing.T)
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	firstBank := &bankFake{captureErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, payment.AuthorizationExpiresAt().Add(-time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
-	_, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 	require.Error(t, err)
 
 	secondBank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, payment.AuthorizationExpiresAt().Add(time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
-	_, err = service.GetPayment(context.Background(), app.GetPaymentQuery{PaymentID: string(payment.ID())})
+	_, err = service.GetPayment(context.Background(), mustGetPaymentQuery(t, string(payment.ID())))
 	require.NoError(t, err)
 
-	result, err := service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	result, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "bok_first", secondBank.captureRequest.OperationKey)
@@ -1019,17 +941,11 @@ func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(
 	}
 	service := newPaymentService(repo, &bankAuthorizerFake{}, expiresAt)
 
-	authorized, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
-		OrderID: "order-expired",
-		Status:  "authorized",
-	})
+	authorized, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-expired", "", "authorized"))
 	require.NoError(t, err)
 	assert.Empty(t, authorized)
 
-	expired, err := service.SearchPayments(context.Background(), app.SearchPaymentsQuery{
-		OrderID: "order-expired",
-		Status:  "expired",
-	})
+	expired, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-expired", "", "expired"))
 	require.NoError(t, err)
 	require.Len(t, expired, 100)
 	assert.Equal(t, "expired", expired[0].Status)
@@ -1041,10 +957,7 @@ func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	command := app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	}
+	command := mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1")
 	first, err := service.CapturePayment(context.Background(), command)
 	require.NoError(t, err)
 	bank.captureResult = app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002"}
@@ -1075,16 +988,10 @@ func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testin
 	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
-	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	_, err = service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 	require.NoError(t, err)
 
-	_, err = service.CapturePayment(context.Background(), app.CapturePaymentCommand{
-		PaymentID:      string(secondPayment.ID()),
-		IdempotencyKey: "public-capture-key-1",
-	})
+	_, err = service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(secondPayment.ID()), "public-capture-key-1"))
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	assert.Equal(t, 1, bank.captureCalls)
@@ -1099,10 +1006,7 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 	refundedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, bank, refundedAt)
 
-	refunded, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	})
+	refunded, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 	require.NoError(t, err)
 
 	assert.Equal(t, app.BankRefundRequest{
@@ -1131,17 +1035,13 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 	assert.Equal(t, "bok_123", saved.RefundBankOperationKey())
 }
 
-func TestRefundPaymentRejectsMissingIdempotencyKeyBeforeCallingBank(t *testing.T) {
+func TestNewRefundPaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newCapturedDomainPayment(t, time.Now())
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
-	service := newPaymentService(repo, bank, time.Now())
 
-	_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "",
-	})
+	_, err := app.NewRefundPaymentCommand(string(payment.ID()), "")
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 	assert.Zero(t, bank.refundRequest)
@@ -1164,10 +1064,7 @@ func TestRefundPaymentRejectsNonCapturedStatusesWithoutCallingBank(t *testing.T)
 			bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
 			service := newPaymentService(repo, bank, time.Now())
 
-			_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "public-refund-key-1",
-			})
+			_, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
 			assert.Zero(t, bank.refundRequest)
@@ -1194,10 +1091,7 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			require.NoError(t, repo.SeedPayment(context.Background(), payment))
 			service := newPaymentService(repo, &bankFake{refundErr: tt.err}, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
 
-			_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-				PaymentID:      string(payment.ID()),
-				IdempotencyKey: "public-refund-key-1",
-			})
+			_, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 
 			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
 			saved, findErr := repo.FindByID(context.Background(), payment.ID())
@@ -1217,18 +1111,12 @@ func TestRefundPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testin
 	firstBank := &bankFake{refundErr: app.NewPaymentBankTimeout(context.DeadlineExceeded)}
 	service := newPaymentServiceWithBankOperationKeys(repo, firstBank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_first", "bok_second"}})
 
-	_, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	})
+	_, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 	require.Error(t, err)
 
 	secondBank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
 	service = newPaymentServiceWithBankOperationKeys(repo, secondBank, time.Date(2026, 6, 18, 13, 1, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_second"}})
-	result, err := service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	})
+	result, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "bok_first", secondBank.refundRequest.OperationKey)
@@ -1241,10 +1129,7 @@ func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *t
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
-	command := app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	}
+	command := mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1")
 	first, err := service.RefundPayment(context.Background(), command)
 	require.NoError(t, err)
 	bank.refundResult = app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}
@@ -1286,16 +1171,10 @@ func TestRefundPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing
 	require.NoError(t, repo.SeedPayment(context.Background(), secondPayment))
 	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
-	_, err = service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(payment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	})
+	_, err = service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 	require.NoError(t, err)
 
-	_, err = service.RefundPayment(context.Background(), app.RefundPaymentCommand{
-		PaymentID:      string(secondPayment.ID()),
-		IdempotencyKey: "public-refund-key-1",
-	})
+	_, err = service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(secondPayment.ID()), "public-refund-key-1"))
 
 	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
 	assert.Equal(t, 1, bank.refundCalls)
@@ -1400,26 +1279,63 @@ func mustDeclinedPayment(t *testing.T, id string, orderID string, customerID str
 }
 
 func validAuthorizeCommand() app.AuthorizePaymentCommand {
-	return app.AuthorizePaymentCommand{
-		OrderID:        "order-1",
-		CustomerID:     "customer-1",
-		AmountCents:    1299,
-		IdempotencyKey: "public-key-1",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
+	command, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, validCardDetails(), "public-key-1")
+	if err != nil {
+		panic(err)
 	}
+	return command
 }
 
 func validRetryAuthorizationCommand(paymentID string) app.RetryAuthorizationCommand {
-	return app.RetryAuthorizationCommand{
-		PaymentID:      paymentID,
-		IdempotencyKey: "retry-key-1",
-		Card:           validAuthorizeCommand().Card,
+	command, err := app.NewRetryAuthorizationCommand(paymentID, validCardDetails(), "retry-key-1")
+	if err != nil {
+		panic(err)
 	}
+	return command
+}
+
+func validCardDetails() app.CardDetails {
+	return app.CardDetails{
+		Number:      "4111111111111111",
+		CVV:         "123",
+		ExpiryMonth: 12,
+		ExpiryYear:  2030,
+	}
+}
+
+func mustGetPaymentQuery(t *testing.T, paymentID string) app.GetPaymentQuery {
+	t.Helper()
+	query, err := app.NewGetPaymentQuery(paymentID)
+	require.NoError(t, err)
+	return query
+}
+
+func mustSearchPaymentsQuery(t *testing.T, orderID string, customerID string, status string) app.SearchPaymentsQuery {
+	t.Helper()
+	query, err := app.NewSearchPaymentsQuery(orderID, customerID, status)
+	require.NoError(t, err)
+	return query
+}
+
+func mustCapturePaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.CapturePaymentCommand {
+	t.Helper()
+	command, err := app.NewCapturePaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
+}
+
+func mustVoidPaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.VoidPaymentCommand {
+	t.Helper()
+	command, err := app.NewVoidPaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
+}
+
+func mustRefundPaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.RefundPaymentCommand {
+	t.Helper()
+	command, err := app.NewRefundPaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
 }
 
 func newPaymentService(repo app.PaymentStore, bank app.BankClient, now time.Time) *app.PaymentService {

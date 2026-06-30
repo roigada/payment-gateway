@@ -632,6 +632,14 @@ func validatePaymentID(id PaymentID) error {
 	return nil
 }
 
+func ParsePaymentID(value string) (PaymentID, error) {
+	id := PaymentID(value)
+	if err := validatePaymentID(id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 func isDashedUUID(value string) bool {
 	if len(value) != 36 {
 		return false

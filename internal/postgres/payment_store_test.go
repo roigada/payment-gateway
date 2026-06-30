@@ -218,18 +218,18 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 	declined := newStorePayment(t, 106, "order-1", "customer-1", domain.PaymentStatusDeclined, base.Add(106*time.Minute))
 	insertPaymentFixture(t, db, declined)
 
-	authorized, err := store.Search(ctx, app.SearchPaymentsQuery{
-		OrderID:    "order-1",
-		CustomerID: "customer-1",
-		Status:     "authorized",
-	})
+	authorizedQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "authorized")
+	require.NoError(t, err)
+	authorized, err := store.Search(ctx, authorizedQuery)
 
 	require.NoError(t, err)
 	require.Len(t, authorized, 100)
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000104"), authorized[0].ID())
 	assert.Equal(t, domain.PaymentID("pay_00000000-0000-4000-8000-000000000005"), authorized[99].ID())
 
-	byCustomer, err := store.Search(ctx, app.SearchPaymentsQuery{CustomerID: "customer-1"})
+	byCustomerQuery, err := app.NewSearchPaymentsQuery("", "customer-1", "")
+	require.NoError(t, err)
+	byCustomer, err := store.Search(ctx, byCustomerQuery)
 
 	require.NoError(t, err)
 	require.Len(t, byCustomer, 100)

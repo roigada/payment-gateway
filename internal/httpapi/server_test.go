@@ -30,18 +30,7 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
-	assert.Equal(t, app.AuthorizePaymentCommand{
-		OrderID:        "order-1",
-		CustomerID:     "customer-1",
-		AmountCents:    1299,
-		IdempotencyKey: "public-key-1",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
-	}, api.payments.authorizePaymentCommand)
+	assert.Equal(t, mustAuthorizePaymentCommand(t), api.payments.authorizePaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -142,16 +131,7 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 	})
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.RetryAuthorizationCommand{
-		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
-		IdempotencyKey: "retry-key-1",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
-	}, api.payments.retryAuthorizationCommand)
+	assert.Equal(t, mustRetryAuthorizationCommand(t), api.payments.retryAuthorizationCommand)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -246,10 +226,7 @@ func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	})
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.VoidPaymentCommand{
-		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
-		IdempotencyKey: "void-key-1",
-	}, api.payments.voidPaymentCommand)
+	assert.Equal(t, mustVoidPaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "void-key-1"), api.payments.voidPaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -276,10 +253,7 @@ func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T)
 	})
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.RefundPaymentCommand{
-		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
-		IdempotencyKey: "public-refund-key-1",
-	}, api.payments.refundPaymentCommand)
+	assert.Equal(t, mustRefundPaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "public-refund-key-1"), api.payments.refundPaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -301,9 +275,7 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.GetPaymentQuery{
-		PaymentID: "pay_550e8400-e29b-41d4-a716-446655440000",
-	}, api.payments.getPaymentQuery)
+	assert.Equal(t, mustGetPaymentQuery(t, "pay_550e8400-e29b-41d4-a716-446655440000"), api.payments.getPaymentQuery)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -322,8 +294,8 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 
 func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	api := newPaymentAPITest(t)
-	api.payments.getPaymentErr = app.NewPaymentNotFound("pay_missing", nil)
-	rec := api.request(t, http.MethodGet, "/v1/payments/not-a-payment-id", "", nil)
+	api.payments.getPaymentErr = app.NewPaymentNotFound("pay_550e8400-e29b-41d4-a716-446655440999", nil)
+	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440999", "", nil)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
 	assertErrorResponse(t, rec, "payment_not_found", "payment was not found")
@@ -337,11 +309,7 @@ func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	rec := api.request(t, http.MethodGet, "/v1/payments?order_id=order-1&customer_id=customer-1&status=declined", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, app.SearchPaymentsQuery{
-		OrderID:    "order-1",
-		CustomerID: "customer-1",
-		Status:     "declined",
-	}, api.payments.searchPaymentsQuery)
+	assert.Equal(t, mustSearchPaymentsQuery(t, "order-1", "customer-1", "declined"), api.payments.searchPaymentsQuery)
 	assert.JSONEq(t, `{
 		"payments": [
 			{
@@ -484,10 +452,7 @@ func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	assert.Empty(t, rec.Header().Get("Location"))
-	assert.Equal(t, app.CapturePaymentCommand{
-		PaymentID:      "pay_550e8400-e29b-41d4-a716-446655440000",
-		IdempotencyKey: "public-capture-key-1",
-	}, api.payments.capturePaymentCommand)
+	assert.Equal(t, mustCapturePaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "public-capture-key-1"), api.payments.capturePaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -825,6 +790,65 @@ func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPayment
 func (f *paymentUseCasesFake) SearchPayments(_ context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
 	f.searchPaymentsQuery = query
 	return f.searchPaymentsResult, f.searchPaymentsErr
+}
+
+func mustAuthorizePaymentCommand(t *testing.T) app.AuthorizePaymentCommand {
+	t.Helper()
+	command, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, app.CardDetails{
+		Number:      "4111111111111111",
+		CVV:         "123",
+		ExpiryMonth: 12,
+		ExpiryYear:  2030,
+	}, "public-key-1")
+	require.NoError(t, err)
+	return command
+}
+
+func mustRetryAuthorizationCommand(t *testing.T) app.RetryAuthorizationCommand {
+	t.Helper()
+	command, err := app.NewRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000", app.CardDetails{
+		Number:      "4111111111111111",
+		CVV:         "123",
+		ExpiryMonth: 12,
+		ExpiryYear:  2030,
+	}, "retry-key-1")
+	require.NoError(t, err)
+	return command
+}
+
+func mustCapturePaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.CapturePaymentCommand {
+	t.Helper()
+	command, err := app.NewCapturePaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
+}
+
+func mustVoidPaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.VoidPaymentCommand {
+	t.Helper()
+	command, err := app.NewVoidPaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
+}
+
+func mustRefundPaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.RefundPaymentCommand {
+	t.Helper()
+	command, err := app.NewRefundPaymentCommand(paymentID, idempotencyKey)
+	require.NoError(t, err)
+	return command
+}
+
+func mustGetPaymentQuery(t *testing.T, paymentID string) app.GetPaymentQuery {
+	t.Helper()
+	query, err := app.NewGetPaymentQuery(paymentID)
+	require.NoError(t, err)
+	return query
+}
+
+func mustSearchPaymentsQuery(t *testing.T, orderID string, customerID string, status string) app.SearchPaymentsQuery {
+	t.Helper()
+	query, err := app.NewSearchPaymentsQuery(orderID, customerID, status)
+	require.NoError(t, err)
+	return query
 }
 
 func newPayment(id string) app.PaymentResult {

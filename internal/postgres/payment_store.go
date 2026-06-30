@@ -213,8 +213,8 @@ func (r *PaymentStore) RefreshExpiredAuthorizations(ctx context.Context, query a
 		           AND ($1 = '' OR order_id = $1)
 		           AND ($2 = '' OR customer_id = $2)
 		  )`,
-		query.OrderID,
-		query.CustomerID,
+		query.OrderID(),
+		query.CustomerID(),
 		now,
 		domain.PaymentStatusExpired,
 		domain.PaymentStatusAuthorized,
@@ -476,9 +476,9 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 		    AND ($3 = '' OR status = $3)
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 100`,
-		query.OrderID,
-		query.CustomerID,
-		query.Status,
+		query.OrderID(),
+		query.CustomerID(),
+		query.Status(),
 	)
 	if err != nil {
 		return nil, app.NewInternalPaymentError(err)

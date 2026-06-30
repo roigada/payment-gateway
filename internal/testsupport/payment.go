@@ -59,10 +59,10 @@ func (r *PaymentStore) ExpireAuthorization(ctx context.Context, payment *domain.
 
 func (r *PaymentStore) RefreshExpiredAuthorizations(_ context.Context, query app.SearchPaymentsQuery, now time.Time) error {
 	for _, payment := range r.payments {
-		if query.OrderID != "" && payment.OrderID() != query.OrderID {
+		if query.OrderID() != "" && payment.OrderID() != query.OrderID() {
 			continue
 		}
-		if query.CustomerID != "" && payment.CustomerID() != query.CustomerID {
+		if query.CustomerID() != "" && payment.CustomerID() != query.CustomerID() {
 			continue
 		}
 		if !payment.AuthorizationExpired(now) {
@@ -163,13 +163,13 @@ func (r *PaymentStore) ReleasePaymentCommand(_ context.Context, operation string
 func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
-		if query.OrderID != "" && payment.OrderID() != query.OrderID {
+		if query.OrderID() != "" && payment.OrderID() != query.OrderID() {
 			continue
 		}
-		if query.CustomerID != "" && payment.CustomerID() != query.CustomerID {
+		if query.CustomerID() != "" && payment.CustomerID() != query.CustomerID() {
 			continue
 		}
-		if query.Status != "" && string(payment.Status()) != query.Status {
+		if query.Status() != "" && string(payment.Status()) != query.Status() {
 			continue
 		}
 		cloned, err := clonePayment(payment)
