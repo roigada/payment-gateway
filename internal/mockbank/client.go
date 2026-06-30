@@ -38,10 +38,10 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(authorizationRequest{
-		CardNumber:  request.Card.Number,
-		CVV:         request.Card.CVV,
-		ExpiryMonth: request.Card.ExpiryMonth,
-		ExpiryYear:  request.Card.ExpiryYear,
+		CardNumber:  request.CardNumber,
+		CVV:         request.CardCVV,
+		ExpiryMonth: request.CardExpiryMonth,
+		ExpiryYear:  request.CardExpiryYear,
 		AmountCents: request.AmountCents,
 	}); err != nil {
 		return app.BankAuthorizationResult{}, app.NewInternalPaymentError(err)

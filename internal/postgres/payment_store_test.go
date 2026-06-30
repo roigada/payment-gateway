@@ -424,21 +424,23 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
-		ResponseStatus:     201,
-		Result: app.PaymentResult{
-			ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
-			OrderID:       "order-1",
-			CustomerID:    "customer-1",
-			AmountCents:   1299,
-			Currency:      "USD",
-			Status:        "declined",
-			DeclineReason: "invalid_card",
-			CreatedAt:     now,
-			UpdatedAt:     now,
+		Result: app.PaymentCommandResult{
+			HTTPStatus: 201,
+			Payment: app.PaymentResult{
+				ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
+				OrderID:       "order-1",
+				CustomerID:    "customer-1",
+				AmountCents:   1299,
+				Currency:      "USD",
+				Status:        "declined",
+				DeclineReason: "invalid_card",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
 		},
 	}
 
-	claimed, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claimed, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          record.Operation,
 		Key:                record.Key,
 		RequestFingerprint: record.RequestFingerprint,
@@ -448,13 +450,9 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	assert.Equal(t, app.IdempotencyClaimed, claimed.Status)
 	assert.Equal(t, record.RequestFingerprint, claimed.Record.RequestFingerprint)
 	require.NoError(t, payment.MarkDeclined(domain.DeclineReasonInvalidCard, now))
-	require.NoError(t, store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
-		Record:         record,
-		Payment:        payment,
-		ExpectedStatus: domain.PaymentStatusPending,
-	}))
+	require.NoError(t, store.CompletePaymentCommand(ctx, record, payment, domain.PaymentStatusPending))
 
-	saved, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	saved, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -464,18 +462,18 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	assert.Equal(t, record.Operation, saved.Record.Operation)
 	assert.Equal(t, record.Key, saved.Record.Key)
 	assert.Equal(t, record.RequestFingerprint, saved.Record.RequestFingerprint)
-	assert.Equal(t, record.ResponseStatus, saved.Record.ResponseStatus)
-	assert.Equal(t, record.Result.ID, saved.Record.Result.ID)
-	assert.Equal(t, record.Result.OrderID, saved.Record.Result.OrderID)
-	assert.Equal(t, record.Result.CustomerID, saved.Record.Result.CustomerID)
-	assert.Equal(t, record.Result.AmountCents, saved.Record.Result.AmountCents)
-	assert.Equal(t, record.Result.Currency, saved.Record.Result.Currency)
-	assert.Equal(t, record.Result.Status, saved.Record.Result.Status)
-	assert.Equal(t, record.Result.DeclineReason, saved.Record.Result.DeclineReason)
-	assert.True(t, saved.Record.Result.CreatedAt.Equal(now), "created_at should round-trip as the same instant")
-	assert.True(t, saved.Record.Result.UpdatedAt.Equal(now), "updated_at should round-trip as the same instant")
+	assert.Equal(t, record.Result.HTTPStatus, saved.Record.Result.HTTPStatus)
+	assert.Equal(t, record.Result.Payment.ID, saved.Record.Result.Payment.ID)
+	assert.Equal(t, record.Result.Payment.OrderID, saved.Record.Result.Payment.OrderID)
+	assert.Equal(t, record.Result.Payment.CustomerID, saved.Record.Result.Payment.CustomerID)
+	assert.Equal(t, record.Result.Payment.AmountCents, saved.Record.Result.Payment.AmountCents)
+	assert.Equal(t, record.Result.Payment.Currency, saved.Record.Result.Payment.Currency)
+	assert.Equal(t, record.Result.Payment.Status, saved.Record.Result.Payment.Status)
+	assert.Equal(t, record.Result.Payment.DeclineReason, saved.Record.Result.Payment.DeclineReason)
+	assert.True(t, saved.Record.Result.Payment.CreatedAt.Equal(now), "created_at should round-trip as the same instant")
+	assert.True(t, saved.Record.Result.Payment.UpdatedAt.Equal(now), "updated_at should round-trip as the same instant")
 
-	missing, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	missing, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "authorize_payment",
 		Key:                "missing-key",
 		RequestFingerprint: "fingerprint-1",
@@ -493,7 +491,7 @@ func TestPaymentStoreReturnsInProgressForDuplicateClaim(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 
-	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "capture_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -501,7 +499,7 @@ func TestPaymentStoreReturnsInProgressForDuplicateClaim(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, app.IdempotencyClaimed, claim.Status)
 
-	record, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	record, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "capture_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -513,7 +511,7 @@ func TestPaymentStoreReturnsInProgressForDuplicateClaim(t *testing.T) {
 	assert.Equal(t, "fingerprint-1", record.Record.RequestFingerprint)
 
 	require.NoError(t, store.ReleasePaymentCommand(ctx, "capture_payment", "public-key-1"))
-	reclaimed, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	reclaimed, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "capture_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -541,7 +539,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 		now,
 	)
 	require.NoError(t, err)
-	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -551,17 +549,17 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	require.Equal(t, app.IdempotencyClaimed, claim.Status)
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
 
-	err = store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
-		Record: app.IdempotencyRecord{
+	err = store.CompletePaymentCommand(
+		ctx,
+		app.IdempotencyRecord{
 			Operation:          "authorize_payment",
 			Key:                "public-key-1",
 			RequestFingerprint: "different-fingerprint",
-			ResponseStatus:     201,
-			Result:             newStorePaymentResult(payment, 201),
+			Result:             newStorePaymentCommandResult(payment, 201),
 		},
-		Payment:        payment,
-		ExpectedStatus: domain.PaymentStatusPending,
-	})
+		payment,
+		domain.PaymentStatusPending,
+	)
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -570,7 +568,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Empty(t, saved.BankAuthorizationID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440000", saved.AuthorizationBankOperationKey())
-	claimStatus, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claimStatus, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "authorize_payment",
 		Key:                "public-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -590,7 +588,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
 	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
 	insertPaymentFixture(t, db, payment)
-	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claim, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:            "capture_payment",
 		Key:                  "public-capture-key-1",
 		RequestFingerprint:   "fingerprint-1",
@@ -603,17 +601,17 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	require.Equal(t, app.IdempotencyClaimed, claim.Status)
 	require.NoError(t, claim.Payment.Capture("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment.CaptureBankOperationKey(), now.Add(time.Minute)))
 
-	err = store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
-		Record: app.IdempotencyRecord{
+	err = store.CompletePaymentCommand(
+		ctx,
+		app.IdempotencyRecord{
 			Operation:          "capture_payment",
 			Key:                "public-capture-key-1",
 			RequestFingerprint: "different-fingerprint",
-			ResponseStatus:     200,
-			Result:             newStorePaymentResult(claim.Payment, 200),
+			Result:             newStorePaymentCommandResult(claim.Payment, 200),
 		},
-		Payment:        claim.Payment,
-		ExpectedStatus: domain.PaymentStatusAuthorized,
-	})
+		claim.Payment,
+		domain.PaymentStatusAuthorized,
+	)
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -622,7 +620,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankCaptureID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440010", saved.CaptureBankOperationKey())
-	claimStatus, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommand{
+	claimStatus, err := store.ClaimPaymentCommand(ctx, app.ClaimPaymentCommandInput{
 		Operation:          "capture_payment",
 		Key:                "public-capture-key-1",
 		RequestFingerprint: "fingerprint-1",
@@ -671,19 +669,21 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 	}
 }
 
-func newStorePaymentResult(payment *domain.Payment, responseStatus int) app.PaymentResult {
-	return app.PaymentResult{
-		ID:                     string(payment.ID()),
-		OrderID:                payment.OrderID(),
-		CustomerID:             payment.CustomerID(),
-		AmountCents:            payment.AmountCents(),
-		Currency:               payment.Currency(),
-		Status:                 string(payment.Status()),
-		DeclineReason:          string(payment.DeclineReason()),
-		AuthorizationExpiresAt: payment.AuthorizationExpiresAt(),
-		CreatedAt:              payment.CreatedAt(),
-		UpdatedAt:              payment.UpdatedAt(),
-		ResponseStatus:         responseStatus,
+func newStorePaymentCommandResult(payment *domain.Payment, httpStatus int) app.PaymentCommandResult {
+	return app.PaymentCommandResult{
+		HTTPStatus: httpStatus,
+		Payment: app.PaymentResult{
+			ID:                     string(payment.ID()),
+			OrderID:                payment.OrderID(),
+			CustomerID:             payment.CustomerID(),
+			AmountCents:            payment.AmountCents(),
+			Currency:               payment.Currency(),
+			Status:                 string(payment.Status()),
+			DeclineReason:          string(payment.DeclineReason()),
+			AuthorizationExpiresAt: payment.AuthorizationExpiresAt(),
+			CreatedAt:              payment.CreatedAt(),
+			UpdatedAt:              payment.UpdatedAt(),
+		},
 	}
 }
 
@@ -709,17 +709,17 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 	insertPaymentFixture(t, db, payment)
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now))
 
-	err = store.CompletePaymentCommand(ctx, app.CompletePaymentCommand{
-		Record: app.IdempotencyRecord{
+	err = store.CompletePaymentCommand(
+		ctx,
+		app.IdempotencyRecord{
 			Operation:          "authorize_payment",
 			Key:                "public-key-1",
 			RequestFingerprint: "fingerprint-1",
-			ResponseStatus:     201,
-			Result:             newStorePaymentResult(payment, 201),
+			Result:             newStorePaymentCommandResult(payment, 201),
 		},
-		Payment:        payment,
-		ExpectedStatus: domain.PaymentStatusPending,
-	})
+		payment,
+		domain.PaymentStatusPending,
+	)
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))

@@ -6,8 +6,8 @@ The Postgres adapter exposes this as one concrete `PaymentStore`. It does not ex
 
 `PaymentStore` owns command persistence through three app-facing methods:
 
-- `ClaimPaymentCommand` claims the public Idempotency Key and durably stores or reuses pre-bank recovery facts before a Mock Bank call.
-- `CompletePaymentCommand` saves the Payment transition and completes the replay snapshot in the same database transaction after a definitive bank result.
+- `ClaimPaymentCommand` claims the public idempotency slot for a payment command and durably stores or reuses pre-bank recovery facts before a Mock Bank call.
+- `CompletePaymentCommand` saves the Payment transition and completes the replay snapshot in the same database transaction after a definitive bank result. Its signature keeps the `IdempotencyRecord`, `Payment`, and expected previous **Payment Status** explicit because those values define the atomic completion boundary.
 - `ReleasePaymentCommand` releases an `in_progress` public idempotency claim after transient post-claim failures.
 
 The store also exposes payment query methods because queries and non-command lifecycle refreshes still need the same Payment persistence boundary.

@@ -62,27 +62,25 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		request.OrderID,
 		request.CustomerID,
 		request.AmountCents,
-		app.CardDetails{
-			Number:      request.Card.Number,
-			CVV:         request.Card.CVV,
-			ExpiryMonth: request.Card.ExpiryMonth,
-			ExpiryYear:  request.Card.ExpiryYear,
-		},
+		request.Card.Number,
+		request.Card.CVV,
+		request.Card.ExpiryMonth,
+		request.Card.ExpiryYear,
 		r.Header.Get("Idempotency-Key"),
 	)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.AuthorizePayment(r.Context(), command)
+	result, err := s.payments.AuthorizePayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	logPaymentResult(r, payment)
+	logPaymentResult(r, result.Payment)
 
-	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(payment.ID))
-	writeJSON(w, responseStatusOr(payment, http.StatusCreated), newPaymentEnvelope(payment))
+	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(result.Payment.ID))
+	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
@@ -117,26 +115,24 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 
 	command, err := app.NewRetryAuthorizationCommand(
 		r.PathValue("payment_id"),
-		app.CardDetails{
-			Number:      request.Card.Number,
-			CVV:         request.Card.CVV,
-			ExpiryMonth: request.Card.ExpiryMonth,
-			ExpiryYear:  request.Card.ExpiryYear,
-		},
+		request.Card.Number,
+		request.Card.CVV,
+		request.Card.ExpiryMonth,
+		request.Card.ExpiryYear,
 		r.Header.Get("Idempotency-Key"),
 	)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.RetryAuthorization(r.Context(), command)
+	result, err := s.payments.RetryAuthorization(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	logPaymentResult(r, payment)
+	logPaymentResult(r, result.Payment)
 
-	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
+	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
@@ -160,14 +156,14 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.CapturePayment(r.Context(), command)
+	result, err := s.payments.CapturePayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	logPaymentResult(r, payment)
+	logPaymentResult(r, result.Payment)
 
-	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
+	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
@@ -191,14 +187,14 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.VoidPayment(r.Context(), command)
+	result, err := s.payments.VoidPayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	logPaymentResult(r, payment)
+	logPaymentResult(r, result.Payment)
 
-	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
+	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
@@ -222,14 +218,14 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.RefundPayment(r.Context(), command)
+	result, err := s.payments.RefundPayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	logPaymentResult(r, payment)
+	logPaymentResult(r, result.Payment)
 
-	writeJSON(w, responseStatusOr(payment, http.StatusOK), newPaymentEnvelope(payment))
+	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -328,13 +324,6 @@ func newPaymentEnvelope(payment app.PaymentResult) paymentEnvelope {
 			UpdatedAt:              payment.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		},
 	}
-}
-
-func responseStatusOr(payment app.PaymentResult, fallback int) int {
-	if payment.ResponseStatus == 0 {
-		return fallback
-	}
-	return payment.ResponseStatus
 }
 
 func newPaymentsEnvelope(payments []app.PaymentResult) paymentsEnvelope {
