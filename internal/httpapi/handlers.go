@@ -58,18 +58,23 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 	}
 	addRequestLogAttrs(r, "order_id", request.OrderID, "customer_id", request.CustomerID)
 
-	payment, err := s.payments.AuthorizePayment(r.Context(), app.AuthorizePaymentCommand{
-		OrderID:        request.OrderID,
-		CustomerID:     request.CustomerID,
-		AmountCents:    request.AmountCents,
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-		Card: app.CardDetails{
+	command, err := app.NewAuthorizePaymentCommand(
+		request.OrderID,
+		request.CustomerID,
+		request.AmountCents,
+		app.CardDetails{
 			Number:      request.Card.Number,
 			CVV:         request.Card.CVV,
 			ExpiryMonth: request.Card.ExpiryMonth,
 			ExpiryYear:  request.Card.ExpiryYear,
 		},
-	})
+		r.Header.Get("Idempotency-Key"),
+	)
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.AuthorizePayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -110,16 +115,21 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := s.payments.RetryAuthorization(r.Context(), app.RetryAuthorizationCommand{
-		PaymentID:      r.PathValue("payment_id"),
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-		Card: app.CardDetails{
+	command, err := app.NewRetryAuthorizationCommand(
+		r.PathValue("payment_id"),
+		app.CardDetails{
 			Number:      request.Card.Number,
 			CVV:         request.Card.CVV,
 			ExpiryMonth: request.Card.ExpiryMonth,
 			ExpiryYear:  request.Card.ExpiryYear,
 		},
-	})
+		r.Header.Get("Idempotency-Key"),
+	)
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.RetryAuthorization(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -145,10 +155,12 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := s.payments.CapturePayment(r.Context(), app.CapturePaymentCommand{
-		PaymentID:      r.PathValue("payment_id"),
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-	})
+	command, err := app.NewCapturePaymentCommand(r.PathValue("payment_id"), r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.CapturePayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -174,10 +186,12 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := s.payments.VoidPayment(r.Context(), app.VoidPaymentCommand{
-		PaymentID:      r.PathValue("payment_id"),
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-	})
+	command, err := app.NewVoidPaymentCommand(r.PathValue("payment_id"), r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.VoidPayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -203,10 +217,12 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := s.payments.RefundPayment(r.Context(), app.RefundPaymentCommand{
-		PaymentID:      r.PathValue("payment_id"),
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-	})
+	command, err := app.NewRefundPaymentCommand(r.PathValue("payment_id"), r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.RefundPayment(r.Context(), command)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -220,9 +236,12 @@ func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
 	logPaymentOperation(r, "get_payment")
 	logPaymentID(r, r.PathValue("id"))
 
-	payment, err := s.payments.GetPayment(r.Context(), app.GetPaymentQuery{
-		PaymentID: r.PathValue("id"),
-	})
+	query, err := app.NewGetPaymentQuery(r.PathValue("id"))
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payment, err := s.payments.GetPayment(r.Context(), query)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
@@ -246,11 +265,12 @@ func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
 	}
 	addRequestLogAttrs(r, "order_id", query.Get("order_id"), "customer_id", query.Get("customer_id"), "payment_status", query.Get("status"))
 
-	payments, err := s.payments.SearchPayments(r.Context(), app.SearchPaymentsQuery{
-		OrderID:    query.Get("order_id"),
-		CustomerID: query.Get("customer_id"),
-		Status:     query.Get("status"),
-	})
+	searchQuery, err := app.NewSearchPaymentsQuery(query.Get("order_id"), query.Get("customer_id"), query.Get("status"))
+	if err != nil {
+		writePaymentServiceError(w, r, err)
+		return
+	}
+	payments, err := s.payments.SearchPayments(r.Context(), searchQuery)
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return
