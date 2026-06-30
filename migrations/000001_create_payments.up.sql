@@ -40,13 +40,13 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     key text NOT NULL CHECK (length(trim(key)) > 0),
     request_fingerprint text NOT NULL CHECK (length(trim(request_fingerprint)) > 0),
     status text NOT NULL CHECK (status IN ('in_progress', 'completed')),
-    response_status integer CHECK (response_status IS NULL OR response_status BETWEEN 100 AND 599),
-    response_body jsonb,
+    http_status integer CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+    payment_result jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (operation, key),
     CONSTRAINT idempotency_records_completion_check CHECK (
-        (status = 'in_progress' AND response_status IS NULL AND response_body IS NULL)
+        (status = 'in_progress' AND http_status IS NULL AND payment_result IS NULL)
         OR
-        (status = 'completed' AND response_status IS NOT NULL AND response_body IS NOT NULL AND jsonb_typeof(response_body) = 'object')
+        (status = 'completed' AND http_status IS NOT NULL AND payment_result IS NOT NULL AND jsonb_typeof(payment_result) = 'object')
     )
 );

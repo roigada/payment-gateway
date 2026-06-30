@@ -633,7 +633,7 @@ func validRetryAuthorizationBody() string {
 }
 
 type paymentAPITest struct {
-	payments  *paymentUseCasesFake
+	payments  *paymentApplicationFake
 	readiness *readinessCheckerFake
 	handler   http.Handler
 }
@@ -647,7 +647,7 @@ func newPaymentAPITest(t *testing.T) *paymentAPITest {
 func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPITest {
 	t.Helper()
 
-	payments := &paymentUseCasesFake{}
+	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 
 	return &paymentAPITest{
@@ -711,7 +711,7 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-type paymentUseCasesFake struct {
+type paymentApplicationFake struct {
 	authorizePaymentCommand   app.AuthorizePaymentCommand
 	authorizePaymentResult    app.PaymentResult
 	authorizePaymentErr       error
@@ -748,70 +748,60 @@ func (f *readinessCheckerFake) CheckReady(context.Context) error {
 	return f.err
 }
 
-func (f *paymentUseCasesFake) AuthorizePayment(_ context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) AuthorizePayment(_ context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 	if f.authorizePaymentPanic != nil {
 		panic(f.authorizePaymentPanic)
 	}
 	f.authorizePaymentCommand = command
-	return f.authorizePaymentResult, f.authorizePaymentErr
+	return app.PaymentCommandResult{Payment: f.authorizePaymentResult, HTTPStatus: http.StatusCreated}, f.authorizePaymentErr
 }
 
-func (f *paymentUseCasesFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
 	if f.retryAuthorizationPanic != nil {
 		panic(f.retryAuthorizationPanic)
 	}
 	f.retryAuthorizationCommand = command
-	return f.retryAuthorizationResult, f.retryAuthorizationErr
+	return app.PaymentCommandResult{Payment: f.retryAuthorizationResult, HTTPStatus: http.StatusOK}, f.retryAuthorizationErr
 }
 
-func (f *paymentUseCasesFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
 	if f.capturePaymentPanic != nil {
 		panic(f.capturePaymentPanic)
 	}
 	f.capturePaymentCommand = command
-	return f.capturePaymentResult, f.capturePaymentErr
+	return app.PaymentCommandResult{Payment: f.capturePaymentResult, HTTPStatus: http.StatusOK}, f.capturePaymentErr
 }
 
-func (f *paymentUseCasesFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
 	f.voidPaymentCommand = command
-	return f.voidPaymentResult, f.voidPaymentErr
+	return app.PaymentCommandResult{Payment: f.voidPaymentResult, HTTPStatus: http.StatusOK}, f.voidPaymentErr
 }
 
-func (f *paymentUseCasesFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
 	f.refundPaymentCommand = command
-	return f.refundPaymentResult, f.refundPaymentErr
+	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
 }
 
-func (f *paymentUseCasesFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
 	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
 }
 
-func (f *paymentUseCasesFake) SearchPayments(_ context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
+func (f *paymentApplicationFake) SearchPayments(_ context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
 	f.searchPaymentsQuery = query
 	return f.searchPaymentsResult, f.searchPaymentsErr
 }
 
 func mustAuthorizePaymentCommand(t *testing.T) app.AuthorizePaymentCommand {
 	t.Helper()
-	command, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, app.CardDetails{
-		Number:      "4111111111111111",
-		CVV:         "123",
-		ExpiryMonth: 12,
-		ExpiryYear:  2030,
-	}, "public-key-1")
+	command, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, "4111111111111111", "123", 12, 2030, "public-key-1")
 	require.NoError(t, err)
 	return command
 }
 
 func mustRetryAuthorizationCommand(t *testing.T) app.RetryAuthorizationCommand {
 	t.Helper()
-	command, err := app.NewRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000", app.CardDetails{
-		Number:      "4111111111111111",
-		CVV:         "123",
-		ExpiryMonth: 12,
-		ExpiryYear:  2030,
-	}, "retry-key-1")
+	command, err := app.NewRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000", "4111111111111111", "123", 12, 2030, "retry-key-1")
 	require.NoError(t, err)
 	return command
 }

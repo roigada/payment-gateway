@@ -11,16 +11,16 @@ import (
 type Server struct {
 	handler   http.Handler
 	logger    *slog.Logger
-	payments  paymentUseCases
+	payments  paymentApplication
 	readiness readinessChecker
 }
 
-type paymentUseCases interface {
-	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentResult, error)
-	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentResult, error)
-	CapturePayment(ctx context.Context, command app.CapturePaymentCommand) (app.PaymentResult, error)
-	VoidPayment(ctx context.Context, command app.VoidPaymentCommand) (app.PaymentResult, error)
-	RefundPayment(ctx context.Context, command app.RefundPaymentCommand) (app.PaymentResult, error)
+type paymentApplication interface {
+	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
+	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error)
+	CapturePayment(ctx context.Context, command app.CapturePaymentCommand) (app.PaymentCommandResult, error)
+	VoidPayment(ctx context.Context, command app.VoidPaymentCommand) (app.PaymentCommandResult, error)
+	RefundPayment(ctx context.Context, command app.RefundPaymentCommand) (app.PaymentCommandResult, error)
 	GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error)
 	SearchPayments(ctx context.Context, query app.SearchPaymentsQuery) ([]app.PaymentResult, error)
 }
@@ -29,7 +29,7 @@ type readinessChecker interface {
 	CheckReady(ctx context.Context) error
 }
 
-func NewServer(payments paymentUseCases, readiness readinessChecker, logger *slog.Logger) *Server {
+func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}

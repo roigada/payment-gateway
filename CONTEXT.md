@@ -65,7 +65,7 @@ The monetary unit for a **Payment**. The payment gateway only uses US dollars.
 _Avoid_: Currency code, settlement currency
 
 **Card Details**:
-The card number, CVV, and expiry values supplied for authorizing a **Payment** with the **Mock Bank**.
+The card number, CVV, and expiry values supplied to authorize or retry authorization for a **Payment** with the **Mock Bank**.
 _Avoid_: Payment token, card account
 
 **Mock Bank**:
@@ -109,7 +109,7 @@ To return the full captured **Amount** for a **Payment**.
 _Avoid_: Reimburse, reverse
 
 **Idempotency Key**:
-A caller-provided operation identity used to make retried payment operations produce one result.
+A caller-provided opaque operation identity used to make retried payment operations produce one result. The gateway requires it to be non-empty but does not interpret its format.
 _Avoid_: Request ID, correlation ID
 
 **Bank Operation Key**:

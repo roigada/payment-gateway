@@ -41,17 +41,15 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
-		OperationKey: "bok_123",
-		OrderID:      "order-1",
-		CustomerID:   "customer-1",
-		AmountCents:  1299,
-		Currency:     "USD",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
+		OperationKey:    "bok_123",
+		OrderID:         "order-1",
+		CustomerID:      "customer-1",
+		AmountCents:     1299,
+		Currency:        "USD",
+		CardNumber:      "4111111111111111",
+		CardCVV:         "123",
+		CardExpiryMonth: 12,
+		CardExpiryYear:  2030,
 	})
 	require.NoError(t, err)
 
@@ -81,17 +79,15 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
-		OperationKey: "bok_123",
-		OrderID:      "order-1",
-		CustomerID:   "customer-1",
-		AmountCents:  1299,
-		Currency:     "USD",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
+		OperationKey:    "bok_123",
+		OrderID:         "order-1",
+		CustomerID:      "customer-1",
+		AmountCents:     1299,
+		Currency:        "USD",
+		CardNumber:      "4111111111111111",
+		CardCVV:         "123",
+		CardExpiryMonth: 12,
+		CardExpiryYear:  2030,
 	})
 
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
@@ -599,17 +595,15 @@ func (timeoutError) Temporary() bool {
 
 func validAuthorizationRequest() app.BankAuthorizationRequest {
 	return app.BankAuthorizationRequest{
-		OperationKey: "bok_123",
-		OrderID:      "order-1",
-		CustomerID:   "customer-1",
-		AmountCents:  1299,
-		Currency:     "USD",
-		Card: app.CardDetails{
-			Number:      "4111111111111111",
-			CVV:         "123",
-			ExpiryMonth: 12,
-			ExpiryYear:  2030,
-		},
+		OperationKey:    "bok_123",
+		OrderID:         "order-1",
+		CustomerID:      "customer-1",
+		AmountCents:     1299,
+		Currency:        "USD",
+		CardNumber:      "4111111111111111",
+		CardCVV:         "123",
+		CardExpiryMonth: 12,
+		CardExpiryYear:  2030,
 	}
 }
 
