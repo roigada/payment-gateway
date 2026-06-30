@@ -248,7 +248,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		Payment:    newPaymentResult(payment),
 		HTTPStatus: 201,
 	}
-	if err := s.store.CompletePaymentCommand(
+	if err := s.completePaymentCommand(
 		ctx,
 		IdempotencyRecord{
 			Operation:          authorizePaymentOperation,
@@ -259,7 +259,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		payment,
 		domain.PaymentStatusPending,
 	); err != nil {
-		return PaymentCommandResult{}, ensurePaymentError(err)
+		return PaymentCommandResult{}, err
 	}
 
 	return result, nil
@@ -310,7 +310,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		Payment:    newPaymentResult(payment),
 		HTTPStatus: 200,
 	}
-	if err := s.store.CompletePaymentCommand(
+	if err := s.completePaymentCommand(
 		ctx,
 		IdempotencyRecord{
 			Operation:          operation,
@@ -321,7 +321,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		payment,
 		domain.PaymentStatusPending,
 	); err != nil {
-		return PaymentCommandResult{}, ensurePaymentError(err)
+		return PaymentCommandResult{}, err
 	}
 
 	return result, nil
@@ -381,7 +381,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				Payment:    newPaymentResult(payment),
 				HTTPStatus: 409,
 			}
-			if completeErr := s.store.CompletePaymentCommand(
+			if completeErr := s.completePaymentCommand(
 				ctx,
 				IdempotencyRecord{
 					Operation:          capturePaymentOperation,
@@ -392,7 +392,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				payment,
 				domain.PaymentStatusAuthorized,
 			); completeErr != nil {
-				return PaymentCommandResult{}, ensurePaymentError(completeErr)
+				return PaymentCommandResult{}, completeErr
 			}
 			return PaymentCommandResult{}, NewPaymentInvalidStatusConflictError(nil)
 		}
@@ -409,7 +409,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		Payment:    newPaymentResult(payment),
 		HTTPStatus: 200,
 	}
-	if err := s.store.CompletePaymentCommand(
+	if err := s.completePaymentCommand(
 		ctx,
 		IdempotencyRecord{
 			Operation:          capturePaymentOperation,
@@ -420,7 +420,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		payment,
 		domain.PaymentStatusAuthorized,
 	); err != nil {
-		return PaymentCommandResult{}, ensurePaymentError(err)
+		return PaymentCommandResult{}, err
 	}
 
 	return result, nil
@@ -478,7 +478,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 				Payment:    newPaymentResult(payment),
 				HTTPStatus: 409,
 			}
-			if completeErr := s.store.CompletePaymentCommand(
+			if completeErr := s.completePaymentCommand(
 				ctx,
 				IdempotencyRecord{
 					Operation:          voidPaymentOperation,
@@ -489,7 +489,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 				payment,
 				domain.PaymentStatusAuthorized,
 			); completeErr != nil {
-				return PaymentCommandResult{}, ensurePaymentError(completeErr)
+				return PaymentCommandResult{}, completeErr
 			}
 			return PaymentCommandResult{}, NewPaymentInvalidStatusConflictError(nil)
 		}
@@ -506,7 +506,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		Payment:    newPaymentResult(payment),
 		HTTPStatus: 200,
 	}
-	if err := s.store.CompletePaymentCommand(
+	if err := s.completePaymentCommand(
 		ctx,
 		IdempotencyRecord{
 			Operation:          voidPaymentOperation,
@@ -517,7 +517,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		payment,
 		domain.PaymentStatusAuthorized,
 	); err != nil {
-		return PaymentCommandResult{}, ensurePaymentError(err)
+		return PaymentCommandResult{}, err
 	}
 
 	return result, nil
@@ -570,7 +570,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		Payment:    newPaymentResult(payment),
 		HTTPStatus: 200,
 	}
-	if err := s.store.CompletePaymentCommand(
+	if err := s.completePaymentCommand(
 		ctx,
 		IdempotencyRecord{
 			Operation:          refundPaymentOperation,
@@ -581,7 +581,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		payment,
 		domain.PaymentStatusCaptured,
 	); err != nil {
-		return PaymentCommandResult{}, ensurePaymentError(err)
+		return PaymentCommandResult{}, err
 	}
 
 	return result, nil
@@ -631,6 +631,10 @@ func (s *PaymentService) claimPaymentCommand(ctx context.Context, request ClaimP
 		return ClaimPaymentCommandOutput{}, false, NewPaymentIdempotencyInProgressError(nil)
 	}
 	return claim, false, nil
+}
+
+func (s *PaymentService) completePaymentCommand(ctx context.Context, record IdempotencyRecord, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	return ensurePaymentError(s.store.CompletePaymentCommand(ctx, record, payment, expectedStatus))
 }
 
 func (s *PaymentService) releasePaymentCommand(ctx context.Context, operation string, key string) {
