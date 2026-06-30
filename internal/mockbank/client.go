@@ -56,9 +56,9 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
 		if isTimeout(err) {
-			return app.BankAuthorizationResult{}, app.NewPaymentBankTimeout(err)
+			return app.BankAuthorizationResult{}, app.NewPaymentBankTimeoutError(err)
 		}
-		return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
+		return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(err)
 	}
 	defer response.Body.Close()
 
@@ -66,29 +66,29 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	case http.StatusOK:
 		var payload authorizationResponse
 		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if strings.TrimSpace(payload.AuthorizationID) == "" {
-			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization response missing authorization id"))
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank authorization response missing authorization id"))
 		}
 		if payload.ExpiresAt.IsZero() {
-			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization response missing expires_at"))
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank authorization response missing expires_at"))
 		}
 
 		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID, AuthorizationExpiresAt: payload.ExpiresAt}, nil
 	case http.StatusBadRequest:
 		reason, err := decodeBadRequestInvalidInputReason(response)
 		if err != nil {
-			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if reason != "" {
-			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInput(reason, nil)
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	case http.StatusPaymentRequired:
 		return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, nil
 	}
 
-	return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
+	return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank authorization failed: status %d", response.StatusCode))
 }
 
 func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
@@ -111,9 +111,9 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
 		if isTimeout(err) {
-			return app.BankCaptureResult{}, app.NewPaymentBankTimeout(err)
+			return app.BankCaptureResult{}, app.NewPaymentBankTimeoutError(err)
 		}
-		return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+		return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(err)
 	}
 	defer response.Body.Close()
 
@@ -121,30 +121,30 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 	case http.StatusOK:
 		var payload captureResponse
 		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if strings.TrimSpace(payload.CaptureID) == "" {
-			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank capture response missing capture id"))
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank capture response missing capture id"))
 		}
 
 		return app.BankCaptureResult{BankCaptureID: payload.CaptureID}, nil
 	case http.StatusBadRequest:
 		reason, conflict, expired, err := decodeBadRequestReason(response)
 		if err != nil {
-			return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if expired {
-			return app.BankCaptureResult{}, app.NewPaymentAuthorizationExpired(nil)
+			return app.BankCaptureResult{}, app.NewPaymentAuthorizationExpiredError(nil)
 		}
 		if conflict {
-			return app.BankCaptureResult{}, app.NewPaymentBankStateConflict(nil)
+			return app.BankCaptureResult{}, app.NewPaymentBankStateConflictError(nil)
 		}
 		if reason != "" {
-			return app.BankCaptureResult{}, app.NewInvalidPaymentInput(reason, nil)
+			return app.BankCaptureResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
-	return app.BankCaptureResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank capture failed: status %d", response.StatusCode))
+	return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank capture failed: status %d", response.StatusCode))
 }
 
 func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
@@ -166,9 +166,9 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
 		if isTimeout(err) {
-			return app.BankVoidResult{}, app.NewPaymentBankTimeout(err)
+			return app.BankVoidResult{}, app.NewPaymentBankTimeoutError(err)
 		}
-		return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+		return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(err)
 	}
 	defer response.Body.Close()
 
@@ -176,30 +176,30 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 	case http.StatusOK:
 		var payload voidResponse
 		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if strings.TrimSpace(payload.VoidID) == "" {
-			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void response missing void id"))
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank void response missing void id"))
 		}
 
 		return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
 	case http.StatusBadRequest:
 		reason, conflict, expired, err := decodeBadRequestReason(response)
 		if err != nil {
-			return app.BankVoidResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if expired {
-			return app.BankVoidResult{}, app.NewPaymentAuthorizationExpired(nil)
+			return app.BankVoidResult{}, app.NewPaymentAuthorizationExpiredError(nil)
 		}
 		if conflict {
-			return app.BankVoidResult{}, app.NewPaymentBankStateConflict(nil)
+			return app.BankVoidResult{}, app.NewPaymentBankStateConflictError(nil)
 		}
 		if reason != "" {
-			return app.BankVoidResult{}, app.NewInvalidPaymentInput(reason, nil)
+			return app.BankVoidResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
-	return app.BankVoidResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
+	return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank void failed: status %d", response.StatusCode))
 }
 
 func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
@@ -222,9 +222,9 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
 		if isTimeout(err) {
-			return app.BankRefundResult{}, app.NewPaymentBankTimeout(err)
+			return app.BankRefundResult{}, app.NewPaymentBankTimeoutError(err)
 		}
-		return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+		return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(err)
 	}
 	defer response.Body.Close()
 
@@ -232,27 +232,27 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 	case http.StatusOK:
 		var payload refundResponse
 		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if strings.TrimSpace(payload.RefundID) == "" {
-			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank refund response missing refund id"))
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank refund response missing refund id"))
 		}
 
 		return app.BankRefundResult{BankRefundID: payload.RefundID}, nil
 	case http.StatusBadRequest:
 		reason, conflict, _, err := decodeBadRequestReason(response)
 		if err != nil {
-			return app.BankRefundResult{}, app.NewPaymentBankUnavailable(err)
+			return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(err)
 		}
 		if conflict {
-			return app.BankRefundResult{}, app.NewPaymentBankStateConflict(nil)
+			return app.BankRefundResult{}, app.NewPaymentBankStateConflictError(nil)
 		}
 		if reason != "" {
-			return app.BankRefundResult{}, app.NewInvalidPaymentInput(reason, nil)
+			return app.BankRefundResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
-	return app.BankRefundResult{}, app.NewPaymentBankUnavailable(fmt.Errorf("mock bank refund failed: status %d", response.StatusCode))
+	return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank refund failed: status %d", response.StatusCode))
 }
 
 func isTimeout(err error) bool {

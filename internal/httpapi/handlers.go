@@ -259,7 +259,7 @@ func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
 		switch key {
 		case "order_id", "customer_id", "status":
 		default:
-			writePaymentServiceError(w, r, app.NewInvalidPaymentInput("unsupported payment search filter", nil))
+			writePaymentServiceError(w, r, app.NewInvalidPaymentInputError("unsupported payment search filter", nil))
 			return
 		}
 	}

@@ -94,7 +94,7 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 		},
 	})
 
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.T) {
@@ -150,7 +150,7 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorInvalidInput))
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 		})
 	}
 }
@@ -187,7 +187,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 		})
 	}
 }
@@ -207,7 +207,7 @@ func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
 func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
@@ -217,7 +217,7 @@ func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
 func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
@@ -269,7 +269,7 @@ func TestCapturePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
 
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -299,7 +299,7 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.CapturePayment(context.Background(), validCaptureRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
 		})
 	}
 }
@@ -317,7 +317,7 @@ func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
 func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
@@ -335,7 +335,7 @@ func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
 func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
@@ -384,7 +384,7 @@ func TestVoidPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
 
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -422,7 +422,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.VoidPayment(context.Background(), validVoidRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
 		})
 	}
 }
@@ -440,7 +440,7 @@ func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
 func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
@@ -458,7 +458,7 @@ func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
 func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
@@ -510,7 +510,7 @@ func TestRefundPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
 
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -554,7 +554,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 			_, err = client.RefundPayment(context.Background(), validRefundRequest())
 
 			require.Error(t, err)
-			assert.True(t, app.IsPaymentErrorKind(err, tt.kind))
+			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
 		})
 	}
 }
@@ -574,7 +574,7 @@ func TestRefundPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
 
 	require.Error(t, err)
-	assert.True(t, app.IsPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
 type timeoutRoundTripper struct{}

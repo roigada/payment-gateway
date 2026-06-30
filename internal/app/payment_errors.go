@@ -23,7 +23,7 @@ type PaymentError struct {
 	cause   error
 }
 
-func NewInvalidPaymentInput(reason string, cause error) error {
+func NewInvalidPaymentInputError(reason string, cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorInvalidInput,
 		message: reason,
@@ -31,7 +31,7 @@ func NewInvalidPaymentInput(reason string, cause error) error {
 	}
 }
 
-func NewPaymentNotFound(id string, cause error) error {
+func NewPaymentNotFoundError(id string, cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorNotFound,
 		message: "payment " + id + " was not found",
@@ -39,7 +39,7 @@ func NewPaymentNotFound(id string, cause error) error {
 	}
 }
 
-func NewPaymentIdempotencyConflict(cause error) error {
+func NewPaymentIdempotencyConflictError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorIdempotencyConflict,
 		message: "idempotency key was already used with a different request",
@@ -47,7 +47,7 @@ func NewPaymentIdempotencyConflict(cause error) error {
 	}
 }
 
-func NewPaymentIdempotencyInProgress(cause error) error {
+func NewPaymentIdempotencyInProgressError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorIdempotencyInProgress,
 		message: "idempotency key is already in progress",
@@ -55,7 +55,7 @@ func NewPaymentIdempotencyInProgress(cause error) error {
 	}
 }
 
-func NewPaymentInvalidStatusConflict(cause error) error {
+func NewPaymentInvalidStatusConflictError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorInvalidStatusConflict,
 		message: "payment status does not allow this operation",
@@ -63,7 +63,7 @@ func NewPaymentInvalidStatusConflict(cause error) error {
 	}
 }
 
-func NewPaymentAuthorizationExpired(cause error) error {
+func NewPaymentAuthorizationExpiredError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorAuthorizationExpired,
 		message: "authorization expired",
@@ -71,7 +71,7 @@ func NewPaymentAuthorizationExpired(cause error) error {
 	}
 }
 
-func NewPaymentBankStateConflict(cause error) error {
+func NewPaymentBankStateConflictError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorBankStateConflict,
 		message: "bank state conflicts with local payment state",
@@ -79,7 +79,7 @@ func NewPaymentBankStateConflict(cause error) error {
 	}
 }
 
-func NewPaymentBankUnavailable(cause error) error {
+func NewPaymentBankUnavailableError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorBankUnavailable,
 		message: "bank is unavailable",
@@ -87,7 +87,7 @@ func NewPaymentBankUnavailable(cause error) error {
 	}
 }
 
-func NewPaymentBankTimeout(cause error) error {
+func NewPaymentBankTimeoutError(cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorBankTimeout,
 		message: "bank request timed out",
@@ -116,19 +116,18 @@ func (e *PaymentError) Unwrap() error {
 }
 
 func PaymentErrorKindOf(err error) (PaymentErrorKind, bool) {
-	var paymentErr *PaymentError
-	if errors.As(err, &paymentErr) {
+	if paymentErr, ok := errors.AsType[*PaymentError](err); ok {
 		return paymentErr.Kind(), true
 	}
 	return "", false
 }
 
-func IsPaymentErrorKind(err error, kind PaymentErrorKind) bool {
+func HasPaymentErrorKind(err error, kind PaymentErrorKind) bool {
 	actual, ok := PaymentErrorKindOf(err)
 	return ok && actual == kind
 }
 
-func asPaymentError(err error) error {
+func ensurePaymentError(err error) error {
 	if err == nil {
 		return nil
 	}

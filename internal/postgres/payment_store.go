@@ -54,10 +54,10 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, command app.Clai
 			return app.PaymentCommandClaim{}, err
 		}
 		if command.ExpectedStatus != "" && payment.Status() != command.ExpectedStatus {
-			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflict(nil)
+			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
 		}
 		if command.AuthorizationCardFingerprint != "" && command.AuthorizationCardFingerprint != payment.AuthorizationCardFingerprint() {
-			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflict(nil)
+			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
 		}
 		if command.BankOperationKeyKind != "" {
 			if err := ensureBankOperationKey(ctx, tx, payment, command.BankOperationKeyKind, command.BankOperationKey); err != nil {
@@ -116,7 +116,7 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, command app.C
 		return app.NewInternalPaymentError(err)
 	}
 	if rowsAffected != 1 {
-		return app.NewPaymentIdempotencyConflict(nil)
+		return app.NewPaymentIdempotencyConflictError(nil)
 	}
 	if err := tx.Commit(); err != nil {
 		return app.NewInternalPaymentError(err)
@@ -416,7 +416,7 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, app.NewPaymentNotFound(string(id), err)
+			return nil, app.NewPaymentNotFoundError(string(id), err)
 		}
 		return nil, app.NewInternalPaymentError(err)
 	}
@@ -628,7 +628,7 @@ func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result s
 		if err != nil {
 			return err
 		}
-		return app.NewPaymentInvalidStatusConflict(nil)
+		return app.NewPaymentInvalidStatusConflictError(nil)
 	}
 	return nil
 }

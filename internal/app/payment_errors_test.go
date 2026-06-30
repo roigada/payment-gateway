@@ -20,49 +20,49 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 	}{
 		{
 			name:    "invalid input",
-			err:     app.NewInvalidPaymentInput("amount must be greater than zero", cause),
+			err:     app.NewInvalidPaymentInputError("amount must be greater than zero", cause),
 			kind:    app.PaymentErrorInvalidInput,
 			message: "amount must be greater than zero",
 		},
 		{
 			name:    "not found",
-			err:     app.NewPaymentNotFound("pay_123", cause),
+			err:     app.NewPaymentNotFoundError("pay_123", cause),
 			kind:    app.PaymentErrorNotFound,
 			message: "payment pay_123 was not found",
 		},
 		{
 			name:    "idempotency conflict",
-			err:     app.NewPaymentIdempotencyConflict(cause),
+			err:     app.NewPaymentIdempotencyConflictError(cause),
 			kind:    app.PaymentErrorIdempotencyConflict,
 			message: "idempotency key was already used with a different request",
 		},
 		{
 			name:    "idempotency in progress",
-			err:     app.NewPaymentIdempotencyInProgress(cause),
+			err:     app.NewPaymentIdempotencyInProgressError(cause),
 			kind:    app.PaymentErrorIdempotencyInProgress,
 			message: "idempotency key is already in progress",
 		},
 		{
 			name:    "invalid status conflict",
-			err:     app.NewPaymentInvalidStatusConflict(cause),
+			err:     app.NewPaymentInvalidStatusConflictError(cause),
 			kind:    app.PaymentErrorInvalidStatusConflict,
 			message: "payment status does not allow this operation",
 		},
 		{
 			name:    "bank state conflict",
-			err:     app.NewPaymentBankStateConflict(cause),
+			err:     app.NewPaymentBankStateConflictError(cause),
 			kind:    app.PaymentErrorBankStateConflict,
 			message: "bank state conflicts with local payment state",
 		},
 		{
 			name:    "bank unavailable",
-			err:     app.NewPaymentBankUnavailable(cause),
+			err:     app.NewPaymentBankUnavailableError(cause),
 			kind:    app.PaymentErrorBankUnavailable,
 			message: "bank is unavailable",
 		},
 		{
 			name:    "bank timeout",
-			err:     app.NewPaymentBankTimeout(cause),
+			err:     app.NewPaymentBankTimeoutError(cause),
 			kind:    app.PaymentErrorBankTimeout,
 			message: "bank request timed out",
 		},
@@ -80,7 +80,7 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 
 			require.True(t, ok)
 			assert.Equal(t, tt.kind, kind)
-			assert.True(t, app.IsPaymentErrorKind(tt.err, tt.kind))
+			assert.True(t, app.HasPaymentErrorKind(tt.err, tt.kind))
 			assert.Equal(t, tt.message, tt.err.Error())
 			assert.ErrorIs(t, tt.err, cause)
 			assert.NotContains(t, tt.err.Error(), cause.Error())
@@ -89,7 +89,7 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 }
 
 func TestPaymentErrorKindOfFindsWrappedPaymentError(t *testing.T) {
-	err := fmt.Errorf("save payment: %w", app.NewPaymentBankUnavailable(errors.New("connection refused")))
+	err := fmt.Errorf("save payment: %w", app.NewPaymentBankUnavailableError(errors.New("connection refused")))
 
 	kind, ok := app.PaymentErrorKindOf(err)
 

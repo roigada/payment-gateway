@@ -37,7 +37,7 @@ func (r *PaymentStore) SeedPayment(_ context.Context, payment *domain.Payment) e
 func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	payment, ok := r.payments[id]
 	if !ok {
-		return nil, app.NewPaymentNotFound(string(id), nil)
+		return nil, app.NewPaymentNotFoundError(string(id), nil)
 	}
 	return clonePayment(payment)
 }
@@ -45,10 +45,10 @@ func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID) (*domain
 func (r *PaymentStore) saveIfStatus(_ context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
+		return app.NewPaymentNotFoundError(string(payment.ID()), nil)
 	}
 	if existing.Status() != expectedStatus {
-		return app.NewPaymentInvalidStatusConflict(nil)
+		return app.NewPaymentInvalidStatusConflictError(nil)
 	}
 	return r.update(payment)
 }
@@ -84,7 +84,7 @@ func (r *PaymentStore) RefreshExpiredAuthorizations(_ context.Context, query app
 func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
+		return app.NewPaymentNotFoundError(string(payment.ID()), nil)
 	}
 
 	var expectedStatus domain.PaymentStatus
@@ -97,7 +97,7 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
 	}
 	if existing.Status() != expectedStatus {
-		return app.NewPaymentInvalidStatusConflict(nil)
+		return app.NewPaymentInvalidStatusConflictError(nil)
 	}
 	return r.update(payment)
 }
@@ -128,11 +128,11 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, command app.ClaimP
 	}
 	if command.ExpectedStatus != "" && payment.Status() != command.ExpectedStatus {
 		delete(r.records, idempotencyMapKey(command.Operation, command.Key))
-		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflict(nil)
+		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
 	}
 	if command.AuthorizationCardFingerprint != "" && command.AuthorizationCardFingerprint != payment.AuthorizationCardFingerprint() {
 		delete(r.records, idempotencyMapKey(command.Operation, command.Key))
-		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflict(nil)
+		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
 	}
 	if command.BankOperationKeyKind != "" {
 		if err := setBankOperationKey(payment, command.BankOperationKeyKind, command.BankOperationKey); err != nil {
@@ -189,7 +189,7 @@ func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery) 
 
 func (r *PaymentStore) update(payment *domain.Payment) error {
 	if _, ok := r.payments[payment.ID()]; !ok {
-		return app.NewPaymentNotFound(string(payment.ID()), nil)
+		return app.NewPaymentNotFoundError(string(payment.ID()), nil)
 	}
 	cloned, err := clonePayment(payment)
 	if err != nil {
