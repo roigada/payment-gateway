@@ -106,7 +106,7 @@ func NewAuthorizePaymentCommand(orderID string, customerID string, amountCents i
 		return AuthorizePaymentCommand{}, err
 	}
 	if command.amountCents <= 0 {
-		return AuthorizePaymentCommand{}, NewInvalidPaymentInput("amount must be greater than zero", nil)
+		return AuthorizePaymentCommand{}, NewInvalidPaymentInputError("amount must be greater than zero", nil)
 	}
 	if err := validateCardDetails(command.card); err != nil {
 		return AuthorizePaymentCommand{}, err
@@ -170,10 +170,10 @@ func NewSearchPaymentsQuery(orderID string, customerID string, status string) (S
 		status:     domain.PaymentStatus(strings.TrimSpace(status)),
 	}
 	if query.orderID == "" && query.customerID == "" {
-		return SearchPaymentsQuery{}, NewInvalidPaymentInput("order id or customer id is required", nil)
+		return SearchPaymentsQuery{}, NewInvalidPaymentInputError("order id or customer id is required", nil)
 	}
 	if query.status != "" && !isValidPaymentStatus(query.status) {
-		return SearchPaymentsQuery{}, NewInvalidPaymentInput("payment status is invalid", nil)
+		return SearchPaymentsQuery{}, NewInvalidPaymentInputError("payment status is invalid", nil)
 	}
 	return query, nil
 }
@@ -479,7 +479,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		if err := s.store.ExpireAuthorization(ctx, payment, domain.PaymentStatusAuthorized); err != nil {
 			return PaymentResult{}, asPaymentError(err)
 		}
-		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
+		return PaymentResult{}, NewPaymentInvalidStatusConflictError(nil)
 	}
 
 	bankOperationKey := payment.CaptureBankOperationKey()
@@ -530,7 +530,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 			}); completeErr != nil {
 				return PaymentResult{}, asPaymentError(completeErr)
 			}
-			return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
+			return PaymentResult{}, NewPaymentInvalidStatusConflictError(nil)
 		}
 		s.releasePaymentCommand(ctx, capturePaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
@@ -616,7 +616,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		if err := s.store.ExpireAuthorization(ctx, payment, domain.PaymentStatusAuthorized); err != nil {
 			return PaymentResult{}, asPaymentError(err)
 		}
-		return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
+		return PaymentResult{}, NewPaymentInvalidStatusConflictError(nil)
 	}
 
 	bankOperationKey := payment.VoidBankOperationKey()
@@ -665,7 +665,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 			}); completeErr != nil {
 				return PaymentResult{}, asPaymentError(completeErr)
 			}
-			return PaymentResult{}, NewPaymentInvalidStatusConflict(nil)
+			return PaymentResult{}, NewPaymentInvalidStatusConflictError(nil)
 		}
 		s.releasePaymentCommand(ctx, voidPaymentOperation, command.idempotencyKey)
 		return PaymentResult{}, asPaymentError(err)
@@ -766,10 +766,10 @@ func (s *PaymentService) claimPaymentCommand(ctx context.Context, command ClaimP
 		return claim, true, nil
 	}
 	if claim.Record.RequestFingerprint != command.RequestFingerprint {
-		return PaymentCommandClaim{}, false, NewPaymentIdempotencyConflict(nil)
+		return PaymentCommandClaim{}, false, NewPaymentIdempotencyConflictError(nil)
 	}
 	if claim.Status == IdempotencyInProgress {
-		return PaymentCommandClaim{}, false, NewPaymentIdempotencyInProgress(nil)
+		return PaymentCommandClaim{}, false, NewPaymentIdempotencyInProgressError(nil)
 	}
 	return claim, false, nil
 }
@@ -780,16 +780,16 @@ func (s *PaymentService) releasePaymentCommand(ctx context.Context, operation st
 
 func validateCardDetails(card CardDetails) error {
 	if !allDigits(card.Number) || len(card.Number) < 12 || len(card.Number) > 19 {
-		return NewInvalidPaymentInput("card details are invalid", nil)
+		return NewInvalidPaymentInputError("card details are invalid", nil)
 	}
 	if !allDigits(card.CVV) || len(card.CVV) < 3 || len(card.CVV) > 4 {
-		return NewInvalidPaymentInput("card details are invalid", nil)
+		return NewInvalidPaymentInputError("card details are invalid", nil)
 	}
 	if card.ExpiryMonth < 1 || card.ExpiryMonth > 12 {
-		return NewInvalidPaymentInput("card details are invalid", nil)
+		return NewInvalidPaymentInputError("card details are invalid", nil)
 	}
 	if card.ExpiryYear <= 0 {
-		return NewInvalidPaymentInput("card details are invalid", nil)
+		return NewInvalidPaymentInputError("card details are invalid", nil)
 	}
 	return nil
 }
@@ -808,7 +808,7 @@ func allDigits(value string) bool {
 
 func validateRequired(value string, message string) error {
 	if value == "" {
-		return NewInvalidPaymentInput(message, nil)
+		return NewInvalidPaymentInputError(message, nil)
 	}
 	return nil
 }
@@ -832,7 +832,7 @@ func parsePaymentID(value string) (domain.PaymentID, error) {
 	}
 	paymentID, err := domain.ParsePaymentID(value)
 	if err != nil {
-		return "", NewInvalidPaymentInput("payment id is invalid", err)
+		return "", NewInvalidPaymentInputError("payment id is invalid", err)
 	}
 	return paymentID, nil
 }
