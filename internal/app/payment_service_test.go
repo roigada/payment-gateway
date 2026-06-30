@@ -707,6 +707,30 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 	}
 }
 
+func TestVoidPaymentPersistsExpiredStatusWhenBankReportsAuthorizationExpired(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	now := payment.AuthorizationExpiresAt().Add(-time.Minute)
+	bank := &bankAuthorizerFake{voidErr: app.NewPaymentAuthorizationExpiredError(nil)}
+	service := newPaymentService(repo, bank, now)
+	command := mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1")
+
+	_, err := service.VoidPayment(context.Background(), command)
+
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+	saved, findErr := repo.FindByID(context.Background(), payment.ID())
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
+	assert.Equal(t, now, saved.UpdatedAt())
+
+	replayed, err := service.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, "expired", replayed.Payment.Status)
+	assert.Equal(t, http.StatusConflict, replayed.HTTPStatus)
+	assert.Equal(t, 1, bank.voidCalls)
+}
+
 func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))

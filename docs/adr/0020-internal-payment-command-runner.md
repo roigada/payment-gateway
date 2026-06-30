@@ -1,0 +1,7 @@
+# Internal Payment command runner
+
+`PaymentService` will use one unexported internal Payment command runner module to coordinate the shared command protocol for authorization, authorization retry, capture, void, and refund commands. The runner owns application orchestration such as idempotency claim interpretation, completed replay handling, claim release after non-definitive failures, final replay snapshot construction, and completion through `PaymentStore`; operation-specific code still computes request fingerprints and bank operation keys, performs the Mock Bank call, and applies the Payment lifecycle transition.
+
+This keeps ADR-0019 intact: `PaymentStore` continues to own command persistence invariants, transaction mechanics, row locking, recovery fact persistence, expected **Payment Status** checks, and atomic Payment plus public idempotency completion. The runner is an internal implementation module rather than a new public port or adapter seam, because there is only one production implementation and the intended leverage is locality inside `internal/app`, not substitutability across adapters.
+
+The runner interface should stay small enough to avoid becoming a generic callback machine. The design target is one claim hook, one bank-and-transition hook, and one expected previous **Payment Status** value per command, with operation outcomes able to request completion before returning an error for definitive business outcomes such as capture or void discovering an expired authorization.
