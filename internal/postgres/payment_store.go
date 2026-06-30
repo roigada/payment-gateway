@@ -24,55 +24,55 @@ func NewPaymentStore(db *sql.DB) *PaymentStore {
 	return &PaymentStore{db: db}
 }
 
-func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, command app.IdempotencyClaimRequest) (app.IdempotencyClaimResult, error) {
+func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, command app.ClaimPaymentCommandInput) (app.ClaimPaymentCommandOutput, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return app.IdempotencyClaimResult{}, app.NewInternalPaymentError(err)
+		return app.ClaimPaymentCommandOutput{}, app.NewInternalPaymentError(err)
 	}
 	defer tx.Rollback()
 
 	record, status, err := claimIdempotency(ctx, tx, command.Operation, command.Key, command.RequestFingerprint)
 	if err != nil {
-		return app.IdempotencyClaimResult{}, err
+		return app.ClaimPaymentCommandOutput{}, err
 	}
-	claim := app.IdempotencyClaimResult{Record: record, Status: status}
+	claim := app.ClaimPaymentCommandOutput{Record: record, Status: status}
 	if status != app.IdempotencyClaimed {
 		if err := tx.Commit(); err != nil {
-			return app.IdempotencyClaimResult{}, app.NewInternalPaymentError(err)
+			return app.ClaimPaymentCommandOutput{}, app.NewInternalPaymentError(err)
 		}
 		return claim, nil
 	}
 
 	if command.Payment != nil {
 		if err := insertPayment(ctx, tx, command.Payment); err != nil {
-			return app.IdempotencyClaimResult{}, err
+			return app.ClaimPaymentCommandOutput{}, err
 		}
 		claim.Payment = command.Payment
 	} else if command.PaymentID != "" {
 		payment, err := findPaymentByID(ctx, tx, command.PaymentID, true)
 		if err != nil {
-			return app.IdempotencyClaimResult{}, err
+			return app.ClaimPaymentCommandOutput{}, err
 		}
 		if command.ExpectedStatus != "" && payment.Status() != command.ExpectedStatus {
-			return app.IdempotencyClaimResult{}, app.NewPaymentInvalidStatusConflictError(nil)
+			return app.ClaimPaymentCommandOutput{}, app.NewPaymentInvalidStatusConflictError(nil)
 		}
 		if command.AuthorizationCardFingerprint != "" && command.AuthorizationCardFingerprint != payment.AuthorizationCardFingerprint() {
-			return app.IdempotencyClaimResult{}, app.NewPaymentInvalidStatusConflictError(nil)
+			return app.ClaimPaymentCommandOutput{}, app.NewPaymentInvalidStatusConflictError(nil)
 		}
 		if command.BankOperationKeyKind != "" {
 			if err := ensureBankOperationKey(ctx, tx, payment, command.BankOperationKeyKind, command.BankOperationKey); err != nil {
-				return app.IdempotencyClaimResult{}, err
+				return app.ClaimPaymentCommandOutput{}, err
 			}
 			payment, err = findPaymentByID(ctx, tx, command.PaymentID, false)
 			if err != nil {
-				return app.IdempotencyClaimResult{}, err
+				return app.ClaimPaymentCommandOutput{}, err
 			}
 		}
 		claim.Payment = payment
 	}
 
 	if err := tx.Commit(); err != nil {
-		return app.IdempotencyClaimResult{}, app.NewInternalPaymentError(err)
+		return app.ClaimPaymentCommandOutput{}, app.NewInternalPaymentError(err)
 	}
 	return claim, nil
 }

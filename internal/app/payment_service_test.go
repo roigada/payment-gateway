@@ -1547,8 +1547,8 @@ func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID) (*
 	return nil, s.err
 }
 
-func (s *alwaysInProgressPaymentStore) ClaimPaymentCommand(_ context.Context, command app.IdempotencyClaimRequest) (app.IdempotencyClaimResult, error) {
-	return app.IdempotencyClaimResult{
+func (s *alwaysInProgressPaymentStore) ClaimPaymentCommand(_ context.Context, command app.ClaimPaymentCommandInput) (app.ClaimPaymentCommandOutput, error) {
+	return app.ClaimPaymentCommandOutput{
 		Record: app.IdempotencyRecord{
 			Operation:          command.Operation,
 			Key:                command.Key,
