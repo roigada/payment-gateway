@@ -1547,15 +1547,8 @@ func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID) (*
 	return nil, s.err
 }
 
-func (s *alwaysInProgressPaymentStore) ClaimAuthorizationStart(_ context.Context, command app.ClaimAuthorizationStartInput) (app.PaymentCommandClaim, error) {
-	return app.PaymentCommandClaim{
-		Record: app.IdempotencyRecord{
-			Operation:          app.AuthorizePaymentOperation,
-			Key:                command.Key,
-			RequestFingerprint: command.RequestFingerprint,
-		},
-		Status: app.IdempotencyInProgress,
-	}, nil
+func (s *alwaysInProgressPaymentStore) ClaimPaymentCommand(context.Context, app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+	return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyInProgressError(nil)
 }
 
 func (f *bankFake) AuthorizePayment(_ context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
