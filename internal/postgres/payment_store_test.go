@@ -498,6 +498,68 @@ func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
 	assert.NotNil(t, reclaimed.Payment())
 }
 
+func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	tests := []struct {
+		name    string
+		payment *domain.Payment
+		request func(*domain.Payment) app.PaymentCommandClaimRequest
+	}{
+		{
+			name:    "retry authorization requires pending payment",
+			payment: newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, time.Now()),
+			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+				return app.NewAuthorizationRetryClaim("retry-key-1", "fingerprint-1", payment.ID(), payment.AuthorizationCardFingerprint())
+			},
+		},
+		{
+			name:    "retry authorization requires matching authorization card fingerprint",
+			payment: newStorePayment(t, 2, "order-1", "customer-1", domain.PaymentStatusPending, time.Now()),
+			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+				return app.NewAuthorizationRetryClaim("retry-key-2", "fingerprint-2", payment.ID(), "different-fingerprint")
+			},
+		},
+		{
+			name:    "capture requires authorized payment",
+			payment: newStorePayment(t, 3, "order-1", "customer-1", domain.PaymentStatusPending, time.Now()),
+			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+				return app.NewCaptureClaim("capture-key-1", "fingerprint-3", payment.ID(), "bok_00000000-0000-4000-8000-000000000103", time.Time{})
+			},
+		},
+		{
+			name:    "void requires authorized payment",
+			payment: newStorePayment(t, 4, "order-1", "customer-1", domain.PaymentStatusCaptured, time.Now()),
+			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+				return app.NewVoidClaim("void-key-1", "fingerprint-4", payment.ID(), "bok_00000000-0000-4000-8000-000000000104", time.Time{})
+			},
+		},
+		{
+			name:    "refund requires captured payment",
+			payment: newStorePayment(t, 5, "order-1", "customer-1", domain.PaymentStatusAuthorized, time.Now()),
+			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+				return app.NewRefundClaim("refund-key-1", "fingerprint-5", payment.ID(), "bok_00000000-0000-4000-8000-000000000105")
+			},
+		},
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insertPaymentFixture(t, db, tt.payment)
+
+			_, err := store.ClaimPaymentCommand(ctx, tt.request(tt.payment))
+
+			require.Error(t, err)
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+		})
+	}
+}
+
 func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCompletionFails(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -576,6 +638,18 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 	bankOperationKey := fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence)
 	cardFingerprint := fmt.Sprintf("fingerprint-%d", sequence)
 	switch status {
+	case domain.PaymentStatusPending:
+		payment, err := domain.NewPendingPayment(
+			id,
+			orderID,
+			customerID,
+			1299,
+			bankOperationKey,
+			cardFingerprint,
+			now,
+		)
+		require.NoError(t, err)
+		return payment
 	case domain.PaymentStatusAuthorized:
 		payment, err := domain.NewAuthorizedPayment(
 			id,
@@ -589,6 +663,30 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 			now,
 		)
 		require.NoError(t, err)
+		return payment
+	case domain.PaymentStatusCaptured:
+		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusAuthorized, now)
+		require.NoError(t, payment.Capture(
+			fmt.Sprintf("cap_00000000-0000-4000-8000-%012d", sequence),
+			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000),
+			now.Add(time.Minute),
+		))
+		return payment
+	case domain.PaymentStatusVoided:
+		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusAuthorized, now)
+		require.NoError(t, payment.MarkVoided(
+			fmt.Sprintf("void_00000000-0000-4000-8000-%012d", sequence),
+			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000),
+			now.Add(time.Minute),
+		))
+		return payment
+	case domain.PaymentStatusRefunded:
+		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusCaptured, now)
+		require.NoError(t, payment.Refund(
+			fmt.Sprintf("ref_00000000-0000-4000-8000-%012d", sequence),
+			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+2000),
+			now.Add(2*time.Minute),
+		))
 		return payment
 	case domain.PaymentStatusDeclined:
 		payment, err := domain.NewDeclinedPayment(

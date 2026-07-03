@@ -97,13 +97,13 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 		AuthorizationID: request.BankAuthorizationID,
 		AmountCents:     request.AmountCents,
 	}); err != nil {
-		return app.BankCaptureResult{}, err
+		return app.BankCaptureResult{}, app.NewInternalPaymentError(err)
 	}
 
 	endpoint := c.baseURL.JoinPath("/api/v1/captures")
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
-		return app.BankCaptureResult{}, err
+		return app.BankCaptureResult{}, app.NewInternalPaymentError(err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
@@ -152,13 +152,13 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 	if err := json.NewEncoder(&body).Encode(voidRequest{
 		AuthorizationID: request.BankAuthorizationID,
 	}); err != nil {
-		return app.BankVoidResult{}, err
+		return app.BankVoidResult{}, app.NewInternalPaymentError(err)
 	}
 
 	endpoint := c.baseURL.JoinPath("/api/v1/voids")
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
-		return app.BankVoidResult{}, err
+		return app.BankVoidResult{}, app.NewInternalPaymentError(err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
@@ -208,13 +208,13 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 		CaptureID:   request.BankCaptureID,
 		AmountCents: request.AmountCents,
 	}); err != nil {
-		return app.BankRefundResult{}, err
+		return app.BankRefundResult{}, app.NewInternalPaymentError(err)
 	}
 
 	endpoint := c.baseURL.JoinPath("/api/v1/refunds")
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
 	if err != nil {
-		return app.BankRefundResult{}, err
+		return app.BankRefundResult{}, app.NewInternalPaymentError(err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Idempotency-Key", request.OperationKey)
