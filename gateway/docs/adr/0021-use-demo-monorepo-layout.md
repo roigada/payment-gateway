@@ -1,0 +1,3 @@
+# Use demo monorepo layout
+
+The repository is a portfolio demo system, not only a payment gateway implementation. The root repository will become the runnable demo surface with a root `README.md`, `compose.yaml`, `Makefile`, and `demo/` scenarios; the gateway implementation will live under `gateway/`; and the Mock Bank will live under `mock-bank/` as bundled third-party demo infrastructure copied as-is from its upstream source. This trades a noisier one-time repository move for a clearer reviewer experience: one clone, one demo command, and an explicit authorship boundary between the gateway code and the local dependency used to exercise it.

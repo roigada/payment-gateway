@@ -4,28 +4,31 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root.
-- **`docs/adr/`** at the repo root for architectural decisions that touch the area you're about to work in.
+- **`gateway/CONTEXT.md`** for gateway domain language.
+- **`gateway/docs/adr/`** for architectural decisions that touch the gateway.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skill (`/grill-with-docs`) creates them lazily when terms or decisions actually get resolved.
 
 ## File structure
 
-Single-context repo:
+Gateway context inside the demo repo:
 
 ```
 /
-|-- CONTEXT.md
-|-- docs/
-|   `-- adr/
-|       |-- 0001-example-decision.md
-|       `-- 0002-example-follow-up.md
-`-- src/
+|-- gateway/
+|   |-- CONTEXT.md
+|   |-- docs/
+|   |   `-- adr/
+|   |       |-- 0001-example-decision.md
+|   |       `-- 0002-example-follow-up.md
+|   |-- cmd/
+|   `-- internal/
+`-- README.md
 ```
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `gateway/CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use, or there's a real gap to note for `/grill-with-docs`.
 

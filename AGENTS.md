@@ -2,15 +2,15 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `roigada/payment-gateway` using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in GitHub Issues for `roigada/payment-gateway` using the `gh` CLI. See `gateway/docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the default triage label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Use the default triage label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `gateway/docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-This is a single-context repo: use root `CONTEXT.md` and root `docs/adr/` when present. See `docs/agents/domain.md`.
+The gateway is the current bounded context: use `gateway/CONTEXT.md` and `gateway/docs/adr/` when present. See `gateway/docs/agents/domain.md`.
 
 ### Go test assertions
 
