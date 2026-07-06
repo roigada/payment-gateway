@@ -83,7 +83,7 @@ From the repository root, start Postgres, apply migrations, and run the API for 
 docker compose up
 ```
 
-The Compose environment starts the API on `http://localhost:8080` with:
+The root Compose environment starts the gateway API on `http://localhost:8080` and the bundled Mock Bank on the Compose network with:
 
 ```text
 ADDR=:8080
@@ -92,7 +92,7 @@ MOCK_BANK_BASE_URL=http://mock-bank:9090
 FINGERPRINT_SECRET=local-development-secret
 ```
 
-The Mock Bank is an external dependency. When using Compose, run or attach a Mock Bank service named `mock-bank` on the Compose network, or override `MOCK_BANK_BASE_URL` to a reachable Mock Bank URL.
+The bundled Mock Bank documentation is exposed on `http://localhost:8787/docs` when the root demo stack is running. For standalone gateway development outside root Compose, set `MOCK_BANK_BASE_URL` to a reachable Mock Bank URL.
 
 ## Operational Endpoints
 
