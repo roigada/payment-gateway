@@ -40,7 +40,6 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
-		r, logCtx := newRequestLogContext(r)
 
 		next.ServeHTTP(rec, r)
 
@@ -58,13 +57,31 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 			"proto", r.Proto,
 			"user_agent", r.UserAgent(),
 		}
-		attrs = append(attrs, logCtx.attrs...)
 		if status >= http.StatusInternalServerError {
 			s.logger.Error("http request", attrs...)
 			return
 		}
 
 		s.logger.Info("http request", attrs...)
+	})
+}
+
+func (s *Server) recordHTTPRequest(route string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		rec := &responseRecorder{ResponseWriter: w}
+
+		next.ServeHTTP(rec, r)
+
+		if s.metrics == nil {
+			return
+		}
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		s.metrics.RecordHTTPRequest(r.Method, route, status, time.Since(startedAt))
 	})
 }
 

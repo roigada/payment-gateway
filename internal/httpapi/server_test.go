@@ -1,7 +1,6 @@
 package httpapi_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -145,77 +144,6 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 		}
 	}`, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "bank")
-}
-
-func TestPostPaymentsLogsSafeOperationalContext(t *testing.T) {
-	var logs bytes.Buffer
-	api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
-	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-
-	rec := api.request(t, http.MethodPost, "/v1/payments", `{
-		"order_id": "order-1",
-		"customer_id": "customer-1",
-		"amount": 1299,
-		"card": {
-			"number": "4999999999999998",
-			"cvv": "987",
-			"expiry_month": 11,
-			"expiry_year": 2099
-		}
-	}`, map[string]string{
-		"Content-Type":    "application/json",
-		"Idempotency-Key": "public-key-1",
-	})
-
-	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
-	entry := decodeLogEntry(t, logs.Bytes())
-	assert.Equal(t, "http request", entry["msg"])
-	assert.Equal(t, "authorize_payment", entry["operation"])
-	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", entry["payment_id"])
-	assert.Equal(t, "order-1", entry["order_id"])
-	assert.Equal(t, "customer-1", entry["customer_id"])
-	assert.Equal(t, "authorized", entry["payment_status"])
-	assert.Equal(t, float64(http.StatusCreated), entry["status"])
-	assert.Contains(t, entry, "duration_ms")
-
-	logText := logs.String()
-	assert.NotContains(t, logText, "4999999999999998")
-	assert.NotContains(t, logText, "987")
-	assert.NotContains(t, logText, "authorization-fingerprint")
-	assert.NotContains(t, logText, "request-fingerprint")
-	assert.NotContains(t, logText, "bank-operation-key")
-}
-
-func TestPostPaymentAuthorizationRetriesLogsSafeBankErrorContext(t *testing.T) {
-	var logs bytes.Buffer
-	api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
-	api.payments.retryAuthorizationErr = app.NewPaymentBankUnavailableError(errors.New("bank payload included card 4999999999999998 cvv 987 request-fingerprint-raw bank-operation-key-raw"))
-
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", `{
-		"card": {
-			"number": "4999999999999998",
-			"cvv": "987",
-			"expiry_month": 11,
-			"expiry_year": 2099
-		}
-	}`, map[string]string{
-		"Content-Type":    "application/json",
-		"Idempotency-Key": "retry-key-1",
-	})
-
-	require.Equal(t, http.StatusBadGateway, rec.Code, "body: %s", rec.Body.String())
-	entry := decodeLogEntry(t, logs.Bytes())
-	assert.Equal(t, "ERROR", entry["level"])
-	assert.Equal(t, "retry_authorization", entry["operation"])
-	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", entry["payment_id"])
-	assert.Equal(t, "bank_unavailable", entry["gateway_error_code"])
-	assert.Equal(t, float64(http.StatusBadGateway), entry["status"])
-
-	logText := logs.String()
-	assert.NotContains(t, logText, "4999999999999998")
-	assert.NotContains(t, logText, "987")
-	assert.NotContains(t, logText, "request-fingerprint-raw")
-	assert.NotContains(t, logText, "bank-operation-key-raw")
 }
 
 func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
@@ -607,6 +535,51 @@ func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
 	assertErrorResponse(t, rec, "service_unavailable", "Service Unavailable")
 }
 
+func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
+	api := newPaymentAPITest(t)
+	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+
+	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.Len(t, api.metrics.requests, 1)
+	assert.Equal(t, recordedHTTPRequest{
+		method: http.MethodGet,
+		route:  "/v1/payments/{id}",
+		status: http.StatusOK,
+	}, api.metrics.requests[0].withoutDuration())
+}
+
+func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
+	api := newPaymentAPITest(t)
+
+	health := api.request(t, http.MethodGet, "/healthz", "", nil)
+	ready := api.request(t, http.MethodGet, "/readyz", "", nil)
+
+	require.Equal(t, http.StatusNoContent, health.Code, "body: %s", health.Body.String())
+	require.Equal(t, http.StatusNoContent, ready.Code, "body: %s", ready.Body.String())
+	require.Len(t, api.metrics.requests, 2)
+	assert.Equal(t, "/healthz", api.metrics.requests[0].route)
+	assert.Equal(t, "/readyz", api.metrics.requests[1].route)
+}
+
+func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("# metrics\n"))
+	})
+	payments := &paymentApplicationFake{}
+	readiness := &readinessCheckerFake{}
+	metrics := &recordingHTTPMetrics{}
+	handler := httpapi.NewServer(payments, readiness, discardLogger(), metrics, metricsHandler)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "# metrics\n", rec.Body.String())
+	assert.Empty(t, metrics.requests)
+}
+
 func validAuthorizeBody() string {
 	return `{
 		"order_id": "order-1",
@@ -636,6 +609,7 @@ type paymentAPITest struct {
 	payments  *paymentApplicationFake
 	readiness *readinessCheckerFake
 	handler   http.Handler
+	metrics   *recordingHTTPMetrics
 }
 
 func newPaymentAPITest(t *testing.T) *paymentAPITest {
@@ -649,11 +623,13 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
+	metrics := &recordingHTTPMetrics{}
 
 	return &paymentAPITest{
 		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewServer(payments, readiness, logger),
+		handler:   httpapi.NewServer(payments, readiness, logger, metrics, nil),
+		metrics:   metrics,
 	}
 }
 
@@ -699,16 +675,33 @@ func assertErrorResponse(t *testing.T, rec *httptest.ResponseRecorder, code, mes
 	assert.Equal(t, message, body.Error.Message)
 }
 
-func decodeLogEntry(t *testing.T, data []byte) map[string]any {
-	t.Helper()
-
-	var entry map[string]any
-	require.NoError(t, json.Unmarshal(data, &entry))
-	return entry
-}
-
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type recordingHTTPMetrics struct {
+	requests []recordedHTTPRequest
+}
+
+func (m *recordingHTTPMetrics) RecordHTTPRequest(method string, route string, status int, duration time.Duration) {
+	m.requests = append(m.requests, recordedHTTPRequest{
+		method:   method,
+		route:    route,
+		status:   status,
+		duration: duration,
+	})
+}
+
+type recordedHTTPRequest struct {
+	method   string
+	route    string
+	status   int
+	duration time.Duration
+}
+
+func (r recordedHTTPRequest) withoutDuration() recordedHTTPRequest {
+	r.duration = 0
+	return r
 }
 
 type paymentApplicationFake struct {

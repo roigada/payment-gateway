@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 )
@@ -11,6 +13,7 @@ import (
 type Server struct {
 	handler   http.Handler
 	logger    *slog.Logger
+	metrics   httpMetrics
 	payments  paymentApplication
 	readiness readinessChecker
 }
@@ -29,17 +32,22 @@ type readinessChecker interface {
 	CheckReady(ctx context.Context) error
 }
 
-func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger) *Server {
+type httpMetrics interface {
+	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
+}
+
+func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	server := &Server{
 		logger:    logger,
+		metrics:   metrics,
 		payments:  payments,
 		readiness: readiness,
 	}
-	server.handler = server.routes()
+	server.handler = server.routes(metricsHandler)
 	return server
 }
 
@@ -47,20 +55,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func (s *Server) routes() http.Handler {
+func (s *Server) routes(metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.HandleFunc("GET /readyz", s.readyz)
-	mux.HandleFunc("GET /v1/payments", s.searchPayments)
-	mux.HandleFunc("GET /v1/payments/{id}", s.getPayment)
-	mux.HandleFunc("POST /v1/payments", s.authorizePayment)
-	mux.HandleFunc("POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
-	mux.HandleFunc("POST /v1/payments/{payment_id}/capture", s.capturePayment)
-	mux.HandleFunc("POST /v1/payments/{payment_id}/void", s.voidPayment)
-	mux.HandleFunc("POST /v1/payments/{payment_id}/refund", s.refundPayment)
+	s.handle(mux, "GET /healthz", s.healthz)
+	s.handle(mux, "GET /readyz", s.readyz)
+	if metricsHandler != nil {
+		mux.Handle("GET /metrics", metricsHandler)
+	}
+	s.handle(mux, "GET /v1/payments", s.searchPayments)
+	s.handle(mux, "GET /v1/payments/{id}", s.getPayment)
+	s.handle(mux, "POST /v1/payments", s.authorizePayment)
+	s.handle(mux, "POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
+	s.handle(mux, "POST /v1/payments/{payment_id}/capture", s.capturePayment)
+	s.handle(mux, "POST /v1/payments/{payment_id}/void", s.voidPayment)
+	s.handle(mux, "POST /v1/payments/{payment_id}/refund", s.refundPayment)
 
-	return s.logRequest(s.recoverPanic(mux))
+	return s.logRequest(mux)
+}
+
+func (s *Server) handle(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
+	_, route, ok := strings.Cut(pattern, " ")
+	if !ok {
+		route = pattern
+	}
+	mux.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(handler)))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

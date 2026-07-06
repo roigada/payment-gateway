@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/mockbank"
+	"github.com/roigada/payment-gateway/internal/observability"
 	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/roigada/payment-gateway/internal/uuidgen"
 )
@@ -82,7 +84,17 @@ func run(logger *slog.Logger) error {
 	}
 	defer db.Close()
 
-	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient)
+	metricsRegistry := observability.NewRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		return err
+	}
+	mockBankMetrics, err := observability.NewMockBankMetrics(metricsRegistry)
+	if err != nil {
+		return err
+	}
+
+	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient, mockBankMetrics)
 	if err != nil {
 		return err
 	}
@@ -92,7 +104,8 @@ func run(logger *slog.Logger) error {
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
 	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.FingerprintSecret)
 	readiness := postgres.NewReadinessChecker(db)
-	server := httpapi.NewServer(paymentService, readiness, logger)
+	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
+	server := httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler)
 
 	logger.Info("payment-gateway starting", "addr", cfg.Addr)
 	return http.ListenAndServe(cfg.Addr, server)
