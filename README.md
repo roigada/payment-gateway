@@ -114,14 +114,23 @@ Prometheus-format metrics are exposed on the same server:
 curl -i http://localhost:8080/metrics
 ```
 
-The first custom metric set is HTTP RED:
+Custom metrics include HTTP RED:
 
 ```text
 http_requests_total{method,route,status}
 http_request_duration_seconds{method,route,status}
 ```
 
-Route labels use bounded route patterns, such as `/v1/payments/{id}`, and never include Payment IDs, Order IDs, Customer IDs, Idempotency Keys, or raw request URIs. The registry also includes Go runtime and process metrics.
+and Mock Bank dependency RED:
+
+```text
+mock_bank_requests_total{operation,result}
+mock_bank_request_duration_seconds{operation,result}
+```
+
+Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.
+
+Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, or raw request URIs. The registry also includes Go runtime and process metrics.
 
 ## Public API
 

@@ -89,16 +89,22 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	paymentStore := postgres.NewPaymentStore(db)
-	paymentIDs := uuidgen.NewPaymentIDGenerator()
-	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.FingerprintSecret)
-	readiness := postgres.NewReadinessChecker(db)
 	metricsRegistry := observability.NewRegistry()
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
 		return err
 	}
+	mockBankMetrics, err := observability.NewMockBankMetrics(metricsRegistry)
+	if err != nil {
+		return err
+	}
+	mockBank.SetMetrics(mockBankMetrics)
+
+	paymentStore := postgres.NewPaymentStore(db)
+	paymentIDs := uuidgen.NewPaymentIDGenerator()
+	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
+	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.FingerprintSecret)
+	readiness := postgres.NewReadinessChecker(db)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	server := httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler)
 
