@@ -323,12 +323,12 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		CardExpiryMonth: command.card.expiryMonth,
 		CardExpiryYear:  command.card.expiryYear,
 	})
-	if isUnknownAuthorizationOutcome(err) {
+	if err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := applyAuthorizationOutcome(payment, bankResult, err, s.clock.Now()); err != nil {
+	if err := applyAuthorizationOutcome(payment, bankResult, s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -372,12 +372,12 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		CardExpiryMonth: command.card.expiryMonth,
 		CardExpiryYear:  command.card.expiryYear,
 	})
-	if isUnknownAuthorizationOutcome(err) {
+	if err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := applyAuthorizationOutcome(payment, bankResult, err, s.clock.Now()); err != nil {
+	if err := applyAuthorizationOutcome(payment, bankResult, s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -584,13 +584,7 @@ func isValidPaymentStatus(status domain.PaymentStatus) bool {
 	}
 }
 
-func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthorizationResult, err error, now time.Time) error {
-	if isUnknownAuthorizationOutcome(err) {
-		return ensurePaymentError(payment.MarkPending(now))
-	}
-	if err != nil {
-		return ensurePaymentError(err)
-	}
+func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthorizationResult, now time.Time) error {
 	if bankResult.DeclineReason != "" {
 		return ensurePaymentError(payment.MarkDeclined(bankResult.DeclineReason, now))
 	}
@@ -656,10 +650,6 @@ func authorizationCardFingerprint(card cardDetails, secret string) string {
 		card.expiryYear,
 	)
 	return hex.EncodeToString(hash.Sum(nil))
-}
-
-func isUnknownAuthorizationOutcome(err error) bool {
-	return HasPaymentErrorKind(err, PaymentErrorBankTimeout) || HasPaymentErrorKind(err, PaymentErrorBankUnavailable)
 }
 
 func newPaymentResult(payment *domain.Payment) PaymentResult {
