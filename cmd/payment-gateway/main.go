@@ -84,11 +84,6 @@ func run(logger *slog.Logger) error {
 	}
 	defer db.Close()
 
-	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient)
-	if err != nil {
-		return err
-	}
-
 	metricsRegistry := observability.NewRegistry()
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
@@ -98,7 +93,11 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	mockBank.SetMetrics(mockBankMetrics)
+
+	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient, mockBankMetrics)
+	if err != nil {
+		return err
+	}
 
 	paymentStore := postgres.NewPaymentStore(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()

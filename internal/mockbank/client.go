@@ -22,7 +22,7 @@ type Client struct {
 	metrics    metrics
 }
 
-func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL string, httpClient *http.Client, metrics metrics) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return nil, err
@@ -33,15 +33,11 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{baseURL: parsed, httpClient: httpClient}, nil
+	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics}, nil
 }
 
 type metrics interface {
 	RecordMockBankRequest(operation string, result string, duration time.Duration)
-}
-
-func (c *Client) SetMetrics(metrics metrics) {
-	c.metrics = metrics
 }
 
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {

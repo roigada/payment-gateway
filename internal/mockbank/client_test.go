@@ -37,7 +37,7 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
@@ -75,7 +75,7 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
@@ -100,7 +100,7 @@ func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -140,7 +140,7 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 			}))
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
+			client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 			require.NoError(t, err)
 
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -177,7 +177,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
+			client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 			require.NoError(t, err)
 
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -197,7 +197,7 @@ func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := mockbank.NewClient(server.URL, httpClient)
+	client, err := mockbank.NewClient(server.URL, httpClient, nil)
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -302,10 +302,9 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 			server := httptest.NewServer(tt.handler)
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
-			require.NoError(t, err)
 			metrics := &recordingMockBankMetrics{}
-			client.SetMetrics(metrics)
+			client, err := mockbank.NewClient(server.URL, server.Client(), metrics)
+			require.NoError(t, err)
 
 			_ = tt.call(client)
 
@@ -318,10 +317,9 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 }
 
 func TestClientRecordsTimeoutMetric(t *testing.T) {
-	client, err := mockbank.NewClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}})
-	require.NoError(t, err)
 	metrics := &recordingMockBankMetrics{}
-	client.SetMetrics(metrics)
+	client, err := mockbank.NewClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, metrics)
+	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
 
@@ -333,7 +331,7 @@ func TestClientRecordsTimeoutMetric(t *testing.T) {
 }
 
 func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
-	client, err := mockbank.NewClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}})
+	client, err := mockbank.NewClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, nil)
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -364,7 +362,7 @@ func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	result, err := client.CapturePayment(context.Background(), validCaptureRequest())
@@ -386,7 +384,7 @@ func TestCapturePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -415,7 +413,7 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
+			client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 			require.NoError(t, err)
 
 			_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -433,7 +431,7 @@ func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -451,7 +449,7 @@ func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := mockbank.NewClient(server.URL, httpClient)
+	client, err := mockbank.NewClient(server.URL, httpClient, nil)
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -480,7 +478,7 @@ func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	result, err := client.VoidPayment(context.Background(), validVoidRequest())
@@ -501,7 +499,7 @@ func TestVoidPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -538,7 +536,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
+			client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 			require.NoError(t, err)
 
 			_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -556,7 +554,7 @@ func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -574,7 +572,7 @@ func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := mockbank.NewClient(server.URL, httpClient)
+	client, err := mockbank.NewClient(server.URL, httpClient, nil)
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -605,7 +603,7 @@ func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	result, err := client.RefundPayment(context.Background(), validRefundRequest())
@@ -627,7 +625,7 @@ func TestRefundPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := mockbank.NewClient(server.URL, server.Client())
+	client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 	require.NoError(t, err)
 
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
@@ -670,7 +668,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := mockbank.NewClient(server.URL, server.Client())
+			client, err := mockbank.NewClient(server.URL, server.Client(), nil)
 			require.NoError(t, err)
 
 			_, err = client.RefundPayment(context.Background(), validRefundRequest())
@@ -690,7 +688,7 @@ func TestRefundPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := mockbank.NewClient(server.URL, httpClient)
+	client, err := mockbank.NewClient(server.URL, httpClient, nil)
 	require.NoError(t, err)
 
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
