@@ -108,6 +108,21 @@ Readiness checks Postgres and does not require Mock Bank availability:
 curl -i http://localhost:8080/readyz
 ```
 
+Prometheus-format metrics are exposed on the same server:
+
+```sh
+curl -i http://localhost:8080/metrics
+```
+
+The first custom metric set is HTTP RED:
+
+```text
+http_requests_total{method,route,status}
+http_request_duration_seconds{method,route,status}
+```
+
+Route labels use bounded route patterns, such as `/v1/payments/{id}`, and never include Payment IDs, Order IDs, Customer IDs, Idempotency Keys, or raw request URIs. The registry also includes Go runtime and process metrics.
+
 ## Public API
 
 Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
