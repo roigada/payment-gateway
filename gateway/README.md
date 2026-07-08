@@ -43,6 +43,9 @@ The service reads configuration from environment variables:
 
 ```text
 DATABASE_URL                      required Postgres connection string
+DATABASE_MAX_OPEN_CONNECTIONS     optional Postgres pool max open connections, defaults to 10
+DATABASE_MAX_IDLE_CONNECTIONS     optional Postgres pool max idle connections, defaults to 5
+DATABASE_CONNECTION_MAX_LIFETIME  optional Postgres pool connection max lifetime, defaults to 30m
 MOCK_BANK_BASE_URL                required Mock Bank base URL
 FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
 ADDR                              optional HTTP listen address, defaults to :8080
@@ -52,6 +55,9 @@ Example:
 
 ```sh
 export DATABASE_URL='postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable'
+export DATABASE_MAX_OPEN_CONNECTIONS='10'
+export DATABASE_MAX_IDLE_CONNECTIONS='5'
+export DATABASE_CONNECTION_MAX_LIFETIME='30m'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
 export FINGERPRINT_SECRET='local-development-secret'
 export ADDR=':8080'
@@ -88,6 +94,9 @@ The root Compose environment starts the gateway API on `http://localhost:8080` a
 ```text
 ADDR=:8080
 DATABASE_URL=postgres://payment_gateway:payment_gateway@postgres:5432/payment_gateway?sslmode=disable
+DATABASE_MAX_OPEN_CONNECTIONS=10
+DATABASE_MAX_IDLE_CONNECTIONS=5
+DATABASE_CONNECTION_MAX_LIFETIME=30m
 MOCK_BANK_BASE_URL=http://mock-bank:9090
 FINGERPRINT_SECRET=local-development-secret
 ```
@@ -117,15 +126,29 @@ curl -i http://localhost:8080/metrics
 Custom metrics include HTTP RED:
 
 ```text
-http_requests_total{method,route,status}
-http_request_duration_seconds{method,route,status}
+payment_gateway_http_server_requests_total{method,route,code}
+payment_gateway_http_server_request_duration_seconds{method,route,code}
 ```
 
 and Mock Bank dependency RED:
 
 ```text
-mock_bank_requests_total{operation,result}
-mock_bank_request_duration_seconds{operation,result}
+payment_gateway_mock_bank_requests_total{operation,result}
+payment_gateway_mock_bank_request_duration_seconds{operation,result}
+```
+
+and Postgres client pool USE:
+
+```text
+payment_gateway_postgres_pool_open_connections
+payment_gateway_postgres_pool_in_use_connections
+payment_gateway_postgres_pool_idle_connections
+payment_gateway_postgres_pool_max_open_connections
+payment_gateway_postgres_pool_wait_count_total
+payment_gateway_postgres_pool_wait_duration_seconds_total
+payment_gateway_postgres_pool_max_idle_closed_total
+payment_gateway_postgres_pool_max_lifetime_closed_total
+payment_gateway_postgres_pool_max_idle_time_closed_total
 ```
 
 Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.

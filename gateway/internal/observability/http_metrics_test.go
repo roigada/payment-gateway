@@ -20,23 +20,23 @@ func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	families, err := registry.Gather()
 	require.NoError(t, err)
 
-	requests := metricFamilyByName(t, families, "http_requests_total")
+	requests := metricFamilyByName(t, families, "payment_gateway_http_server_requests_total")
 	require.Len(t, requests.GetMetric(), 1)
 	assert.Equal(t, float64(1), requests.GetMetric()[0].GetCounter().GetValue())
 	assertMetricLabels(t, requests.GetMetric()[0].GetLabel(), map[string]string{
 		"method": "POST",
 		"route":  "/v1/payments/{payment_id}/capture",
-		"status": "200",
+		"code":   "200",
 	})
 
-	duration := metricFamilyByName(t, families, "http_request_duration_seconds")
+	duration := metricFamilyByName(t, families, "payment_gateway_http_server_request_duration_seconds")
 	require.Len(t, duration.GetMetric(), 1)
 	assert.Equal(t, uint64(1), duration.GetMetric()[0].GetHistogram().GetSampleCount())
 	assert.Equal(t, 0.125, duration.GetMetric()[0].GetHistogram().GetSampleSum())
 	assertMetricLabels(t, duration.GetMetric()[0].GetLabel(), map[string]string{
 		"method": "POST",
 		"route":  "/v1/payments/{payment_id}/capture",
-		"status": "200",
+		"code":   "200",
 	})
 }
 

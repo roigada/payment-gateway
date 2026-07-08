@@ -33,14 +33,14 @@ func NewHTTPMetrics(registry *prometheus.Registry) (*HTTPMetrics, error) {
 
 	metrics := &HTTPMetrics{
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "http_requests_total",
+			Name: "payment_gateway_http_server_requests_total",
 			Help: "Total number of HTTP requests handled by the payment gateway.",
-		}, []string{"method", "route", "status"}),
+		}, []string{"method", "route", "code"}),
 		requestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "http_request_duration_seconds",
+			Name:    "payment_gateway_http_server_request_duration_seconds",
 			Help:    "Duration of HTTP requests handled by the payment gateway.",
 			Buckets: httpRequestDurationBuckets,
-		}, []string{"method", "route", "status"}),
+		}, []string{"method", "route", "code"}),
 	}
 
 	if err := registry.Register(metrics.requestsTotal); err != nil {

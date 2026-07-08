@@ -31,11 +31,11 @@ func NewMockBankMetrics(registry *prometheus.Registry) (*MockBankMetrics, error)
 
 	metrics := &MockBankMetrics{
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "mock_bank_requests_total",
+			Name: "payment_gateway_mock_bank_requests_total",
 			Help: "Total number of Mock Bank requests made by the payment gateway.",
 		}, []string{"operation", "result"}),
 		requestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "mock_bank_request_duration_seconds",
+			Name:    "payment_gateway_mock_bank_request_duration_seconds",
 			Help:    "Duration of Mock Bank requests made by the payment gateway.",
 			Buckets: mockBankRequestDurationBuckets,
 		}, []string{"operation", "result"}),
