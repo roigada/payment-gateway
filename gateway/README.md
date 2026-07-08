@@ -130,6 +130,13 @@ payment_gateway_http_server_requests_total{method,route,code}
 payment_gateway_http_server_request_duration_seconds{method,route,code}
 ```
 
+payment operation outcome RED:
+
+```text
+payment_gateway_payment_operations_total{operation,outcome}
+payment_gateway_payment_operation_duration_seconds{operation,outcome}
+```
+
 and Mock Bank dependency RED:
 
 ```text
@@ -151,9 +158,11 @@ payment_gateway_postgres_pool_max_lifetime_closed_total
 payment_gateway_postgres_pool_max_idle_time_closed_total
 ```
 
+Payment operation `operation` labels use gateway command names: `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, and `refund_payment`. Payment operation `outcome` labels use gateway-owned outcomes: public Payment Status values such as `authorized`, `declined`, `pending`, `expired`, `captured`, `voided`, `refunded`; PaymentErrorKind values such as `invalid_input`, `not_found`, `idempotency_conflict`, `idempotency_in_progress`, `payment_status_conflict`, `bank_state_conflict`, `bank_unavailable`, `bank_timeout`, and `internal`; or `replayed` for an Idempotency Replay.
+
 Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.
 
-Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, or raw request URIs. The registry also includes Go runtime and process metrics.
+Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
 
 ## Public API
 

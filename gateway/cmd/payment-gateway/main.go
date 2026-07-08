@@ -172,6 +172,10 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	paymentOperationMetrics, err := observability.NewPaymentOperationMetrics(metricsRegistry)
+	if err != nil {
+		return err
+	}
 	postgresPoolCollector, err := observability.NewPostgresPoolCollector(db)
 	if err != nil {
 		return err
@@ -188,7 +192,7 @@ func run(logger *slog.Logger) error {
 	paymentStore := postgres.NewPaymentStore(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, app.SystemClock{}, cfg.FingerprintSecret)
+	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret)
 	readiness := postgres.NewReadinessChecker(db)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	server := httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler)

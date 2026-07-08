@@ -43,9 +43,9 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 			message: "idempotency key is already in progress",
 		},
 		{
-			name:    "invalid status conflict",
-			err:     app.NewPaymentInvalidStatusConflictError(cause),
-			kind:    app.PaymentErrorInvalidStatusConflict,
+			name:    "payment status conflict",
+			err:     app.NewPaymentStatusConflictError(cause),
+			kind:    app.PaymentErrorPaymentStatusConflict,
 			message: "payment status does not allow this operation",
 		},
 		{

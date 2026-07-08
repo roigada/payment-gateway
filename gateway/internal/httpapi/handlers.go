@@ -327,7 +327,7 @@ func writePaymentServiceError(w http.ResponseWriter, r *http.Request, err error)
 		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key was already used with a different request")
 	case app.PaymentErrorIdempotencyInProgress:
 		writeError(w, http.StatusConflict, errorCodeIdempotencyInProgress, "idempotency key is already in progress")
-	case app.PaymentErrorInvalidStatusConflict:
+	case app.PaymentErrorPaymentStatusConflict:
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
 	case app.PaymentErrorAuthorizationExpired:
 		writeError(w, http.StatusConflict, errorCodePaymentStatusConflict, "payment status does not allow this operation")
