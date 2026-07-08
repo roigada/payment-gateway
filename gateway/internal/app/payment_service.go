@@ -77,6 +77,8 @@ type PaymentOperationMetrics interface {
 	RecordPaymentOperation(operation string, outcome string, duration time.Duration)
 }
 
+const paymentOperationOutcomeReplayed = "replayed"
+
 type BankOperationKeyKind string
 
 const (
@@ -325,7 +327,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = "replayed"
+		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
 
@@ -379,7 +381,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = "replayed"
+		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
 
@@ -435,7 +437,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = "replayed"
+		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
 	payment := claim.Payment()
@@ -500,7 +502,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = "replayed"
+		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
 	payment := claim.Payment()
@@ -559,7 +561,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = "replayed"
+		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
 	payment := claim.Payment()
