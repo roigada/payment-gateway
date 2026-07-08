@@ -48,7 +48,7 @@ func (r *PaymentStore) saveIfStatus(_ context.Context, payment *domain.Payment, 
 		return app.NewPaymentNotFoundError(string(payment.ID()), nil)
 	}
 	if existing.Status() != expectedStatus {
-		return app.NewPaymentInvalidStatusConflictError(nil)
+		return app.NewPaymentStatusConflictError(nil)
 	}
 	return r.update(payment)
 }
@@ -97,7 +97,7 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
 	}
 	if existing.Status() != expectedStatus {
-		return app.NewPaymentInvalidStatusConflictError(nil)
+		return app.NewPaymentStatusConflictError(nil)
 	}
 	return r.update(payment)
 }
@@ -126,11 +126,11 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 	}
 	if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+		return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 	}
 	if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+		return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 	}
 	if shouldExpireBeforeNewBankCall(request, payment) {
 		if err := payment.MarkExpired(request.Now()); err != nil {
@@ -142,7 +142,7 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 			return app.PaymentCommandClaim{}, err
 		}
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-		return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+		return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
 	}
 	if request.BankOperationKeyKind() != "" {
 		if err := setBankOperationKey(payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {

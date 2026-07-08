@@ -9,7 +9,7 @@ const (
 	PaymentErrorNotFound              PaymentErrorKind = "not_found"
 	PaymentErrorIdempotencyConflict   PaymentErrorKind = "idempotency_conflict"
 	PaymentErrorIdempotencyInProgress PaymentErrorKind = "idempotency_in_progress"
-	PaymentErrorInvalidStatusConflict PaymentErrorKind = "invalid_status_conflict"
+	PaymentErrorPaymentStatusConflict PaymentErrorKind = "payment_status_conflict"
 	PaymentErrorAuthorizationExpired  PaymentErrorKind = "authorization_expired"
 	PaymentErrorBankStateConflict     PaymentErrorKind = "bank_state_conflict"
 	PaymentErrorBankUnavailable       PaymentErrorKind = "bank_unavailable"
@@ -55,9 +55,9 @@ func NewPaymentIdempotencyInProgressError(cause error) error {
 	}
 }
 
-func NewPaymentInvalidStatusConflictError(cause error) error {
+func NewPaymentStatusConflictError(cause error) error {
 	return &PaymentError{
-		kind:    PaymentErrorInvalidStatusConflict,
+		kind:    PaymentErrorPaymentStatusConflict,
 		message: "payment status does not allow this operation",
 		cause:   cause,
 	}

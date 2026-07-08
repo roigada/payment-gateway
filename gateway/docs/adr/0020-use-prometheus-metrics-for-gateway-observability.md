@@ -1,6 +1,6 @@
 # Use Prometheus Metrics for Gateway Observability
 
-The gateway exposes Prometheus-format metrics from the application through `/metrics` so local and deployed environments can scrape the same operational signal. Go code records bounded, low-cardinality service metrics: gateway HTTP RED metrics, outbound Mock Bank dependency RED metrics, and Go runtime/process collectors.
+The gateway exposes Prometheus-format metrics from the application through `/metrics` so local and deployed environments can scrape the same operational signal. Go code records bounded, low-cardinality service metrics: gateway HTTP RED metrics, payment operation outcome RED metrics, outbound Mock Bank dependency RED metrics, Postgres client pool USE metrics, and Go runtime/process collectors.
 
 Prometheus and Grafana are local demo/runtime infrastructure. They live at the repository root with the Compose demo configuration and are not gateway application dependencies. The default demo runtime starts Prometheus and Grafana so reviewers can inspect operational behavior without hand-configuring an observability stack.
 
@@ -10,8 +10,10 @@ Grafana is provisioned with a single Gateway Overview dashboard. Dashboard langu
 
 Gateway-owned custom metrics use the `payment_gateway_` prefix so their service ownership is clear even outside the local demo Prometheus job labels. Standard Go runtime and process collectors keep their conventional `go_*` and `process_*` names.
 
+Payment operation metrics are recorded at the application command boundary for mutating payment use cases. The gateway exposes `payment_gateway_payment_operations_total{operation,outcome}` and `payment_gateway_payment_operation_duration_seconds{operation,outcome}`. The `operation` label uses gateway command names, and the `outcome` label uses public Payment Status values, PaymentErrorKind values, or `replayed` for Idempotency Replay. Normal payment lifecycle outcomes such as `declined`, `pending`, `expired`, durable Payment Status values, and `replayed` remain visible without being classified as outage/error outcomes. Decline Reason is intentionally not a metric label.
+
 Postgres observability is gateway-owned, client-side connection pool metrics from Go's `database/sql` pool. This gives the gateway visibility into pool utilization and saturation without adding a Postgres server exporter or scraping the bundled database directly. The gateway collects these pool values at Prometheus scrape time through a custom collector around `sql.DB.Stats()` instead of maintaining a background polling loop.
 
 The gateway also sets an explicit database connection pool budget so pool saturation metrics have a meaningful ceiling. Local defaults are intentionally conservative and environment-configurable.
 
-Postgres server diagnostics, payment operation outcome metrics, synthetic load generation, alert rules, and Alertmanager are deferred to later slices. The current dashboard should not infer payment outcome observability from HTTP status codes or Mock Bank results.
+Postgres server diagnostics, synthetic load generation, alert rules, and Alertmanager remain out of scope. The dashboard should keep payment operation outcomes separate from HTTP status codes and Mock Bank dependency results.

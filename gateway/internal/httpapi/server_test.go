@@ -343,7 +343,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 		{name: "payment not found", err: app.NewPaymentNotFoundError("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
 		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflictError(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
 		{name: "idempotency in progress", err: app.NewPaymentIdempotencyInProgressError(nil), code: "idempotency_key_in_progress", message: "idempotency key is already in progress", status: http.StatusConflict},
-		{name: "invalid status conflict", err: app.NewPaymentInvalidStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
+		{name: "payment status conflict", err: app.NewPaymentStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
 		{name: "bank unavailable", err: app.NewPaymentBankUnavailableError(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
 		{name: "bank state conflict", err: app.NewPaymentBankStateConflictError(errors.New("already captured")), code: "bank_state_conflict", message: "bank state conflicts with local payment state", status: http.StatusBadGateway},
 		{name: "bank timeout", err: app.NewPaymentBankTimeoutError(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
@@ -442,7 +442,7 @@ func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 	}{
 		{name: "invalid input", err: app.NewInvalidPaymentInputError("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
 		{name: "payment not found", err: app.NewPaymentNotFoundError("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
-		{name: "invalid transition", err: app.NewPaymentInvalidStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
+		{name: "payment status conflict", err: app.NewPaymentStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
 		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflictError(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
 		{name: "idempotency in progress", err: app.NewPaymentIdempotencyInProgressError(nil), code: "idempotency_key_in_progress", message: "idempotency key is already in progress", status: http.StatusConflict},
 		{name: "bank unavailable", err: app.NewPaymentBankUnavailableError(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
@@ -474,7 +474,7 @@ func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 	}{
 		{name: "invalid input", err: app.NewInvalidPaymentInputError("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
 		{name: "payment not found", err: app.NewPaymentNotFoundError("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
-		{name: "invalid transition", err: app.NewPaymentInvalidStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
+		{name: "payment status conflict", err: app.NewPaymentStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
 		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflictError(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
 		{name: "idempotency in progress", err: app.NewPaymentIdempotencyInProgressError(nil), code: "idempotency_key_in_progress", message: "idempotency key is already in progress", status: http.StatusConflict},
 		{name: "bank unavailable", err: app.NewPaymentBankUnavailableError(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},

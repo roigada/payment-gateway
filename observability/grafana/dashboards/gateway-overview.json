@@ -208,6 +208,239 @@
         "x": 0,
         "y": 9
       },
+      "id": 17,
+      "panels": [],
+      "title": "Payment Operations",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 10
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (operation, outcome) (rate(payment_gateway_payment_operations_total{operation=~\"${payment_operation:regex}\"}[1m]))",
+          "legendFormat": "{{operation}} {{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Payment operation rate by operation and outcome",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 10
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(payment_gateway_payment_operation_duration_seconds_bucket{operation=~\"${payment_operation:regex}\"}[2m])))",
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "p95 payment operation latency by operation",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 10
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (operation, outcome) (rate(payment_gateway_payment_operations_total{operation=~\"${payment_operation:regex}\", outcome!~\"^(authorized|declined|pending|expired|captured|voided|refunded|replayed)$\"}[1m]))",
+          "legendFormat": "{{operation}} {{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Payment operation errors by outcome",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 10
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (operation) (rate(payment_gateway_payment_operations_total{operation=~\"${payment_operation:regex}\", outcome=\"replayed\"}[1m]))",
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Idempotency Replay rate by operation",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
       "id": 5,
       "panels": [],
       "title": "External Bank Dependency",
@@ -236,7 +469,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 10
+        "y": 19
       },
       "id": 6,
       "options": {
@@ -291,7 +524,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 10
+        "y": 19
       },
       "id": 7,
       "options": {
@@ -346,7 +579,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 10
+        "y": 19
       },
       "id": 8,
       "options": {
@@ -384,7 +617,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 27
       },
       "id": 9,
       "panels": [],
@@ -414,7 +647,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 28
       },
       "id": 13,
       "options": {
@@ -503,7 +736,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 28
       },
       "id": 14,
       "options": {
@@ -558,7 +791,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 28
       },
       "id": 15,
       "options": {
@@ -607,7 +840,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 36
       },
       "id": 16,
       "panels": [],
@@ -642,7 +875,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 28
+        "y": 37
       },
       "id": 10,
       "options": {
@@ -706,7 +939,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 28
+        "y": 37
       },
       "id": 11,
       "options": {
@@ -770,7 +1003,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 28
+        "y": 37
       },
       "id": 12,
       "options": {
@@ -863,6 +1096,33 @@
         "options": [],
         "query": {
           "query": "label_values(payment_gateway_mock_bank_requests_total, operation)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(payment_gateway_payment_operations_total, operation)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Payment operation",
+        "multi": true,
+        "name": "payment_operation",
+        "options": [],
+        "query": {
+          "query": "label_values(payment_gateway_payment_operations_total, operation)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,

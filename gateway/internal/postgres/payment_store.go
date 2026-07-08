@@ -54,10 +54,10 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 			return app.PaymentCommandClaim{}, err
 		}
 		if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
-			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 		}
 		if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
-			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 		}
 		if shouldExpireBeforeNewBankCall(request, payment) {
 			if err := payment.MarkExpired(request.Now()); err != nil {
@@ -72,7 +72,7 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 			if err := tx.Commit(); err != nil {
 				return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 			}
-			return app.PaymentCommandClaim{}, app.NewPaymentInvalidStatusConflictError(nil)
+			return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
 		}
 		if request.BankOperationKeyKind() != "" {
 			if err := ensureBankOperationKey(ctx, tx, payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
@@ -695,7 +695,7 @@ func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result s
 		if err != nil {
 			return err
 		}
-		return app.NewPaymentInvalidStatusConflictError(nil)
+		return app.NewPaymentStatusConflictError(nil)
 	}
 	return nil
 }

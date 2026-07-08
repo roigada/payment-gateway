@@ -555,7 +555,7 @@ func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T
 			_, err := store.ClaimPaymentCommand(ctx, tt.request(tt.payment))
 
 			require.Error(t, err)
-			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidStatusConflict))
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
 		})
 	}
 }

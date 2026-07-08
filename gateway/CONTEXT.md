@@ -48,6 +48,10 @@ _Avoid_: Reversed, reimbursed
 The current lifecycle position of a **Payment**.
 _Avoid_: State
 
+**Payment Status Conflict**:
+A command outcome where the requested payment operation is valid in shape but not allowed by the current **Payment Status**.
+_Avoid_: Invalid status conflict, transition error
+
 **Order ID**:
 The identity of the order that a **Payment** belongs to. The payment gateway treats it as an external reference owned by the order service.
 _Avoid_: Order, purchase ID
@@ -111,6 +115,10 @@ _Avoid_: Reimburse, reverse
 **Idempotency Key**:
 A caller-provided opaque operation identity used to make retried payment operations produce one result. The gateway requires it to be non-empty but does not interpret its format.
 _Avoid_: Request ID, correlation ID
+
+**Idempotency Replay**:
+The gateway response to a repeated payment command that uses the same **Idempotency Key** and the same request values as an already completed command.
+_Avoid_: Duplicate operation, cached request
 
 **Bank Operation Key**:
 A gateway-generated operation identity sent to the **Mock Bank** so retried bank calls produce one bank result.
