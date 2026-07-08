@@ -41,7 +41,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 
 	insertPaymentFixture(t, db, payment)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, payment.ID(), saved.ID())
 	assert.Equal(t, "order-1", saved.OrderID())
@@ -56,7 +56,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	assert.True(t, saved.CreatedAt().Equal(now), "created_at should round-trip as the same instant")
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 
-	_, err = store.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"))
+	_, err = store.FindByID(ctx, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440999"), time.Time{})
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorNotFound))
 }
 
@@ -83,7 +83,7 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 
 	insertPaymentFixture(t, db, payment)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusDeclined, saved.Status())
 	assert.Equal(t, domain.DeclineReasonExpiredCard, saved.DeclineReason())
@@ -118,7 +118,7 @@ func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusPending)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
@@ -158,7 +158,7 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusVoided, saved.Status())
 	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440003", saved.BankVoidID())
@@ -192,7 +192,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyVoid)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankVoidID())
@@ -220,7 +220,7 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 
 	authorizedQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "authorized")
 	require.NoError(t, err)
-	authorized, err := store.Search(ctx, authorizedQuery)
+	authorized, err := store.Search(ctx, authorizedQuery, time.Time{})
 
 	require.NoError(t, err)
 	require.Len(t, authorized, 100)
@@ -229,12 +229,70 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 
 	byCustomerQuery, err := app.NewSearchPaymentsQuery("", "customer-1", "")
 	require.NoError(t, err)
-	byCustomer, err := store.Search(ctx, byCustomerQuery)
+	byCustomer, err := store.Search(ctx, byCustomerQuery, time.Time{})
 
 	require.NoError(t, err)
 	require.Len(t, byCustomer, 100)
 	assert.Equal(t, declined.ID(), byCustomer[0].ID())
 	assert.Equal(t, otherOrder.ID(), byCustomer[1].ID())
+}
+
+func TestPaymentStoreFindByIDPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, authorizedAt)
+	insertPaymentFixture(t, db, payment)
+
+	saved, err := store.FindByID(ctx, payment.ID(), payment.AuthorizationExpiresAt())
+	require.NoError(t, err)
+
+	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
+	assert.True(t, saved.UpdatedAt().Equal(payment.AuthorizationExpiresAt()), "updated_at should be the read expiration instant")
+
+	persisted, err := store.FindByID(ctx, payment.ID(), time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusExpired, persisted.Status())
+	assert.True(t, persisted.UpdatedAt().Equal(payment.AuthorizationExpiresAt()), "expired status should be persisted by the read")
+}
+
+func TestPaymentStoreSearchRefreshesExpiredAuthorizationsBeforeStatusFilter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	expiredBeforeRead := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, base)
+	stillAuthorized := newStorePayment(t, 2, "order-2", "customer-1", domain.PaymentStatusAuthorized, base.Add(30*time.Minute))
+	insertPaymentFixture(t, db, expiredBeforeRead)
+	insertPaymentFixture(t, db, stillAuthorized)
+	readNow := expiredBeforeRead.AuthorizationExpiresAt()
+
+	expiredQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "expired")
+	require.NoError(t, err)
+	expired, err := store.Search(ctx, expiredQuery, readNow)
+	require.NoError(t, err)
+	require.Len(t, expired, 1)
+	assert.Equal(t, expiredBeforeRead.ID(), expired[0].ID())
+	assert.Equal(t, domain.PaymentStatusExpired, expired[0].Status())
+
+	authorizedQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "authorized")
+	require.NoError(t, err)
+	authorized, err := store.Search(ctx, authorizedQuery, readNow)
+	require.NoError(t, err)
+	assert.Empty(t, authorized)
+
+	outOfScope, err := store.FindByID(ctx, stillAuthorized.ID(), time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusAuthorized, outOfScope.Status())
 }
 
 func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
@@ -268,7 +326,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", saved.BankAuthorizationID())
@@ -305,7 +363,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyCapture)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankCaptureID())
@@ -350,7 +408,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusCaptured)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusRefunded, saved.Status())
 	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", saved.BankCaptureID())
@@ -393,7 +451,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 
 	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyRefund)
 
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Empty(t, saved.BankRefundID())
@@ -591,7 +649,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Empty(t, saved.BankAuthorizationID())
@@ -621,7 +679,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankCaptureID())
@@ -753,7 +811,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
-	saved, err := store.FindByID(ctx, payment.ID())
+	saved, err := store.FindByID(ctx, payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 }
