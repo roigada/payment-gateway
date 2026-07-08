@@ -81,13 +81,13 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (method, route, status) (rate(http_requests_total{route=~\"${route:regex}\"}[1m]))",
-          "legendFormat": "{{method}} {{route}} {{status}}",
+          "expr": "sum by (method, route, code) (rate(payment_gateway_http_server_requests_total{route=~\"${route:regex}\"}[1m]))",
+          "legendFormat": "{{method}} {{route}} {{code}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Request rate by route and status",
+      "title": "Request rate by route and status code",
       "type": "timeseries"
     },
     {
@@ -136,13 +136,13 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(http_requests_total{route=~\"${route:regex}\", status=~\"4..|5..\"}[1m]))",
-          "legendFormat": "HTTP {{status}}",
+          "expr": "sum by (code) (rate(payment_gateway_http_server_requests_total{route=~\"${route:regex}\", code=~\"4..|5..\"}[1m]))",
+          "legendFormat": "HTTP {{code}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Error rate by HTTP status",
+      "title": "Error rate by HTTP status code",
       "type": "timeseries"
     },
     {
@@ -191,7 +191,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{route=~\"${route:regex}\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(payment_gateway_http_server_request_duration_seconds_bucket{route=~\"${route:regex}\"}[2m])))",
           "legendFormat": "{{route}}",
           "range": true,
           "refId": "A"
@@ -259,7 +259,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (operation, result) (rate(mock_bank_requests_total{operation=~\"${operation:regex}\"}[1m]))",
+          "expr": "sum by (operation, result) (rate(payment_gateway_mock_bank_requests_total{operation=~\"${operation:regex}\"}[1m]))",
           "legendFormat": "{{operation}} {{result}}",
           "range": true,
           "refId": "A"
@@ -314,7 +314,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (operation, result) (rate(mock_bank_requests_total{operation=~\"${operation:regex}\", result=~\"timeout|unavailable|internal\"}[1m]))",
+          "expr": "sum by (operation, result) (rate(payment_gateway_mock_bank_requests_total{operation=~\"${operation:regex}\", result=~\"timeout|unavailable|internal\"}[1m]))",
           "legendFormat": "{{operation}} {{result}}",
           "range": true,
           "refId": "A"
@@ -369,7 +369,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(mock_bank_request_duration_seconds_bucket{operation=~\"${operation:regex}\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(payment_gateway_mock_bank_request_duration_seconds_bucket{operation=~\"${operation:regex}\"}[2m])))",
           "legendFormat": "{{operation}}",
           "range": true,
           "refId": "A"
@@ -387,6 +387,229 @@
         "y": 18
       },
       "id": 9,
+      "panels": [],
+      "title": "Postgres Pool",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "payment_gateway_postgres_pool_open_connections",
+          "legendFormat": "open",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "payment_gateway_postgres_pool_in_use_connections",
+          "legendFormat": "in use",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "payment_gateway_postgres_pool_idle_connections",
+          "legendFormat": "idle",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "payment_gateway_postgres_pool_max_open_connections",
+          "legendFormat": "max open",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Pool connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "payment_gateway_postgres_pool_in_use_connections / payment_gateway_postgres_pool_max_open_connections",
+          "legendFormat": "in use / max open",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Pool utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(payment_gateway_postgres_pool_wait_count_total[1m])",
+          "legendFormat": "waits / second",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(payment_gateway_postgres_pool_wait_duration_seconds_total[1m])",
+          "legendFormat": "wait seconds / second",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Pool wait pressure",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 16,
       "panels": [],
       "title": "Runtime",
       "type": "row"
@@ -419,7 +642,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 28
       },
       "id": 10,
       "options": {
@@ -483,7 +706,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 28
       },
       "id": 11,
       "options": {
@@ -547,7 +770,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 28
       },
       "id": 12,
       "options": {
@@ -604,7 +827,7 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(http_requests_total, route)",
+        "definition": "label_values(payment_gateway_http_server_requests_total, route)",
         "hide": 0,
         "includeAll": true,
         "label": "Route",
@@ -612,7 +835,7 @@
         "name": "route",
         "options": [],
         "query": {
-          "query": "label_values(http_requests_total, route)",
+          "query": "label_values(payment_gateway_http_server_requests_total, route)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -631,7 +854,7 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(mock_bank_requests_total, operation)",
+        "definition": "label_values(payment_gateway_mock_bank_requests_total, operation)",
         "hide": 0,
         "includeAll": true,
         "label": "Bank operation",
@@ -639,7 +862,7 @@
         "name": "operation",
         "options": [],
         "query": {
-          "query": "label_values(mock_bank_requests_total, operation)",
+          "query": "label_values(payment_gateway_mock_bank_requests_total, operation)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
