@@ -224,12 +224,11 @@ func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Paymen
 	return nil
 }
 
-func (r *PaymentStore) ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
-	return updatePayment(ctx, r.db, payment, expectedStatus)
-}
-
-func (r *PaymentStore) RefreshExpiredAuthorizations(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) error {
-	_, err := r.db.ExecContext(
+func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query app.SearchPaymentsQuery, now time.Time) error {
+	if now.IsZero() {
+		return nil
+	}
+	_, err := exec.ExecContext(
 		ctx,
 		`UPDATE payments
 		    SET status = $4,
@@ -409,8 +408,37 @@ func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *doma
 	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
 }
 
-func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
-	return findPaymentByID(ctx, r.db, id, false)
+func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	defer tx.Rollback()
+
+	payment, err := findPaymentByID(ctx, tx, id, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := refreshReadExpiration(ctx, tx, payment, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payment, nil
+}
+
+func refreshReadExpiration(ctx context.Context, exec sqlExecutor, payment *domain.Payment, now time.Time) error {
+	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
+		return nil
+	}
+	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
+		return nil
+	}
+	if err := payment.MarkExpired(now); err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return updatePayment(ctx, exec, payment, domain.PaymentStatusAuthorized)
 }
 
 func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
@@ -515,8 +543,18 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	return payment, nil
 }
 
-func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
-	rows, err := r.db.QueryContext(
+func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	defer tx.Rollback()
+
+	if err := refreshExpiredAuthorizations(ctx, tx, query, now); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(
 		ctx,
 		`SELECT id,
 		        order_id,
@@ -550,7 +588,6 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 	if err != nil {
 		return nil, app.NewInternalPaymentError(err)
 	}
-	defer rows.Close()
 
 	var payments []*domain.Payment
 	for rows.Next() {
@@ -561,6 +598,13 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 		payments = append(payments, payment)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, app.NewInternalPaymentError(err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, app.NewInternalPaymentError(err)
 	}
 	return payments, nil

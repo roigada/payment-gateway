@@ -106,10 +106,8 @@ type PaymentCommandResult struct {
 }
 
 type PaymentStore interface {
-	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
-	ExpireAuthorization(ctx context.Context, payment *domain.Payment, expectedStatus domain.PaymentStatus) error
-	RefreshExpiredAuthorizations(ctx context.Context, query SearchPaymentsQuery, now time.Time) error
-	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
+	FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error)
+	Search(ctx context.Context, query SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error)
 	ClaimPaymentCommand(ctx context.Context, request PaymentCommandClaimRequest) (PaymentCommandClaim, error)
 	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult) error
 	ReleasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) error
@@ -594,11 +592,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
-	payment, err := s.store.FindByID(ctx, query.paymentID)
-	if err != nil {
-		return PaymentResult{}, ensurePaymentError(err)
-	}
-	payment, err = s.refreshPaymentExpiration(ctx, payment)
+	payment, err := s.store.FindByID(ctx, query.paymentID, s.clock.Now())
 	if err != nil {
 		return PaymentResult{}, ensurePaymentError(err)
 	}
@@ -606,11 +600,7 @@ func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) 
 }
 
 func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
-	if err := s.store.RefreshExpiredAuthorizations(ctx, query, s.clock.Now()); err != nil {
-		return nil, ensurePaymentError(err)
-	}
-
-	payments, err := s.store.Search(ctx, query)
+	payments, err := s.store.Search(ctx, query, s.clock.Now())
 	if err != nil {
 		return nil, ensurePaymentError(err)
 	}
@@ -736,21 +726,4 @@ func newPaymentResult(payment *domain.Payment) PaymentResult {
 		CreatedAt:              payment.CreatedAt(),
 		UpdatedAt:              payment.UpdatedAt(),
 	}
-}
-
-func (s *PaymentService) refreshPaymentExpiration(ctx context.Context, payment *domain.Payment) (*domain.Payment, error) {
-	now := s.clock.Now()
-	if !payment.AuthorizationExpired(now) {
-		return payment, nil
-	}
-	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
-		return payment, nil
-	}
-	if err := payment.MarkExpired(now); err != nil {
-		return nil, err
-	}
-	if err := s.store.ExpireAuthorization(ctx, payment, domain.PaymentStatusAuthorized); err != nil {
-		return nil, err
-	}
-	return payment, nil
 }

@@ -55,7 +55,7 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 	}, result.Payment)
 	assert.Equal(t, http.StatusCreated, result.HTTPStatus)
 
-	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, "bank-auth-id-1", saved.BankAuthorizationID())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
@@ -66,7 +66,7 @@ func TestAuthorizePaymentPersistsPendingPaymentBeforeCallingBank(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	bank.onAuthorize = func() {
-		saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+		saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 		require.NoError(t, err)
 		assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 		assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
@@ -102,7 +102,7 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 	}, result.Payment)
 	assert.Equal(t, http.StatusCreated, result.HTTPStatus)
 
-	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusDeclined, saved.Status())
 	assert.Equal(t, domain.DeclineReasonInsufficientFunds, saved.DeclineReason())
@@ -121,7 +121,7 @@ func TestAuthorizePaymentStoresPendingPaymentAndReleasesClaimForUnknownBankOutco
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 
-	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
@@ -144,7 +144,7 @@ func TestAuthorizePaymentStoresExpiredPaymentWhenBankAuthorizationAlreadyExpired
 
 	assert.Equal(t, "expired", result.Payment.Status)
 	assert.Equal(t, now, result.Payment.AuthorizationExpiresAt)
-	saved, err := repo.FindByID(context.Background(), domain.PaymentID(result.Payment.ID))
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID(result.Payment.ID), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
 }
@@ -163,9 +163,9 @@ func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 	_, err = secondService.AuthorizePayment(context.Background(), secondCommand)
 	require.Error(t, err)
 
-	firstSaved, err := firstRepo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	firstSaved, err := firstRepo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
-	secondSaved, err := secondRepo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	secondSaved, err := secondRepo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, firstSaved.AuthorizationCardFingerprint(), secondSaved.AuthorizationCardFingerprint())
 }
@@ -252,7 +252,7 @@ func TestRetryAuthorizationLeavesPendingPaymentPendingAndReleasesClaimForUnknown
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
-	saved, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	saved, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, findErr)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Equal(t, now, saved.UpdatedAt())
@@ -757,7 +757,7 @@ func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testin
 
 	assert.ErrorIs(t, err, bankErr)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
-	saved, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"))
+	saved, findErr := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, findErr)
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
@@ -896,7 +896,7 @@ func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
 	assert.Equal(t, "expired", result.Status)
 	assert.Equal(t, payment.AuthorizationExpiresAt(), result.AuthorizationExpiresAt)
 	assert.Equal(t, payment.AuthorizationExpiresAt(), result.UpdatedAt)
-	saved, err := repo.FindByID(context.Background(), payment.ID())
+	saved, err := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
 }
@@ -929,7 +929,7 @@ func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testin
 	}, result.Payment)
 	assert.Equal(t, http.StatusOK, result.HTTPStatus)
 
-	saved, err := repo.FindByID(context.Background(), payment.ID())
+	saved, err := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusVoided, saved.Status())
 	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440002", saved.BankVoidID())
@@ -995,7 +995,7 @@ func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 
 			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
-			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			saved, findErr := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 			require.NoError(t, findErr)
 			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 			assert.Equal(t, authorizedAt, saved.UpdatedAt())
@@ -1155,7 +1155,7 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 	}, captured.Payment)
 	assert.Equal(t, http.StatusOK, captured.HTTPStatus)
 
-	saved, err := repo.FindByID(context.Background(), payment.ID())
+	saved, err := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440001", saved.BankCaptureID())
@@ -1185,7 +1185,7 @@ func TestCapturePaymentExpiresPaymentBeforeNewBankCallWhenAuthorizationExpired(t
 
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 	assert.Zero(t, bank.captureCalls)
-	saved, findErr := repo.FindByID(context.Background(), payment.ID())
+	saved, findErr := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, findErr)
 	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
 	assert.Equal(t, payment.AuthorizationExpiresAt(), saved.UpdatedAt())
@@ -1238,7 +1238,7 @@ func TestCapturePaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
 			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
-			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			saved, findErr := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 			require.NoError(t, findErr)
 			assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 			assert.Equal(t, authorizedAt, saved.UpdatedAt())
@@ -1260,7 +1260,7 @@ func TestCapturePaymentPersistsExpiredStatusWhenBankReportsAuthorizationExpired(
 	_, err := service.CapturePayment(context.Background(), command)
 
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
-	saved, findErr := repo.FindByID(context.Background(), payment.ID())
+	saved, findErr := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, findErr)
 	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
 	assert.Equal(t, now, saved.UpdatedAt())
@@ -1410,7 +1410,7 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 	}, refunded.Payment)
 	assert.Equal(t, http.StatusOK, refunded.HTTPStatus)
 
-	saved, err := repo.FindByID(context.Background(), payment.ID())
+	saved, err := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusRefunded, saved.Status())
 	assert.Equal(t, "ref_550e8400-e29b-41d4-a716-446655440002", saved.BankRefundID())
@@ -1476,7 +1476,7 @@ func TestRefundPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 			_, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1"))
 
 			assert.True(t, app.HasPaymentErrorKind(err, tt.kind))
-			saved, findErr := repo.FindByID(context.Background(), payment.ID())
+			saved, findErr := repo.FindByID(context.Background(), payment.ID(), time.Time{})
 			require.NoError(t, findErr)
 			assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 			assert.Equal(t, capturedAt, saved.UpdatedAt())
@@ -1885,7 +1885,7 @@ type failingFindPaymentStore struct {
 	err error
 }
 
-func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID) (*domain.Payment, error) {
+func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {
 	return nil, s.err
 }
 
