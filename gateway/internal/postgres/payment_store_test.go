@@ -588,7 +588,17 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 	require.NoError(t, err)
 	replayResult, ok := replayed.ReplayResult()
 	require.True(t, ok)
-	assert.Equal(t, result, replayResult)
+	assert.Equal(t, result.HTTPStatus, replayResult.HTTPStatus)
+	assert.Equal(t, result.Payment.ID, replayResult.Payment.ID)
+	assert.Equal(t, result.Payment.OrderID, replayResult.Payment.OrderID)
+	assert.Equal(t, result.Payment.CustomerID, replayResult.Payment.CustomerID)
+	assert.Equal(t, result.Payment.AmountCents, replayResult.Payment.AmountCents)
+	assert.Equal(t, result.Payment.Currency, replayResult.Payment.Currency)
+	assert.Equal(t, result.Payment.Status, replayResult.Payment.Status)
+	assert.Equal(t, result.Payment.DeclineReason, replayResult.Payment.DeclineReason)
+	assert.True(t, replayResult.Payment.AuthorizationExpiresAt.Equal(result.Payment.AuthorizationExpiresAt), "authorization_expires_at should round-trip as the same instant")
+	assert.True(t, replayResult.Payment.CreatedAt.Equal(result.Payment.CreatedAt), "created_at should round-trip as the same instant")
+	assert.True(t, replayResult.Payment.UpdatedAt.Equal(result.Payment.UpdatedAt), "updated_at should round-trip as the same instant")
 }
 
 func TestPaymentStoreDoesNotRecoverNonStuckAuthorizationClaim(t *testing.T) {
