@@ -23,6 +23,7 @@ const (
 	defaultDatabaseMaxOpenConnections    = 10
 	defaultDatabaseMaxIdleConnections    = 5
 	defaultDatabaseConnectionMaxLifetime = 30 * time.Minute
+	defaultIdempotencyClaimStuckAfter    = app.DefaultIdempotencyClaimStuckAfter
 )
 
 func main() {
@@ -48,6 +49,7 @@ type config struct {
 	DatabaseConnectionMaxLifetime time.Duration
 	MockBankBaseURL               string
 	FingerprintSecret             string
+	IdempotencyClaimStuckAfter    time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -63,6 +65,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	idempotencyClaimStuckAfter, err := envDuration("IDEMPOTENCY_CLAIM_STUCK_AFTER", defaultIdempotencyClaimStuckAfter)
+	if err != nil {
+		return config{}, err
+	}
 
 	cfg := config{
 		Addr:                          os.Getenv("ADDR"),
@@ -72,6 +78,7 @@ func loadConfig() (config, error) {
 		DatabaseConnectionMaxLifetime: databaseConnectionMaxLifetime,
 		MockBankBaseURL:               os.Getenv("MOCK_BANK_BASE_URL"),
 		FingerprintSecret:             os.Getenv("FINGERPRINT_SECRET"),
+		IdempotencyClaimStuckAfter:    idempotencyClaimStuckAfter,
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
@@ -101,6 +108,9 @@ func (cfg config) validate() error {
 	}
 	if cfg.FingerprintSecret == "" {
 		return fmt.Errorf("FINGERPRINT_SECRET is required")
+	}
+	if cfg.IdempotencyClaimStuckAfter <= 0 {
+		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration")
 	}
 
 	return nil
@@ -192,7 +202,7 @@ func run(logger *slog.Logger) error {
 	paymentStore := postgres.NewPaymentStore(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret)
+	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret, cfg.IdempotencyClaimStuckAfter)
 	readiness := postgres.NewReadinessChecker(db)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	server := httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler)

@@ -170,6 +170,37 @@ func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 	assert.Equal(t, firstSaved.AuthorizationCardFingerprint(), secondSaved.AuthorizationCardFingerprint())
 }
 
+func TestAuthorizePaymentRecoversStuckClaimUsingOriginalPendingPaymentAndReplays(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	crashingBank := &bankAuthorizerFake{}
+	crashingBank.onAuthorize = func() {
+		panic("process crashed after claim")
+	}
+	crashingService := newPaymentServiceWithBankOperationKeys(repo, crashingBank, now.Add(-10*time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_original"}})
+	assert.PanicsWithValue(t, "process crashed after claim", func() {
+		_, _ = crashingService.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	})
+	repo.AgeClaim(app.AuthorizePaymentOperation, "public-key-1", now.Add(-6*time.Minute))
+
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	service := newPaymentServiceWithBankOperationKeys(repo, bank, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_new", "bok_newer"}})
+
+	result, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440000", result.Payment.ID)
+	assert.Equal(t, "authorized", result.Payment.Status)
+	assert.Equal(t, http.StatusCreated, result.HTTPStatus)
+	assert.Equal(t, "bok_original", bank.request.OperationKey)
+	assert.Equal(t, 1, bank.calls)
+
+	replayed, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
+	assert.Equal(t, 1, bank.calls)
+}
+
 func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -652,6 +683,7 @@ func TestAuthorizePaymentRejectsInProgressIdempotencyKeyBeforeCallingBank(t *tes
 		&paymentOperationMetricsFake{},
 		testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)},
 		"fingerprint-secret",
+		app.DefaultIdempotencyClaimStuckAfter,
 	)
 
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
@@ -738,6 +770,7 @@ func TestAuthorizePaymentDoesNotClaimIdempotencyForValidationFailure(t *testing.
 		&paymentOperationMetricsFake{},
 		testsupport.FixedClock{Time: time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)},
 		"fingerprint-secret",
+		app.DefaultIdempotencyClaimStuckAfter,
 	)
 	_, err := newAuthorizePaymentCommand("order-1", "customer-1", 0, validCardDetails(), "public-key-1")
 	require.Error(t, err)
@@ -1578,51 +1611,58 @@ func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 		{
 			name: "payment store",
 			build: func() {
-				app.NewPaymentService(nil, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, validClock, "secret")
+				app.NewPaymentService(nil, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, validClock, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "payment store is required",
 		},
 		{
 			name: "payment ID generator",
 			build: func() {
-				app.NewPaymentService(validStore, nil, validBankOperationKeys, validBank, validOperationMetrics, validClock, "secret")
+				app.NewPaymentService(validStore, nil, validBankOperationKeys, validBank, validOperationMetrics, validClock, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "payment ID generator is required",
 		},
 		{
 			name: "bank operation key generator",
 			build: func() {
-				app.NewPaymentService(validStore, validPaymentIDs, nil, validBank, validOperationMetrics, validClock, "secret")
+				app.NewPaymentService(validStore, validPaymentIDs, nil, validBank, validOperationMetrics, validClock, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "bank operation key generator is required",
 		},
 		{
 			name: "bank authorizer",
 			build: func() {
-				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, nil, validOperationMetrics, validClock, "secret")
+				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, nil, validOperationMetrics, validClock, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "bank authorizer is required",
 		},
 		{
 			name: "payment operation metrics",
 			build: func() {
-				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, nil, validClock, "secret")
+				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, nil, validClock, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "payment operation metrics is required",
 		},
 		{
 			name: "clock",
 			build: func() {
-				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, nil, "secret")
+				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, nil, "secret", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "clock is required",
 		},
 		{
 			name: "fingerprint secret",
 			build: func() {
-				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, validClock, " ")
+				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, validClock, " ", app.DefaultIdempotencyClaimStuckAfter)
 			},
 			reason: "fingerprint secret is required",
+		},
+		{
+			name: "idempotency claim stuck-after",
+			build: func() {
+				app.NewPaymentService(validStore, validPaymentIDs, validBankOperationKeys, validBank, validOperationMetrics, validClock, "secret", 0)
+			},
+			reason: "idempotency claim stuck-after must be positive",
 		},
 	}
 
@@ -1779,6 +1819,7 @@ func newPaymentServiceWithBankOperationKeysAndMetrics(repo app.PaymentStore, ban
 		metrics,
 		testsupport.FixedClock{Time: now},
 		"fingerprint-secret",
+		app.DefaultIdempotencyClaimStuckAfter,
 	)
 }
 

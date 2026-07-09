@@ -28,7 +28,10 @@ type PaymentService struct {
 	operationMetrics  PaymentOperationMetrics
 	clock             Clock
 	fingerprintSecret string
+	claimStuckAfter   time.Duration
 }
+
+const DefaultIdempotencyClaimStuckAfter = 5 * time.Minute
 
 func NewPaymentService(
 	store PaymentStore,
@@ -38,6 +41,7 @@ func NewPaymentService(
 	operationMetrics PaymentOperationMetrics,
 	clock Clock,
 	fingerprintSecret string,
+	claimStuckAfter time.Duration,
 ) *PaymentService {
 	if store == nil {
 		panic("payment store is required")
@@ -61,6 +65,9 @@ func NewPaymentService(
 	if fingerprintSecret == "" {
 		panic("fingerprint secret is required")
 	}
+	if claimStuckAfter <= 0 {
+		panic("idempotency claim stuck-after must be positive")
+	}
 
 	return &PaymentService{
 		store:             store,
@@ -70,6 +77,7 @@ func NewPaymentService(
 		operationMetrics:  operationMetrics,
 		clock:             clock,
 		fingerprintSecret: fingerprintSecret,
+		claimStuckAfter:   claimStuckAfter,
 	}
 }
 
@@ -124,15 +132,18 @@ type PaymentCommandClaimRequest struct {
 	bankOperationKey             string
 	authorizationCardFingerprint string
 	now                          time.Time
+	claimStuckAfter              time.Duration
 }
 
-func NewAuthorizationStartClaim(key string, requestFingerprint string, payment *domain.Payment) PaymentCommandClaimRequest {
+func NewAuthorizationStartClaim(key string, requestFingerprint string, payment *domain.Payment, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
 	return PaymentCommandClaimRequest{
 		operation:          AuthorizePaymentOperation,
 		key:                key,
 		requestFingerprint: requestFingerprint,
 		payment:            payment,
 		expectedStatus:     domain.PaymentStatusPending,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
@@ -199,6 +210,9 @@ func (r PaymentCommandClaimRequest) AuthorizationCardFingerprint() string {
 	return r.authorizationCardFingerprint
 }
 func (r PaymentCommandClaimRequest) Now() time.Time { return r.now }
+func (r PaymentCommandClaimRequest) ClaimStuckAfter() time.Duration {
+	return r.claimStuckAfter
+}
 
 type PaymentCommandClaim struct {
 	operation          string
@@ -320,7 +334,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	if err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewAuthorizationStartClaim(command.idempotencyKey, fingerprint, payment))
+	claim, err := s.store.ClaimPaymentCommand(ctx, NewAuthorizationStartClaim(command.idempotencyKey, fingerprint, payment, now, s.claimStuckAfter))
 	if err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -328,13 +342,14 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		outcomeOverride = paymentOperationOutcomeReplayed
 		return replayed, nil
 	}
+	payment = claim.Payment()
 
 	bankResult, err := s.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
-		OperationKey:    bankOperationKey,
-		OrderID:         command.orderID,
-		CustomerID:      command.customerID,
-		AmountCents:     command.amountCents,
-		Currency:        domain.CurrencyUSD,
+		OperationKey:    payment.AuthorizationBankOperationKey(),
+		OrderID:         payment.OrderID(),
+		CustomerID:      payment.CustomerID(),
+		AmountCents:     payment.AmountCents(),
+		Currency:        payment.Currency(),
 		CardNumber:      command.card.number,
 		CardCVV:         command.card.cvv,
 		CardExpiryMonth: command.card.expiryMonth,

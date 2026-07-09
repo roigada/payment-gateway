@@ -31,11 +31,11 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 	}
 	defer tx.Rollback()
 
-	record, outcome, err := claimIdempotency(ctx, tx, request.Operation(), request.Key(), request.RequestFingerprint())
+	record, outcome, err := claimIdempotency(ctx, tx, request)
 	if err != nil {
 		return app.PaymentCommandClaim{}, err
 	}
-	if outcome != idempotencyClaimAcquired {
+	if outcome != idempotencyClaimAcquired && outcome != idempotencyClaimRecovered {
 		if err := tx.Commit(); err != nil {
 			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
@@ -43,11 +43,23 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 	}
 
 	var claimedPayment *domain.Payment
-	if request.Payment() != nil {
+	if request.Payment() != nil && outcome == idempotencyClaimAcquired {
 		if err := insertPayment(ctx, tx, request.Payment()); err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
 		claimedPayment = request.Payment()
+	} else if request.Payment() != nil && outcome == idempotencyClaimRecovered {
+		payment, err := findPaymentByID(ctx, tx, record.paymentID, true)
+		if err != nil {
+			if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
+				return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+			}
+			return app.PaymentCommandClaim{}, err
+		}
+		if payment.Status() != request.ExpectedStatus() {
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+		}
+		claimedPayment = payment
 	} else if request.PaymentID() != "" {
 		payment, err := findPaymentByID(ctx, tx, request.PaymentID(), true)
 		if err != nil {
@@ -257,20 +269,43 @@ func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query a
 	return nil
 }
 
-func claimIdempotency(ctx context.Context, exec sqlExecutor, operation string, key string, requestFingerprint string) (idempotencyRecord, idempotencyClaimOutcome, error) {
+func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest) (idempotencyRecord, idempotencyClaimOutcome, error) {
+	paymentID := domain.PaymentID("")
+	if request.Payment() != nil {
+		paymentID = request.Payment().ID()
+	} else {
+		paymentID = request.PaymentID()
+	}
+	now := request.Now()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if canAttemptIdempotencyRecovery(request) {
+		recovered, ok, err := recoverIdempotencyClaim(ctx, exec, request, now)
+		if err != nil {
+			return idempotencyRecord{}, 0, err
+		}
+		if ok {
+			return recovered, idempotencyClaimRecovered, nil
+		}
+	}
 	insert, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO idempotency_records (
 		     operation,
 		     key,
 		     request_fingerprint,
-		     status
+		     payment_id,
+		     status,
+		     claimed_at
 		 )
-		 VALUES ($1, $2, $3, 'in_progress')
+		 VALUES ($1, $2, $3, $4, 'in_progress', $5)
 		 ON CONFLICT (operation, key) DO NOTHING`,
-		operation,
-		key,
-		requestFingerprint,
+		request.Operation(),
+		request.Key(),
+		request.RequestFingerprint(),
+		nullableString(string(paymentID)),
+		now,
 	)
 	if err != nil {
 		return idempotencyRecord{}, 0, app.NewInternalPaymentError(err)
@@ -281,36 +316,18 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, operation string, k
 	}
 	if rowsAffected == 1 {
 		return idempotencyRecord{
-			operation:          operation,
-			key:                key,
-			requestFingerprint: requestFingerprint,
+			operation:          request.Operation(),
+			key:                request.Key(),
+			requestFingerprint: request.RequestFingerprint(),
+			paymentID:          paymentID,
 		}, idempotencyClaimAcquired, nil
 	}
 
-	var (
-		record      idempotencyRecord
-		status      idempotencyRecordStatus
-		paymentData []byte
-		httpStatus  sql.NullInt64
-	)
-	err = exec.QueryRowContext(
-		ctx,
-		`SELECT request_fingerprint,
-		        status,
-		        http_status,
-		        payment_result
-		   FROM idempotency_records
-		  WHERE operation = $1
-		    AND key = $2`,
-		operation,
-		key,
-	).Scan(&record.requestFingerprint, &status, &httpStatus, &paymentData)
+	record, status, paymentData, httpStatus, err := selectIdempotencyRecord(ctx, exec, request.Operation(), request.Key())
 	if err != nil {
-		return idempotencyRecord{}, 0, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, 0, err
 	}
 
-	record.operation = operation
-	record.key = key
 	record.status = status
 	if status == idempotencyRecordCompleted {
 		paymentResult, err := decodePaymentResultSnapshot(paymentData)
@@ -326,11 +343,85 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, operation string, k
 	return record, idempotencyClaimExisting, nil
 }
 
+func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation string, key string) (idempotencyRecord, idempotencyRecordStatus, []byte, sql.NullInt64, error) {
+	var (
+		record      idempotencyRecord
+		status      idempotencyRecordStatus
+		paymentData []byte
+		httpStatus  sql.NullInt64
+		paymentID   sql.NullString
+		claimedAt   time.Time
+	)
+	err := exec.QueryRowContext(
+		ctx,
+		`SELECT request_fingerprint,
+		        payment_id,
+		        status,
+		        http_status,
+		        payment_result,
+		        claimed_at
+		   FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2`,
+		operation,
+		key,
+	).Scan(&record.requestFingerprint, &paymentID, &status, &httpStatus, &paymentData, &claimedAt)
+	if err != nil {
+		return idempotencyRecord{}, "", nil, sql.NullInt64{}, app.NewInternalPaymentError(err)
+	}
+
+	record.operation = operation
+	record.key = key
+	record.paymentID = domain.PaymentID(nullStringValue(paymentID))
+	record.claimedAt = claimedAt
+	return record, status, paymentData, httpStatus, nil
+}
+
+func canAttemptIdempotencyRecovery(request app.PaymentCommandClaimRequest) bool {
+	return request.Operation() == app.AuthorizePaymentOperation && request.ClaimStuckAfter() > 0
+}
+
+func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
+	result, err := exec.ExecContext(
+		ctx,
+		`UPDATE idempotency_records
+		    SET claimed_at = $5
+		  WHERE operation = $1
+		    AND key = $2
+		    AND request_fingerprint = $3
+		    AND status = 'in_progress'
+		    AND claimed_at <= $4`,
+		request.Operation(),
+		request.Key(),
+		request.RequestFingerprint(),
+		now.Add(-request.ClaimStuckAfter()),
+		now,
+	)
+	if err != nil {
+		return idempotencyRecord{}, false, app.NewInternalPaymentError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return idempotencyRecord{}, false, app.NewInternalPaymentError(err)
+	}
+	if rowsAffected == 0 {
+		return idempotencyRecord{}, false, nil
+	}
+	record, _, _, _, err := selectIdempotencyRecord(ctx, exec, request.Operation(), request.Key())
+	if err != nil {
+		return idempotencyRecord{}, false, err
+	}
+	record.status = idempotencyRecordInProgress
+	return record, true, nil
+}
+
 type idempotencyRecord struct {
 	operation          string
 	key                string
 	requestFingerprint string
+	paymentID          domain.PaymentID
 	status             idempotencyRecordStatus
+	claimedAt          time.Time
 	result             app.PaymentCommandResult
 }
 
@@ -346,6 +437,7 @@ type idempotencyClaimOutcome int
 const (
 	idempotencyClaimAcquired idempotencyClaimOutcome = iota
 	idempotencyClaimExisting
+	idempotencyClaimRecovered
 )
 
 func replayOrError(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {

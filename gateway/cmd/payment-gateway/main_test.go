@@ -22,6 +22,7 @@ func validConfig() config {
 		DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
 		MockBankBaseURL:               validMockBankBaseURL,
 		FingerprintSecret:             validFingerprintSecret,
+		IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
 	}
 }
 
@@ -43,6 +44,7 @@ func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
 				DatabaseMaxOpenConnections:    defaultDatabaseMaxOpenConnections,
 				DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
 				DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
+				IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
 			},
 			wantErr: "MOCK_BANK_BASE_URL is required",
 		},
@@ -54,6 +56,7 @@ func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
 				DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
 				DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
 				MockBankBaseURL:               validMockBankBaseURL,
+				IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
 			},
 			wantErr: "FINGERPRINT_SECRET is required",
 		},
@@ -110,6 +113,13 @@ func TestConfigValidateRequiresDatabasePoolConfiguration(t *testing.T) {
 			},
 			wantErr: "DATABASE_CONNECTION_MAX_LIFETIME must be a positive duration",
 		},
+		{
+			name: "idempotency claim stuck-after",
+			mutate: func(cfg *config) {
+				cfg.IdempotencyClaimStuckAfter = 0
+			},
+			wantErr: "IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration",
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,12 +150,14 @@ func TestLoadConfigUsesPaymentGatewayRuntimeDefaults(t *testing.T) {
 	assert.Equal(t, defaultDatabaseConnectionMaxLifetime, cfg.DatabaseConnectionMaxLifetime)
 	assert.Equal(t, validMockBankBaseURL, cfg.MockBankBaseURL)
 	assert.Equal(t, validFingerprintSecret, cfg.FingerprintSecret)
+	assert.Equal(t, defaultIdempotencyClaimStuckAfter, cfg.IdempotencyClaimStuckAfter)
 }
 
-func TestLoadConfigAllowsCustomDatabasePoolConfiguration(t *testing.T) {
+func TestLoadConfigAllowsCustomDurationConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "20")
 	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "8")
 	t.Setenv("DATABASE_CONNECTION_MAX_LIFETIME", "45m")
+	t.Setenv("IDEMPOTENCY_CLAIM_STUCK_AFTER", "2m")
 
 	cfg, err := loadConfig()
 
@@ -153,6 +165,7 @@ func TestLoadConfigAllowsCustomDatabasePoolConfiguration(t *testing.T) {
 	assert.Equal(t, 20, cfg.DatabaseMaxOpenConnections)
 	assert.Equal(t, 8, cfg.DatabaseMaxIdleConnections)
 	assert.Equal(t, 45*time.Minute, cfg.DatabaseConnectionMaxLifetime)
+	assert.Equal(t, 2*time.Minute, cfg.IdempotencyClaimStuckAfter)
 }
 
 func TestLoadConfigRejectsMalformedDatabasePoolConfiguration(t *testing.T) {
@@ -179,6 +192,12 @@ func TestLoadConfigRejectsMalformedDatabasePoolConfiguration(t *testing.T) {
 			envName: "DATABASE_CONNECTION_MAX_LIFETIME",
 			value:   "forever",
 			wantErr: "DATABASE_CONNECTION_MAX_LIFETIME must be a valid duration",
+		},
+		{
+			name:    "idempotency claim stuck-after",
+			envName: "IDEMPOTENCY_CLAIM_STUCK_AFTER",
+			value:   "forever",
+			wantErr: "IDEMPOTENCY_CLAIM_STUCK_AFTER must be a valid duration",
 		},
 	}
 
