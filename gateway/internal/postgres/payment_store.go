@@ -52,12 +52,33 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 		payment, err := findPaymentByID(ctx, tx, record.paymentID, true)
 		if err != nil {
 			if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
-				return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
 			}
 			return app.PaymentCommandClaim{}, err
 		}
 		if payment.Status() != request.ExpectedStatus() {
 			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+		}
+		claimedPayment = payment
+	} else if request.PaymentID() != "" && outcome == idempotencyClaimRecovered {
+		payment, err := findPaymentByID(ctx, tx, record.paymentID, true)
+		if err != nil {
+			if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
+				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
+			}
+			return app.PaymentCommandClaim{}, err
+		}
+		if request.PaymentID() != record.paymentID {
+			return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+		}
+		if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+		}
+		if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
+			return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+		}
+		if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
+			return app.PaymentCommandClaim{}, err
 		}
 		claimedPayment = payment
 	} else if request.PaymentID() != "" {
@@ -100,6 +121,9 @@ func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.Paym
 
 	if err := tx.Commit(); err != nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+	}
+	if outcome == idempotencyClaimRecovered {
+		return app.NewRecoveredPaymentCommand(request, claimedPayment), nil
 	}
 	return app.NewClaimedPaymentCommand(request, claimedPayment), nil
 }
@@ -378,7 +402,12 @@ func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation st
 }
 
 func canAttemptIdempotencyRecovery(request app.PaymentCommandClaimRequest) bool {
-	return request.Operation() == app.AuthorizePaymentOperation && request.ClaimStuckAfter() > 0
+	switch request.Operation() {
+	case app.AuthorizePaymentOperation, app.RetryAuthorizationOperation, app.CapturePaymentOperation, app.VoidPaymentOperation, app.RefundPaymentOperation:
+		return request.ClaimStuckAfter() > 0
+	default:
+		return false
+	}
 }
 
 func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
@@ -498,6 +527,26 @@ func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *doma
 		return app.NewInternalPaymentError(err)
 	}
 	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
+}
+
+func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind) error {
+	var key string
+	switch operation {
+	case "":
+		return nil
+	case app.BankOperationKeyCapture:
+		key = payment.CaptureBankOperationKey()
+	case app.BankOperationKeyVoid:
+		key = payment.VoidBankOperationKey()
+	case app.BankOperationKeyRefund:
+		key = payment.RefundBankOperationKey()
+	default:
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(errors.New("unknown bank operation")))
+	}
+	if key == "" {
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(errors.New("missing recovered bank operation key")))
+	}
+	return nil
 }
 
 func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {

@@ -2,6 +2,9 @@ package app_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -322,6 +325,99 @@ func TestRetryAuthorizationRejectsNonPendingPaymentWithoutCallingBank(t *testing
 
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
 	assert.Zero(t, bank.calls)
+}
+
+func TestRetryAuthorizationRecoversStuckClaimUsingAuthorizationBankOperationKeyAndReplays(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentServiceWithBankOperationKeys(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_original"}})
+	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.Error(t, err)
+
+	crashingBank := &bankAuthorizerFake{}
+	crashingBank.onAuthorize = func() {
+		panic("process crashed after retry claim")
+	}
+	crashingService := newPaymentService(repo, crashingBank, now.Add(time.Minute))
+	require.PanicsWithValue(t, "process crashed after retry claim", func() {
+		_, _ = crashingService.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+	})
+	repo.AgeClaim(app.RetryAuthorizationOperation, "retry-key-1", now.Add(-6*time.Minute))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_new"}}, metrics)
+	result, err := recoveryService.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+	require.NoError(t, err)
+
+	assert.Equal(t, "authorized", result.Payment.Status)
+	assert.Equal(t, "bok_original", bank.request.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.RetryAuthorizationOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.RetryAuthorizationOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+
+	replayed, err := recoveryService.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
+	assert.Equal(t, 1, bank.calls)
+}
+
+func TestRetryAuthorizationRecoveredCardFingerprintMismatchIsIdempotencyConflict(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	service := newPaymentServiceWithBankOperationKeys(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_original"}})
+	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.Error(t, err)
+
+	crashingBank := &bankAuthorizerFake{}
+	crashingBank.onAuthorize = func() {
+		panic("process crashed after retry claim")
+	}
+	crashingService := newPaymentService(repo, crashingBank, now.Add(time.Minute))
+	require.Panics(t, func() {
+		_, _ = crashingService.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+	})
+	repo.AgeClaim(app.RetryAuthorizationOperation, "retry-key-1", now.Add(-6*time.Minute))
+
+	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
+	require.NoError(t, err)
+	corrupted, err := domain.LoadPayment(
+		saved.ID(),
+		saved.OrderID(),
+		saved.CustomerID(),
+		saved.AmountCents(),
+		saved.Currency(),
+		saved.Status(),
+		saved.BankAuthorizationID(),
+		saved.AuthorizationExpiresAt(),
+		saved.AuthorizationBankOperationKey(),
+		"different-card-fingerprint",
+		saved.BankCaptureID(),
+		saved.CaptureBankOperationKey(),
+		saved.BankRefundID(),
+		saved.RefundBankOperationKey(),
+		saved.BankVoidID(),
+		saved.VoidBankOperationKey(),
+		saved.DeclineReason(),
+		saved.CreatedAt(),
+		saved.UpdatedAt(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.ReplacePayment(corrupted))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	recoveryService := newPaymentServiceWithMetrics(repo, bank, now, metrics)
+	_, err = recoveryService.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assert.Zero(t, bank.calls)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.RetryAuthorizationOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.RetryAuthorizationOperation, result: app.IdempotencyRecoveryConflict},
+	}, metrics.recoveryRecords)
 }
 
 func TestAuthorizePaymentReplaysDeclinedPaymentForSameIdempotencyKeyAndRequest(t *testing.T) {
@@ -1057,6 +1153,73 @@ func TestVoidPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testing.
 	assert.Equal(t, "voided", result.Payment.Status)
 }
 
+func TestVoidPaymentRecoversStuckClaimUsingPersistedBankOperationKey(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	crashingBank := &bankFake{}
+	crashingBank.onVoid = func() {
+		panic("process crashed after void claim")
+	}
+	service := newPaymentServiceWithBankOperationKeys(repo, crashingBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_void_original"}})
+	command := mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1")
+	require.PanicsWithValue(t, "process crashed after void claim", func() {
+		_, _ = service.VoidPayment(context.Background(), command)
+	})
+	repo.AgeClaim(app.VoidPaymentOperation, "void-key-1", time.Date(2026, 6, 18, 12, 24, 0, 0, time.UTC))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440001"}}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_void_new", "bok_void_replay"}}, metrics)
+	result, err := recoveryService.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, "voided", result.Payment.Status)
+	assert.Equal(t, "bok_void_original", bank.voidRequest.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.VoidPaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.VoidPaymentOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+
+	replayed, err := recoveryService.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
+	assert.Equal(t, 1, bank.voidCalls)
+}
+
+func TestVoidPaymentRecoveredClaimCompletesExpiredReplayWhenBankReportsAuthorizationExpired(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	crashingBank := &bankFake{}
+	crashingBank.onVoid = func() {
+		panic("process crashed after void claim")
+	}
+	command := mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1")
+	service := newPaymentServiceWithBankOperationKeys(repo, crashingBank, payment.AuthorizationExpiresAt().Add(-time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_void_original"}})
+	require.Panics(t, func() {
+		_, _ = service.VoidPayment(context.Background(), command)
+	})
+	repo.AgeClaim(app.VoidPaymentOperation, "void-key-1", payment.AuthorizationExpiresAt().Add(-6*time.Minute))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{voidErr: app.NewPaymentAuthorizationExpiredError(nil)}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, payment.AuthorizationExpiresAt().Add(time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_void_new", "bok_void_replay"}}, metrics)
+	_, err := recoveryService.VoidPayment(context.Background(), command)
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+
+	replayed, err := recoveryService.VoidPayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, "expired", replayed.Payment.Status)
+	assert.Equal(t, http.StatusConflict, replayed.HTTPStatus)
+	assert.Equal(t, "bok_void_original", bank.voidRequest.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.VoidPaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.VoidPaymentOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+}
+
 func TestVoidPaymentReplaysVoidedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
@@ -1345,6 +1508,94 @@ func TestCapturePaymentReusesStoredBankOperationKeyAfterExpiration(t *testing.T)
 	assert.Equal(t, "captured", result.Payment.Status)
 }
 
+func TestCapturePaymentRecoversStuckClaimUsingPersistedBankOperationKey(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	crashingBank := &bankFake{}
+	crashingBank.onCapture = func() {
+		panic("process crashed after capture claim")
+	}
+	service := newPaymentServiceWithBankOperationKeys(repo, crashingBank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_original"}})
+	command := mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1")
+	require.PanicsWithValue(t, "process crashed after capture claim", func() {
+		_, _ = service.CapturePayment(context.Background(), command)
+	})
+	repo.AgeClaim(app.CapturePaymentOperation, "public-capture-key-1", time.Date(2026, 6, 18, 12, 24, 0, 0, time.UTC))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_new", "bok_capture_replay"}}, metrics)
+	result, err := recoveryService.CapturePayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, "captured", result.Payment.Status)
+	assert.Equal(t, "bok_capture_original", bank.captureRequest.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+
+	replayed, err := recoveryService.CapturePayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
+	assert.Equal(t, 1, bank.captureCalls)
+}
+
+func TestCapturePaymentRecoveredClaimCompletesExpiredReplayWhenBankReportsAuthorizationExpired(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	crashingBank := &bankFake{}
+	crashingBank.onCapture = func() {
+		panic("process crashed after capture claim")
+	}
+	command := mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1")
+	service := newPaymentServiceWithBankOperationKeys(repo, crashingBank, payment.AuthorizationExpiresAt().Add(-time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_original"}})
+	require.Panics(t, func() {
+		_, _ = service.CapturePayment(context.Background(), command)
+	})
+	repo.AgeClaim(app.CapturePaymentOperation, "public-capture-key-1", payment.AuthorizationExpiresAt().Add(-6*time.Minute))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{captureErr: app.NewPaymentAuthorizationExpiredError(nil)}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, payment.AuthorizationExpiresAt().Add(time.Minute), &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_new", "bok_capture_replay"}}, metrics)
+	_, err := recoveryService.CapturePayment(context.Background(), command)
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+
+	replayed, err := recoveryService.CapturePayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, "expired", replayed.Payment.Status)
+	assert.Equal(t, http.StatusConflict, replayed.HTTPStatus)
+	assert.Equal(t, "bok_capture_original", bank.captureRequest.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+}
+
+func TestCapturePaymentRecoveredClaimMissingBankOperationKeyRecordsUnrecoverable(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	now := time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC)
+	repo.SeedAuthorizationClaim(app.CapturePaymentOperation, "public-capture-key-1", capturePaymentRequestFingerprintForTest(t, string(payment.ID())), payment.ID(), now.Add(-6*time.Minute))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
+	service := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_new"}}, metrics)
+	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+	assert.Zero(t, bank.captureCalls)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryUnrecoverable},
+	}, metrics.recoveryRecords)
+}
+
 func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -1536,6 +1787,40 @@ func TestRefundPaymentReusesStoredBankOperationKeyAfterProviderFailure(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, "bok_first", secondBank.refundRequest.OperationKey)
 	assert.Equal(t, "refunded", result.Payment.Status)
+}
+
+func TestRefundPaymentRecoversStuckClaimUsingPersistedBankOperationKey(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	crashingBank := &bankFake{}
+	crashingBank.onRefund = func() {
+		panic("process crashed after refund claim")
+	}
+	service := newPaymentServiceWithBankOperationKeys(repo, crashingBank, time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_refund_original"}})
+	command := mustRefundPaymentCommand(t, string(payment.ID()), "public-refund-key-1")
+	require.PanicsWithValue(t, "process crashed after refund claim", func() {
+		_, _ = service.RefundPayment(context.Background(), command)
+	})
+	repo.AgeClaim(app.RefundPaymentOperation, "public-refund-key-1", time.Date(2026, 6, 18, 12, 54, 0, 0, time.UTC))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+	recoveryService := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, time.Date(2026, 6, 18, 13, 1, 0, 0, time.UTC), &sequenceBankOperationKeyGenerator{keys: []string{"bok_refund_new", "bok_refund_replay"}}, metrics)
+	result, err := recoveryService.RefundPayment(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, "refunded", result.Payment.Status)
+	assert.Equal(t, "bok_refund_original", bank.refundRequest.OperationKey)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.RefundPaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.RefundPaymentOperation, result: app.IdempotencyRecoveryRecovered},
+	}, metrics.recoveryRecords)
+
+	replayed, err := recoveryService.RefundPayment(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
+	assert.Equal(t, 1, bank.refundCalls)
 }
 
 func TestRefundPaymentReplaysRefundedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {
@@ -1778,6 +2063,16 @@ func mustCapturePaymentCommand(t *testing.T, paymentID string, idempotencyKey st
 	return command
 }
 
+func capturePaymentRequestFingerprintForTest(t *testing.T, paymentID string) string {
+	t.Helper()
+	_, err := app.NewCapturePaymentCommand(paymentID, "public-capture-key-1")
+	require.NoError(t, err)
+
+	hash := hmac.New(sha256.New, []byte("fingerprint-secret"))
+	_, _ = fmt.Fprintf(hash, "%s\n%s", app.CapturePaymentOperation, paymentID)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 func mustVoidPaymentCommand(t *testing.T, paymentID string, idempotencyKey string) app.VoidPaymentCommand {
 	t.Helper()
 	command, err := app.NewVoidPaymentCommand(paymentID, idempotencyKey)
@@ -1837,8 +2132,14 @@ type paymentOperationMetricRecord struct {
 	duration  time.Duration
 }
 
+type idempotencyRecoveryMetricRecord struct {
+	operation string
+	result    string
+}
+
 type paymentOperationMetricsFake struct {
-	records []paymentOperationMetricRecord
+	records         []paymentOperationMetricRecord
+	recoveryRecords []idempotencyRecoveryMetricRecord
 }
 
 func (m *paymentOperationMetricsFake) RecordPaymentOperation(operation string, outcome string, duration time.Duration) {
@@ -1846,6 +2147,13 @@ func (m *paymentOperationMetricsFake) RecordPaymentOperation(operation string, o
 		operation: operation,
 		outcome:   outcome,
 		duration:  duration,
+	})
+}
+
+func (m *paymentOperationMetricsFake) RecordIdempotencyRecovery(operation string, result string) {
+	m.recoveryRecords = append(m.recoveryRecords, idempotencyRecoveryMetricRecord{
+		operation: operation,
+		result:    result,
 	})
 }
 
@@ -1907,14 +2215,17 @@ type bankFake struct {
 	captureResult    app.BankCaptureResult
 	captureErr       error
 	captureCalls     int
+	onCapture        func()
 	voidRequest      app.BankVoidRequest
 	voidResult       app.BankVoidResult
 	voidErr          error
 	voidCalls        int
+	onVoid           func()
 	refundRequest    app.BankRefundRequest
 	refundResult     app.BankRefundResult
 	refundErr        error
 	refundCalls      int
+	onRefund         func()
 }
 
 type alwaysInProgressPaymentStore struct {
@@ -1950,18 +2261,27 @@ func defaultAuthorizationExpiresAt() time.Time {
 func (f *bankFake) CapturePayment(_ context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
 	f.captureRequest = request
 	f.captureCalls++
+	if f.onCapture != nil {
+		f.onCapture()
+	}
 	return f.captureResult, f.captureErr
 }
 
 func (f *bankFake) VoidPayment(_ context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
 	f.voidRequest = request
 	f.voidCalls++
+	if f.onVoid != nil {
+		f.onVoid()
+	}
 	return f.voidResult, f.voidErr
 }
 
 func (f *bankFake) RefundPayment(_ context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
 	f.refundRequest = request
 	f.refundCalls++
+	if f.onRefund != nil {
+		f.onRefund()
+	}
 	return f.refundResult, f.refundErr
 }
 
