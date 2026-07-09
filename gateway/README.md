@@ -46,6 +46,7 @@ DATABASE_URL                      required Postgres connection string
 DATABASE_MAX_OPEN_CONNECTIONS     optional Postgres pool max open connections, defaults to 10
 DATABASE_MAX_IDLE_CONNECTIONS     optional Postgres pool max idle connections, defaults to 5
 DATABASE_CONNECTION_MAX_LIFETIME  optional Postgres pool connection max lifetime, defaults to 30m
+IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
 MOCK_BANK_BASE_URL                required Mock Bank base URL
 FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
 ADDR                              optional HTTP listen address, defaults to :8080
@@ -58,6 +59,7 @@ export DATABASE_URL='postgres://payment_gateway:payment_gateway@localhost:5432/p
 export DATABASE_MAX_OPEN_CONNECTIONS='10'
 export DATABASE_MAX_IDLE_CONNECTIONS='5'
 export DATABASE_CONNECTION_MAX_LIFETIME='30m'
+export IDEMPOTENCY_CLAIM_STUCK_AFTER='5m'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
 export FINGERPRINT_SECRET='local-development-secret'
 export ADDR=':8080'
@@ -97,6 +99,7 @@ DATABASE_URL=postgres://payment_gateway:payment_gateway@postgres:5432/payment_ga
 DATABASE_MAX_OPEN_CONNECTIONS=10
 DATABASE_MAX_IDLE_CONNECTIONS=5
 DATABASE_CONNECTION_MAX_LIFETIME=30m
+IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
 MOCK_BANK_BASE_URL=http://mock-bank:9090
 FINGERPRINT_SECRET=local-development-secret
 ```

@@ -120,6 +120,10 @@ _Avoid_: Request ID, correlation ID
 The gateway response to a repeated payment command that uses the same **Idempotency Key** and the same request values as an already completed command.
 _Avoid_: Duplicate operation, cached request
 
+**Stuck Idempotency Claim**:
+A public idempotency record still marked in progress long enough that the gateway treats the original command attempt as no longer active and may let the same operation, same **Idempotency Key**, and same request values continue recovery.
+_Avoid_: Expired claim, stale payment, timeout
+
 **Bank Operation Key**:
 A gateway-generated operation identity sent to the **Mock Bank** so retried bank calls produce one bank result.
 _Avoid_: Idempotency Key, request ID

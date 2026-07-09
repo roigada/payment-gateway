@@ -34,6 +34,30 @@ func (r *PaymentStore) SeedPayment(_ context.Context, payment *domain.Payment) e
 	return nil
 }
 
+func (r *PaymentStore) SeedAuthorizationClaim(operation string, key string, requestFingerprint string, paymentID domain.PaymentID, claimedAt time.Time) {
+	r.records[idempotencyMapKey(operation, key)] = idempotencyEntry{
+		status: idempotencyRecordInProgress,
+		record: idempotencyRecord{
+			operation:          operation,
+			key:                key,
+			requestFingerprint: requestFingerprint,
+			paymentID:          paymentID,
+			status:             idempotencyRecordInProgress,
+			claimedAt:          claimedAt,
+		},
+	}
+}
+
+func (r *PaymentStore) AgeClaim(operation string, key string, claimedAt time.Time) {
+	mapKey := idempotencyMapKey(operation, key)
+	entry, ok := r.records[mapKey]
+	if !ok {
+		return
+	}
+	entry.record.claimedAt = claimedAt
+	r.records[mapKey] = entry
+}
+
 func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
 	payment, ok := r.payments[id]
 	if !ok {
@@ -106,8 +130,21 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 }
 
 func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
-	record, outcome := r.claim(request.Operation(), request.Key(), request.RequestFingerprint())
+	record, outcome := r.claim(request)
 	if outcome != idempotencyClaimAcquired {
+		if outcome == idempotencyClaimRecovered {
+			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
+			if err != nil {
+				if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
+					return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+				}
+				return app.PaymentCommandClaim{}, err
+			}
+			if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
+				return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+			}
+			return app.NewClaimedPaymentCommand(request, payment), nil
+		}
 		return replayOrError(request, record)
 	}
 
@@ -253,14 +290,24 @@ func (c FixedClock) Now() time.Time {
 	return c.Time
 }
 
-func (r *PaymentStore) claim(operation string, key string, requestFingerprint string) (idempotencyRecord, idempotencyClaimOutcome) {
-	mapKey := idempotencyMapKey(operation, key)
+func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest) (idempotencyRecord, idempotencyClaimOutcome) {
+	mapKey := idempotencyMapKey(request.Operation(), request.Key())
+	now := request.Now()
+	if now.IsZero() {
+		now = time.Now()
+	}
 	entry, ok := r.records[mapKey]
 	if !ok {
+		paymentID := request.PaymentID()
+		if request.Payment() != nil {
+			paymentID = request.Payment().ID()
+		}
 		record := idempotencyRecord{
-			operation:          operation,
-			key:                key,
-			requestFingerprint: requestFingerprint,
+			operation:          request.Operation(),
+			key:                request.Key(),
+			requestFingerprint: request.RequestFingerprint(),
+			paymentID:          paymentID,
+			claimedAt:          now,
 		}
 		r.records[mapKey] = idempotencyEntry{
 			status: idempotencyRecordInProgress,
@@ -270,7 +317,22 @@ func (r *PaymentStore) claim(operation string, key string, requestFingerprint st
 	}
 	record := cloneIdempotencyRecord(entry.record)
 	record.status = entry.status
+	if canRecoverIdempotencyClaim(request, record, entry.status, now) {
+		record.claimedAt = now
+		record.status = idempotencyRecordInProgress
+		r.records[mapKey] = idempotencyEntry{status: idempotencyRecordInProgress, record: cloneIdempotencyRecord(record)}
+		return record, idempotencyClaimRecovered
+	}
 	return record, idempotencyClaimExisting
+}
+
+func canRecoverIdempotencyClaim(request app.PaymentCommandClaimRequest, record idempotencyRecord, status idempotencyRecordStatus, now time.Time) bool {
+	return request.Operation() == app.AuthorizePaymentOperation &&
+		status == idempotencyRecordInProgress &&
+		record.requestFingerprint == request.RequestFingerprint() &&
+		request.ClaimStuckAfter() > 0 &&
+		!record.claimedAt.IsZero() &&
+		!record.claimedAt.After(now.Add(-request.ClaimStuckAfter()))
 }
 
 func (r *PaymentStore) complete(claim app.PaymentCommandClaim, result app.PaymentCommandResult) error {
@@ -317,7 +379,9 @@ type idempotencyRecord struct {
 	operation          string
 	key                string
 	requestFingerprint string
+	paymentID          domain.PaymentID
 	status             idempotencyRecordStatus
+	claimedAt          time.Time
 	result             app.PaymentCommandResult
 }
 
@@ -333,6 +397,7 @@ type idempotencyClaimOutcome int
 const (
 	idempotencyClaimAcquired idempotencyClaimOutcome = iota
 	idempotencyClaimExisting
+	idempotencyClaimRecovered
 )
 
 func idempotencyMapKey(operation string, key string) string {
@@ -344,7 +409,9 @@ func cloneIdempotencyRecord(record idempotencyRecord) idempotencyRecord {
 		operation:          record.operation,
 		key:                record.key,
 		requestFingerprint: record.requestFingerprint,
+		paymentID:          record.paymentID,
 		status:             record.status,
+		claimedAt:          record.claimedAt,
 		result:             record.result,
 	}
 }

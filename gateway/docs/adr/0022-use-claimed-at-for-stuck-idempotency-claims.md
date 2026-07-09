@@ -1,0 +1,3 @@
+# Use claimed_at for stuck idempotency claims
+
+Stuck Idempotency Claims are recovered by comparing a gateway-wide `stuck_after` duration against an idempotency record's `claimed_at` timestamp, not its original `created_at` timestamp. `created_at` records when the public idempotency record first existed; `claimed_at` records when the current in-progress ownership window began, so a recovering retrier can atomically refresh ownership before calling the Mock Bank and make concurrent retriers observe a fresh in-progress claim. Only same-fingerprint recovery attempts refresh `claimed_at`; fingerprint conflicts do not take ownership of the original in-progress claim.

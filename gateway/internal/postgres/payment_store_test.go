@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -492,7 +493,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 			UpdatedAt:     now,
 		},
 	}
-	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment)
+	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, app.DefaultIdempotencyClaimStuckAfter)
 
 	claimed, err := store.ClaimPaymentCommand(ctx, request)
 	require.NoError(t, err)
@@ -525,7 +526,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 		now,
 	)
 	require.NoError(t, err)
-	missing, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("missing-key", "fingerprint-1", missingPayment))
+	missing, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("missing-key", "fingerprint-1", missingPayment, now, app.DefaultIdempotencyClaimStuckAfter))
 	require.NoError(t, err)
 	assert.Same(t, missingPayment, missing.Payment())
 }
@@ -554,6 +555,151 @@ func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
 	reclaimed, err := store.ClaimPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	assert.NotNil(t, reclaimed.Payment())
+}
+
+func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	original := newStorePayment(t, 81, "order-1", "customer-1", domain.PaymentStatusPending, now.Add(-10*time.Minute))
+	insertPaymentFixture(t, db, original)
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), now.Add(-6*time.Minute))
+	assertRecoverableClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", now.Add(-5*time.Minute))
+	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
+	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute)
+
+	claim, err := store.ClaimPaymentCommand(ctx, request)
+	require.NoError(t, err)
+	require.NotNil(t, claim.Payment())
+	assert.Equal(t, original.ID(), claim.Payment().ID())
+	assert.Equal(t, original.AuthorizationBankOperationKey(), claim.Payment().AuthorizationBankOperationKey())
+	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now)
+
+	require.NoError(t, claim.Payment().MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now))
+	result := newStorePaymentCommandResult(claim.Payment(), 201)
+	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result))
+
+	replayed, err := store.ClaimPaymentCommand(ctx, request)
+	require.NoError(t, err)
+	replayResult, ok := replayed.ReplayResult()
+	require.True(t, ok)
+	assert.Equal(t, result, replayResult)
+}
+
+func TestPaymentStoreDoesNotRecoverNonStuckAuthorizationClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	original := newStorePayment(t, 81, "order-1", "customer-1", domain.PaymentStatusPending, now)
+	insertPaymentFixture(t, db, original)
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), now.Add(-4*time.Minute))
+	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
+
+	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress))
+	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now.Add(-4*time.Minute))
+}
+
+func TestPaymentStoreRejectsAuthorizationFingerprintMismatchWithoutRefreshingClaimedAt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	original := newStorePayment(t, 81, "order-1", "customer-1", domain.PaymentStatusPending, now)
+	insertPaymentFixture(t, db, original)
+	stuckClaimedAt := now.Add(-6 * time.Minute)
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), stuckClaimedAt)
+	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
+
+	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-2", candidate, now, 5*time.Minute))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
+	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", stuckClaimedAt)
+}
+
+func TestPaymentStoreReturnsInternalErrorWhenRecoveredAuthorizationPaymentIsMissing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	missingPaymentID := domain.PaymentID("pay_00000000-0000-4000-8000-000000000081")
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", missingPaymentID, now.Add(-6*time.Minute))
+	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
+
+	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+}
+
+func TestPaymentStoreConcurrentStuckAuthorizationRecoveryAllowsOneRetriever(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	original := newStorePayment(t, 81, "order-1", "customer-1", domain.PaymentStatusPending, now.Add(-10*time.Minute))
+	insertPaymentFixture(t, db, original)
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), now.Add(-6*time.Minute))
+
+	candidates := []*domain.Payment{
+		newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now),
+		newStorePayment(t, 83, "order-1", "customer-1", domain.PaymentStatusPending, now),
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(sequence int) {
+			defer wg.Done()
+			<-start
+			_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidates[sequence], now, 5*time.Minute))
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var successes int
+	var inProgress int
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress) {
+			inProgress++
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, inProgress)
+	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now)
 }
 
 func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T) {
@@ -637,7 +783,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 		now,
 	)
 	require.NoError(t, err)
-	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment)
+	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, app.DefaultIdempotencyClaimStuckAfter)
 	claim, err := store.ClaimPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	require.Same(t, payment, claim.Payment())
@@ -805,7 +951,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 	insertPaymentFixture(t, db, payment)
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now))
 
-	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment)
+	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, app.DefaultIdempotencyClaimStuckAfter)
 	claim := app.NewClaimedPaymentCommand(request, payment)
 	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201))
 
@@ -947,6 +1093,66 @@ func saveBankOperationKeyFixture(t *testing.T, db *sql.DB, payment *domain.Payme
 	require.Equal(t, int64(1), rowsAffected)
 }
 
+func insertIdempotencyClaimFixture(t *testing.T, db *sql.DB, operation string, key string, fingerprint string, paymentID domain.PaymentID, claimedAt time.Time) {
+	t.Helper()
+
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO idempotency_records (
+		     operation,
+		     key,
+		     request_fingerprint,
+		     payment_id,
+		     status,
+		     created_at,
+		     claimed_at
+		 )
+		 VALUES ($1, $2, $3, $4, 'in_progress', $5, $5)`,
+		operation,
+		key,
+		fingerprint,
+		paymentID,
+		claimedAt,
+	)
+	require.NoError(t, err)
+}
+
+func assertClaimedAt(t *testing.T, db *sql.DB, operation string, key string, want time.Time) {
+	t.Helper()
+
+	var got time.Time
+	err := db.QueryRowContext(
+		context.Background(),
+		`SELECT claimed_at FROM idempotency_records WHERE operation = $1 AND key = $2`,
+		operation,
+		key,
+	).Scan(&got)
+	require.NoError(t, err)
+	assert.True(t, got.Equal(want), "claimed_at = %s, want %s", got, want)
+}
+
+func assertRecoverableClaimFixture(t *testing.T, db *sql.DB, operation string, key string, fingerprint string, cutoff time.Time) {
+	t.Helper()
+
+	var matches int
+	err := db.QueryRowContext(
+		context.Background(),
+		`SELECT count(*)
+		   FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2
+		    AND request_fingerprint = $3
+		    AND status = 'in_progress'
+		    AND claimed_at <= $4`,
+		operation,
+		key,
+		fingerprint,
+		cutoff,
+	).Scan(&matches)
+	require.NoError(t, err)
+	require.Equal(t, 1, matches)
+}
+
 func nullableString(value string) any {
 	if value == "" {
 		return nil
@@ -973,6 +1179,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 		tcpostgres.WithPassword("payment_gateway"),
 		tcpostgres.WithInitScripts(
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
+			filepath.Join("..", "..", "migrations", "000002_add_idempotency_claim_recovery_fields.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

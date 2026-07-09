@@ -39,10 +39,12 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     operation text NOT NULL CHECK (length(trim(operation)) > 0),
     key text NOT NULL CHECK (length(trim(key)) > 0),
     request_fingerprint text NOT NULL CHECK (length(trim(request_fingerprint)) > 0),
+    payment_id text CHECK (payment_id IS NULL OR payment_id ~ '^pay_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
     status text NOT NULL CHECK (status IN ('in_progress', 'completed')),
     http_status integer CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
     payment_result jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
+    claimed_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (operation, key),
     CONSTRAINT idempotency_records_completion_check CHECK (
         (status = 'in_progress' AND http_status IS NULL AND payment_result IS NULL)
