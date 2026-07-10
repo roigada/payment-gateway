@@ -16,4 +16,4 @@ Postgres observability is gateway-owned, client-side connection pool metrics fro
 
 The gateway also sets an explicit database connection pool budget so pool saturation metrics have a meaningful ceiling. Local defaults are intentionally conservative and environment-configurable.
 
-Postgres server diagnostics, synthetic load generation, alert rules, and Alertmanager remain out of scope. The dashboard should keep payment operation outcomes separate from HTTP status codes and Mock Bank dependency results.
+Postgres server diagnostics, synthetic load generation, and Alertmanager remain out of scope. The dashboard should keep payment operation outcomes separate from HTTP status codes and Mock Bank dependency results. Prometheus alert rules may use gateway-owned metrics as the source of truth, while Grafana remains an inspection surface through the Prometheus datasource.

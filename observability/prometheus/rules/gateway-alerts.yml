@@ -1,0 +1,48 @@
+groups:
+  - name: payment-gateway-slo-symptoms
+    rules:
+      - alert: GatewayElevated5xxResponses
+        expr: sum(rate(payment_gateway_http_server_requests_total{code=~"5.."}[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: payment-gateway
+        annotations:
+          summary: Gateway 5xx responses are elevated
+          description: The gateway is serving more than 0.05 5xx responses per second over 5 minutes.
+          runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#gateway-elevated-5xx-responses
+
+      - alert: GatewayMockBankDependencyFailures
+        expr: sum(rate(payment_gateway_mock_bank_requests_total{result=~"timeout|unavailable|internal"}[5m])) > 0.02
+        for: 2m
+        labels:
+          severity: warning
+          service: payment-gateway
+          dependency: mock-bank
+        annotations:
+          summary: Mock Bank dependency failures are elevated
+          description: Gateway outbound Mock Bank requests are failing with timeout, unavailable, or internal results above 0.02 requests per second over 5 minutes.
+          runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#mock-bank-dependency-failures
+
+      - alert: GatewayPaymentOperationTechnicalFailures
+        expr: sum(rate(payment_gateway_payment_operations_total{outcome=~"bank_timeout|bank_unavailable|internal"}[5m])) > 0.02
+        for: 2m
+        labels:
+          severity: warning
+          service: payment-gateway
+        annotations:
+          summary: Payment operation technical failures are elevated
+          description: Gateway payment commands are ending with bank_timeout, bank_unavailable, or internal outcomes above 0.02 operations per second over 5 minutes.
+          runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#payment-operation-technical-failures
+
+      - alert: GatewayPostgresPoolWaitGrowth
+        expr: rate(payment_gateway_postgres_pool_wait_count_total[5m]) > 0 and rate(payment_gateway_postgres_pool_wait_duration_seconds_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: payment-gateway
+          dependency: postgres
+        annotations:
+          summary: Postgres connection pool waits are growing
+          description: Gateway database calls have sustained connection pool wait count and wait duration growth for 5 minutes.
+          runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#postgres-pool-wait-growth
