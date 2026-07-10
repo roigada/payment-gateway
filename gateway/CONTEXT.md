@@ -16,6 +16,10 @@ _Avoid_: Transaction ID, order ID, bank ID
 A **Payment** whose authorization outcome is not yet known because the **Mock Bank** has not produced a definitive approval or decline.
 _Avoid_: Failed, processing
 
+**Aging Pending Payment**:
+A **Pending** **Payment** that has remained unresolved long enough to require operational inspection.
+_Avoid_: Stuck payment, failed payment, abandoned payment
+
 **Authorized**:
 A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and can still be captured or voided.
 _Avoid_: Approved, held
