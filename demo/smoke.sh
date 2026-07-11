@@ -2,7 +2,8 @@
 set -eu
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
-READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-60}"
+MOCK_BANK_BASE_URL="${MOCK_BANK_BASE_URL:-}"
+READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-180}"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -77,6 +78,16 @@ while :; do
 
   sleep 1
 done
+
+if [ -n "$MOCK_BANK_BASE_URL" ]; then
+  log "checking Mock Bank health at $MOCK_BANK_BASE_URL/health"
+  mock_bank_body="$tmpdir/mock-bank-health.json"
+  if ! status="$(curl -sS -o "$mock_bank_body" -w '%{http_code}' "$MOCK_BANK_BASE_URL/health")" || [ "${status#2}" = "$status" ]; then
+    log "last Mock Bank health response:"
+    cat "$mock_bank_body" 2>/dev/null || true
+    fail "Mock Bank health returned HTTP ${status:-unreachable}"
+  fi
+fi
 
 authorize_body="$tmpdir/authorize.json"
 cat > "$authorize_body" <<'JSON'

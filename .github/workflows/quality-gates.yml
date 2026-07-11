@@ -1,0 +1,75 @@
+name: Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway-tests:
+    name: Gateway tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      - name: Run gateway test suite
+        run: go test ./...
+
+  demo-smoke:
+    name: Demo smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Start root demo stack
+        run: docker compose up -d --build postgres migrate mock-bank-postgres mock-bank payment-gateway
+
+      - name: Verify gateway migrations completed
+        run: test "$(docker inspect --format='{{.State.ExitCode}}' "$(docker compose ps -a -q migrate)")" = "0"
+
+      - name: Verify Postgres is healthy
+        run: docker compose exec -T postgres pg_isready -U payment_gateway -d payment_gateway
+
+      - name: Verify Mock Bank is reachable
+        run: curl --fail --show-error --silent http://127.0.0.1:8787/health
+
+      - name: Verify gateway readiness
+        run: |
+          deadline=$(( $(date +%s) + 180 ))
+          until curl --fail --show-error --silent --output /dev/null http://localhost:8080/readyz; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "gateway did not become ready within 180s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run public payment smoke path
+        run: make demo-smoke
+        env:
+          BASE_URL: http://localhost:8080
+          MOCK_BANK_BASE_URL: http://127.0.0.1:8787
+          READY_TIMEOUT_SECONDS: "180"
+
+      - name: Show compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color postgres migrate mock-bank-postgres mock-bank payment-gateway
+
+      - name: Stop root demo stack
+        if: always()
+        run: docker compose down --volumes

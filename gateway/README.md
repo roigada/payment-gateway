@@ -179,6 +179,8 @@ Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric
 
 Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
 
+The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). The runnable request collection in [`../demo/payment-gateway.http`](../demo/payment-gateway.http) remains the companion artifact for manual exploration against a running demo stack.
+
 ### Authorize a Payment
 
 ```sh
