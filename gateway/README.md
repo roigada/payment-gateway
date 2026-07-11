@@ -140,6 +140,14 @@ payment_gateway_payment_operations_total{operation,outcome}
 payment_gateway_payment_operation_duration_seconds{operation,outcome}
 ```
 
+and Stuck Idempotency Claim recovery outcomes:
+
+```text
+payment_gateway_idempotency_recovery_total{operation,result}
+```
+
+`operation` is one of `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, or `refund_payment`; `result` is one of `attempted`, `recovered`, `unrecoverable`, or `conflict`. The metric never labels public Idempotency Keys, Payment IDs, card data, bank IDs, or raw errors.
+
 and Mock Bank dependency RED:
 
 ```text

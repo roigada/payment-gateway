@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/roigada/payment-gateway/internal/app"
 )
 
 type PaymentOperationMetrics struct {
@@ -53,5 +54,26 @@ func (m *PaymentOperationMetrics) RecordPaymentOperation(operation string, outco
 }
 
 func (m *PaymentOperationMetrics) RecordIdempotencyRecovery(operation string, result string) {
+	if !isPaymentOperation(operation) || !isIdempotencyRecoveryResult(result) {
+		return
+	}
 	m.recoveryTotal.WithLabelValues(operation, result).Inc()
+}
+
+func isPaymentOperation(operation string) bool {
+	switch operation {
+	case app.AuthorizePaymentOperation, app.RetryAuthorizationOperation, app.CapturePaymentOperation, app.VoidPaymentOperation, app.RefundPaymentOperation:
+		return true
+	default:
+		return false
+	}
+}
+
+func isIdempotencyRecoveryResult(result string) bool {
+	switch result {
+	case app.IdempotencyRecoveryAttempted, app.IdempotencyRecoveryRecovered, app.IdempotencyRecoveryUnrecoverable, app.IdempotencyRecoveryConflict:
+		return true
+	default:
+		return false
+	}
 }
