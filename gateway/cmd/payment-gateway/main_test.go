@@ -330,6 +330,38 @@ func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown forced connections closed")
 }
 
+func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
+	listener := newTestListener(t)
+	started := make(chan struct{})
+	requestEnded := make(chan struct{})
+	readiness := newShutdownReadiness(readinessCheckerFunc(func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(requestEnded)
+		return ctx.Err()
+	}))
+	logs := &bytes.Buffer{}
+	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	shutdownSignals := make(chan os.Signal, 2)
+	result := make(chan error, 1)
+	go func() {
+		result <- runHTTPServer(listener, handler, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+	}()
+
+	go func() {
+		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
+		if response != nil {
+			response.Body.Close()
+		}
+	}()
+	requireReceive(t, started)
+	shutdownSignals <- syscall.SIGTERM
+	shutdownSignals <- syscall.SIGINT
+	requireReceive(t, requestEnded)
+	require.NoError(t, <-result)
+	assert.Contains(t, logs.String(), "payment-gateway shutdown force requested")
+}
+
 type readinessCheckerFunc func(context.Context) error
 
 func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }

@@ -235,7 +235,7 @@ func run(logger *slog.Logger) error {
 	}
 	defer listener.Close()
 
-	shutdownSignals := make(chan os.Signal, 1)
+	shutdownSignals := make(chan os.Signal, 2)
 	signal.Notify(shutdownSignals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(shutdownSignals)
 
@@ -293,14 +293,26 @@ func runHTTPServer(listener net.Listener, handler http.Handler, readiness *shutd
 	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	err := server.Shutdown(ctx)
-	cancel()
-	if err == nil {
-		logger.Info("payment-gateway shutdown completed")
-		return <-serveResult
+	shutdownResult := make(chan error, 1)
+	go func() {
+		shutdownResult <- server.Shutdown(ctx)
+	}()
+
+	select {
+	case err := <-shutdownResult:
+		cancel()
+		if err == nil {
+			logger.Info("payment-gateway shutdown completed")
+			return <-serveResult
+		}
+
+		logger.Warn("payment-gateway shutdown drain timed out", "error", err)
+	case receivedSignal := <-shutdownSignals:
+		logger.Warn("payment-gateway shutdown force requested", "signal", receivedSignal.String())
+		cancel()
+		<-shutdownResult
 	}
 
-	logger.Warn("payment-gateway shutdown drain timed out", "error", err)
 	if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
 		return closeErr
 	}
