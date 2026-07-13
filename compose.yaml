@@ -75,6 +75,7 @@ services:
 
   payment-gateway:
     image: golang:1.26.1-alpine
+    stop_grace_period: 35s
     depends_on:
       migrate:
         condition: service_completed_successfully
