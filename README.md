@@ -30,6 +30,15 @@ From a clean checkout with Docker available, follow this path in order. It takes
 
 6. Go deeper through the [gateway README](gateway/README.md), [architecture decisions](gateway/docs/adr/), [domain language](gateway/CONTEXT.md), and [alert runbook](gateway/docs/runbooks/gateway-alerts.md).
 
+## Evidence behind the walkthrough
+
+The demo above is the short route. This map links each production-shaped backend claim to the implementation, validation, or operational evidence behind it, without requiring a reviewer to reconstruct the story from issue history.
+
+- **Crash-safe retries:** a same-key retry can recover a [Stuck Idempotency Claim](gateway/docs/adr/0022-use-claimed-at-for-stuck-idempotency-claims.md) with its original Bank Operation Key; the [application recovery tests](gateway/internal/app/payment_service_test.go) and [Postgres claim tests](gateway/internal/postgres/payment_store_test.go) cover the persistence and recovery seams. The bounded [`payment_gateway_idempotency_recovery_total`](gateway/README.md#operational-endpoints) metric makes recovery outcomes inspectable in the running gateway.
+- **Visible quality and contract gates:** [GitHub Actions quality gates](.github/workflows/quality-gates.yml) run the gateway test suite, [validate the OpenAPI contract](gateway/docs/api/openapi.yaml), exercise the root [Compose smoke path](demo/smoke.sh), and build and smoke-test the production image. The same checks are available locally through `make test`, `make validate-openapi`, `make demo-smoke`, and `make image-smoke`.
+- **Deployable artifact:** the [gateway Dockerfile](gateway/Dockerfile) packages only the authored Go service and migrations; the [release workflow](.github/workflows/release-image.yml) publishes versioned `ghcr.io/roigada/payment-gateway` images on releases and version tags.
+- **Operations and Pending visibility:** [Prometheus alert rules](observability/prometheus/rules/gateway-alerts.yml) link to the [gateway alert runbook](gateway/docs/runbooks/gateway-alerts.md), including the Aging Pending Payment signal and its client-driven Authorization Retry procedure. The alerting boundary stays gateway-owned: it uses outbound Mock Bank metrics and does not scrape Mock Bank internals.
+
 ## What the gateway demonstrates
 
 - **Safe client retries:** callers supply an **Idempotency Key** for every mutating command. Repeating the same key and request replays the original result; reusing it with different values returns `409 Conflict` rather than creating another payment operation.
@@ -86,6 +95,10 @@ make image-smoke
 ```
 
 This uses a dedicated Compose project, fresh database volumes, and ports `18080` (gateway) and `18787` (Mock Bank), so it does not reuse the root demo's state. Release tags publish versioned images to `ghcr.io/roigada/payment-gateway`.
+
+## Roadmap boundaries
+
+This is a backend portfolio roadmap, not a hosted product. The following are intentionally out of scope: hosted deployment; a browser frontend or storefront; CORS for direct browser callers; real payment providers; background Pending Payment retry; distributed tracing; and log aggregation. Pending resolution remains client-driven through Authorization Retry so the gateway does not need to retain raw card details or CVV. Notification routing is also outside this roadmap.
 
 ## Repository map
 
