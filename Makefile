@@ -1,4 +1,4 @@
-.PHONY: demo demo-down demo-reset demo-smoke observability-check test validate-openapi
+.PHONY: demo demo-down demo-reset demo-smoke image-smoke observability-check test validate-openapi
 
 demo:
 	docker compose up --build
@@ -11,6 +11,9 @@ demo-reset:
 
 demo-smoke:
 	./demo/smoke.sh
+
+image-smoke:
+	./scripts/image-smoke.sh
 
 observability-check:
 	docker compose run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml

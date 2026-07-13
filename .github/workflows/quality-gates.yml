@@ -2,8 +2,6 @@ name: Quality Gates
 
 on:
   push:
-    branches:
-      - main
   pull_request:
 
 permissions:
@@ -89,3 +87,13 @@ jobs:
       - name: Stop root demo stack
         if: always()
         run: docker compose down --volumes
+
+  production-image-smoke:
+    name: Production image smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build and smoke test production image
+        run: make image-smoke

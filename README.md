@@ -75,6 +75,18 @@ make validate-openapi
 make observability-check
 ```
 
+## Production image
+
+The gateway production image is built from [`gateway/Dockerfile`](gateway/Dockerfile). It contains the compiled gateway binary and migration SQL files, runs as a non-root user, and does not apply migrations at startup.
+
+Build it locally and verify it against an isolated Compose stack with:
+
+```sh
+make image-smoke
+```
+
+This uses a dedicated Compose project, fresh database volumes, and ports `18080` (gateway) and `18787` (Mock Bank), so it does not reuse the root demo's state. Release tags publish versioned images to `ghcr.io/roigada/payment-gateway`.
+
 ## Repository map
 
 ```text
