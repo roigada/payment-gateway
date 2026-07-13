@@ -29,6 +29,22 @@ jobs:
       - name: Run gateway test suite
         run: go test ./...
 
+  openapi-validation:
+    name: OpenAPI validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      - name: Validate gateway API contract
+        run: make validate-openapi
+
   demo-smoke:
     name: Demo smoke
     runs-on: ubuntu-latest
