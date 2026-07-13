@@ -46,3 +46,14 @@ groups:
           summary: Postgres connection pool waits are growing
           description: Gateway database calls have sustained connection pool wait count and wait duration growth for 5 minutes.
           runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#postgres-pool-wait-growth
+
+      - alert: GatewayAgingPendingPayments
+        expr: payment_gateway_oldest_pending_payment_age_seconds > 300
+        for: 1m
+        labels:
+          severity: info
+          service: payment-gateway
+        annotations:
+          summary: Gateway has an Aging Pending Payment
+          description: The oldest current Pending Payment has been unresolved for more than the 5 minute local/demo visibility threshold.
+          runbook_url: https://github.com/roigada/payment-gateway/blob/main/gateway/docs/runbooks/gateway-alerts.md#aging-pending-payments

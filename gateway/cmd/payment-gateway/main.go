@@ -174,6 +174,7 @@ func run(logger *slog.Logger) error {
 	configureDatabasePool(db, cfg)
 
 	metricsRegistry := observability.NewRegistry()
+	paymentStore := postgres.NewPaymentStore(db)
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
 		return err
@@ -193,13 +194,19 @@ func run(logger *slog.Logger) error {
 	if err := metricsRegistry.Register(postgresPoolCollector); err != nil {
 		return err
 	}
+	pendingPaymentCollector, err := observability.NewPendingPaymentCollector(paymentStore)
+	if err != nil {
+		return err
+	}
+	if err := metricsRegistry.Register(pendingPaymentCollector); err != nil {
+		return err
+	}
 
 	mockBank, err := mockbank.NewClient(cfg.MockBankBaseURL, http.DefaultClient, mockBankMetrics)
 	if err != nil {
 		return err
 	}
 
-	paymentStore := postgres.NewPaymentStore(db)
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
 	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret, cfg.IdempotencyClaimStuckAfter)
