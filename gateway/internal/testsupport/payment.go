@@ -34,6 +34,10 @@ func (r *PaymentStore) SeedPayment(_ context.Context, payment *domain.Payment) e
 	return nil
 }
 
+func (r *PaymentStore) ReplacePayment(payment *domain.Payment) error {
+	return r.update(payment)
+}
+
 func (r *PaymentStore) SeedAuthorizationClaim(operation string, key string, requestFingerprint string, paymentID domain.PaymentID, claimedAt time.Time) {
 	r.records[idempotencyMapKey(operation, key)] = idempotencyEntry{
 		status: idempotencyRecordInProgress,
@@ -136,14 +140,23 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
 			if err != nil {
 				if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
-					return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+					return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
 				}
 				return app.PaymentCommandClaim{}, err
+			}
+			if request.PaymentID() != "" && request.PaymentID() != record.paymentID {
+				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
 			}
 			if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
 				return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 			}
-			return app.NewClaimedPaymentCommand(request, payment), nil
+			if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
+				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+			}
+			if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+			return app.NewRecoveredPaymentCommand(request, payment), nil
 		}
 		return replayOrError(request, record)
 	}
@@ -327,12 +340,20 @@ func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest) (idempotenc
 }
 
 func canRecoverIdempotencyClaim(request app.PaymentCommandClaimRequest, record idempotencyRecord, status idempotencyRecordStatus, now time.Time) bool {
-	return request.Operation() == app.AuthorizePaymentOperation &&
+	return canAttemptIdempotencyRecovery(request) &&
 		status == idempotencyRecordInProgress &&
 		record.requestFingerprint == request.RequestFingerprint() &&
-		request.ClaimStuckAfter() > 0 &&
 		!record.claimedAt.IsZero() &&
 		!record.claimedAt.After(now.Add(-request.ClaimStuckAfter()))
+}
+
+func canAttemptIdempotencyRecovery(request app.PaymentCommandClaimRequest) bool {
+	switch request.Operation() {
+	case app.AuthorizePaymentOperation, app.RetryAuthorizationOperation, app.CapturePaymentOperation, app.VoidPaymentOperation, app.RefundPaymentOperation:
+		return request.ClaimStuckAfter() > 0
+	default:
+		return false
+	}
 }
 
 func (r *PaymentStore) complete(claim app.PaymentCommandClaim, result app.PaymentCommandResult) error {
@@ -368,6 +389,26 @@ func setBankOperationKey(payment *domain.Payment, operation app.BankOperationKey
 	default:
 		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
 	}
+}
+
+func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind) error {
+	var key string
+	switch operation {
+	case "":
+		return nil
+	case app.BankOperationKeyCapture:
+		key = payment.CaptureBankOperationKey()
+	case app.BankOperationKeyVoid:
+		key = payment.VoidBankOperationKey()
+	case app.BankOperationKeyRefund:
+		key = payment.RefundBankOperationKey()
+	default:
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(errors.New("unknown bank operation")))
+	}
+	if key == "" {
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(errors.New("missing recovered bank operation key")))
+	}
+	return nil
 }
 
 type idempotencyEntry struct {

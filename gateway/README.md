@@ -140,6 +140,14 @@ payment_gateway_payment_operations_total{operation,outcome}
 payment_gateway_payment_operation_duration_seconds{operation,outcome}
 ```
 
+and Stuck Idempotency Claim recovery outcomes:
+
+```text
+payment_gateway_idempotency_recovery_total{operation,result}
+```
+
+`operation` is one of `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, or `refund_payment`; `result` is one of `attempted`, `recovered`, `unrecoverable`, or `conflict`. The metric never labels public Idempotency Keys, Payment IDs, card data, bank IDs, or raw errors.
+
 and Mock Bank dependency RED:
 
 ```text
@@ -170,6 +178,8 @@ Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric
 ## Public API
 
 Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
+
+The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). The runnable request collection in [`../demo/payment-gateway.http`](../demo/payment-gateway.http) remains the companion artifact for manual exploration against a running demo stack.
 
 ### Authorize a Payment
 

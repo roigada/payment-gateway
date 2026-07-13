@@ -1,4 +1,4 @@
-.PHONY: demo demo-down demo-reset demo-smoke observability-check test
+.PHONY: demo demo-down demo-reset demo-smoke observability-check test validate-openapi
 
 demo:
 	docker compose up --build
@@ -17,3 +17,6 @@ observability-check:
 
 test:
 	cd gateway && go test ./...
+
+validate-openapi:
+	cd gateway && go run ./cmd/openapi-validator

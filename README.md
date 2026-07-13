@@ -58,6 +58,7 @@ make demo-smoke
 ```
 
 The smoke check waits for gateway readiness, Authorizes a Payment through the Mock Bank, Captures it, fetches it, and asserts that the final Payment Status is `captured`.
+Set `MOCK_BANK_BASE_URL=http://127.0.0.1:8787` to make the same smoke command also assert that the bundled Mock Bank health endpoint is reachable.
 
 To inspect observability, start the demo stack, open Grafana at `http://localhost:3000`, then run `make demo-smoke` in another terminal. The provisioned Gateway Overview dashboard refreshes every 5 seconds and should populate within a short scrape interval after smoke traffic runs. Prometheus scrapes the gateway `/metrics` endpoint only; it does not scrape the bundled Mock Bank directly. Use the Prometheus UI at `http://localhost:9090` to inspect scrape targets or raw metric queries.
 
@@ -81,5 +82,6 @@ observability/  Local Prometheus and Grafana demo configuration
 ```
 
 For gateway API details, payment lifecycle rules, configuration, and observability notes, see [`gateway/README.md`](gateway/README.md).
+The formal public API contract is published at [`gateway/docs/api/openapi.yaml`](gateway/docs/api/openapi.yaml); the runnable request collection remains available at [`demo/payment-gateway.http`](demo/payment-gateway.http).
 
 The Mock Bank is copied dependency code, not authored gateway implementation. Its provenance is documented in [`mock-bank/PROVENANCE.md`](mock-bank/PROVENANCE.md).
