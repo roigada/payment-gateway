@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -24,6 +29,7 @@ const (
 	defaultDatabaseMaxIdleConnections    = 5
 	defaultDatabaseConnectionMaxLifetime = 30 * time.Minute
 	defaultIdempotencyClaimStuckAfter    = app.DefaultIdempotencyClaimStuckAfter
+	defaultShutdownTimeout               = 30 * time.Second
 )
 
 func main() {
@@ -50,6 +56,7 @@ type config struct {
 	MockBankBaseURL               string
 	FingerprintSecret             string
 	IdempotencyClaimStuckAfter    time.Duration
+	ShutdownTimeout               time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -69,6 +76,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	shutdownTimeout, err := envDuration("SHUTDOWN_TIMEOUT", defaultShutdownTimeout)
+	if err != nil {
+		return config{}, err
+	}
 
 	cfg := config{
 		Addr:                          os.Getenv("ADDR"),
@@ -79,6 +90,7 @@ func loadConfig() (config, error) {
 		MockBankBaseURL:               os.Getenv("MOCK_BANK_BASE_URL"),
 		FingerprintSecret:             os.Getenv("FINGERPRINT_SECRET"),
 		IdempotencyClaimStuckAfter:    idempotencyClaimStuckAfter,
+		ShutdownTimeout:               shutdownTimeout,
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
@@ -111,6 +123,9 @@ func (cfg config) validate() error {
 	}
 	if cfg.IdempotencyClaimStuckAfter <= 0 {
 		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration")
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		return fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive duration")
 	}
 
 	return nil
@@ -210,10 +225,85 @@ func run(logger *slog.Logger) error {
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
 	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret, cfg.IdempotencyClaimStuckAfter)
-	readiness := postgres.NewReadinessChecker(db)
+	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	server := httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler)
 
+	listener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(shutdownSignals)
+
 	logger.Info("payment-gateway starting", "addr", cfg.Addr)
-	return http.ListenAndServe(cfg.Addr, server)
+	return runHTTPServer(listener, server, readiness, cfg.ShutdownTimeout, shutdownSignals, logger)
+}
+
+type readinessChecker interface {
+	CheckReady(context.Context) error
+}
+
+type shutdownReadiness struct {
+	delegate readinessChecker
+	draining atomic.Bool
+}
+
+func newShutdownReadiness(delegate readinessChecker) *shutdownReadiness {
+	return &shutdownReadiness{delegate: delegate}
+}
+
+func (r *shutdownReadiness) CheckReady(ctx context.Context) error {
+	if r.draining.Load() {
+		return errors.New("payment-gateway is draining")
+	}
+	return r.delegate.CheckReady(ctx)
+}
+
+func (r *shutdownReadiness) beginDrain() {
+	r.draining.Store(true)
+}
+
+func runHTTPServer(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	server := &http.Server{Handler: handler}
+	serveResult := make(chan error, 1)
+	go func() {
+		err := server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveResult <- err
+	}()
+
+	select {
+	case err := <-serveResult:
+		return err
+	case receivedSignal := <-shutdownSignals:
+		logger.Info("payment-gateway shutdown signal received", "signal", receivedSignal.String())
+	}
+
+	readiness.beginDrain()
+	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	err := server.Shutdown(ctx)
+	cancel()
+	if err == nil {
+		logger.Info("payment-gateway shutdown completed")
+		return <-serveResult
+	}
+
+	logger.Warn("payment-gateway shutdown drain timed out", "error", err)
+	if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+		return closeErr
+	}
+	logger.Warn("payment-gateway shutdown forced connections closed")
+	return <-serveResult
 }
