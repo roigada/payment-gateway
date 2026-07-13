@@ -128,6 +128,45 @@ Inspect in Grafana on the Postgres pool panels. Compare wait growth with open, i
 
 Likely causes include concurrent gateway requests exceeding the configured pool budget, slow database queries, blocked transactions, or database connectivity degradation. The local demo gateway defaults `DATABASE_MAX_OPEN_CONNECTIONS` to `10`; lowering that value in Compose while running concurrent API traffic can make pool waits easier to reproduce locally.
 
+## Aging Pending Payments
+
+Alert: `GatewayAgingPendingPayments`
+
+PromQL:
+
+```promql
+payment_gateway_oldest_pending_payment_age_seconds > 300
+```
+
+This is an `info`-severity local/demo operational-visibility alert, lower severity than the gateway outage alerts. It means at least one current Pending Payment has been unresolved for more than five minutes. The aggregate metrics deliberately contain no Payment, Order, Customer, Mock Bank, fingerprint, card-number, or CVV labels:
+
+```promql
+payment_gateway_pending_payments_total
+payment_gateway_oldest_pending_payment_age_seconds
+```
+
+`Pending` means the Mock Bank authorization outcome is not yet known. It does not mean the Payment failed, is processing capture, or needs void or refund work. This alert and the aggregate metrics do not resolve a Payment or change its status.
+
+### Inspect concrete Pending Payments locally
+
+After the aggregate alert indicates an Aging Pending Payment, inspect the local gateway Postgres database. From the repository root while the demo stack is running:
+
+```sh
+docker compose exec postgres psql -U payment_gateway -d payment_gateway -c "
+  SELECT id, order_id, customer_id, created_at, now() - created_at AS pending_age
+  FROM payments
+  WHERE status = 'pending'
+  ORDER BY created_at ASC;"
+```
+
+Use this local inspection path only after the aggregate metric has identified the symptom. Do not add Payment, Order, Customer, Bank Operation Key, Authorization Request Fingerprint, Authorization Card Fingerprint, card number, or CVV as Prometheus labels.
+
+### Resolve with the client/order service
+
+Pending resolution is client-driven through Authorization Retry. Ask the client or order service to submit Authorization Retry with the card details when resolution is required; there is no background worker that calls the Mock Bank for this alert.
+
+Authorization Retry reuses the Payment's stored authorization Bank Operation Key, so repeated bank calls refer to the same authorization operation. The stored Authorization Card Fingerprint checks that the retry uses the same card number and expiry as the original authorization. It is a non-reversible check, not raw card storage; it excludes CVV and cannot be used by a background worker to call the Mock Bank.
+
 ## Business Outcomes Are Not Outages
 
 Declined, Pending, and Expired Payments are part of the normal Payment lifecycle. Caller and state outcomes such as `payment_status_conflict`, `invalid_input`, `idempotency_conflict`, and `bank_state_conflict` are also not classified as outages in this first alert slice.
@@ -138,4 +177,4 @@ During diagnosis, keep these categories separate:
 - Caller or domain outcomes: `invalid_input`, `payment_status_conflict`, `idempotency_conflict`, `idempotency_in_progress`, `bank_state_conflict`, `not_found`.
 - Technical outage-like outcomes: `bank_timeout`, `bank_unavailable`, `internal`.
 
-The alerts in this runbook only fire on HTTP 5xx, Mock Bank dependency `timeout|unavailable|internal`, Payment operation `bank_timeout|bank_unavailable|internal`, and Postgres pool wait growth.
+The warning-severity alerts in this runbook fire on HTTP 5xx, Mock Bank dependency `timeout|unavailable|internal`, Payment operation `bank_timeout|bank_unavailable|internal`, and Postgres pool wait growth. Aging Pending Payment visibility is a separate `info`-severity alert and is not an outage signal.

@@ -95,6 +95,49 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 }
 
+func TestPaymentStoreReportsAggregatePendingMetricsWithoutChangingPaymentStatuses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	pending, err := domain.NewPendingPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
+		"order-pending",
+		"customer-pending",
+		1299,
+		"bok_550e8400-e29b-41d4-a716-446655440001",
+		"fingerprint-pending",
+		now.Add(-6*time.Minute),
+	)
+	require.NoError(t, err)
+	declined, err := domain.NewDeclinedPayment(
+		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440002"),
+		"order-declined",
+		"customer-declined",
+		1299,
+		domain.DeclineReasonExpiredCard,
+		"bok_550e8400-e29b-41d4-a716-446655440003",
+		"fingerprint-declined",
+		now.Add(-10*time.Minute),
+	)
+	require.NoError(t, err)
+	insertPaymentFixture(t, db, pending)
+	insertPaymentFixture(t, db, declined)
+
+	count, oldestAgeSeconds, err := store.PendingPaymentMetrics(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+	assert.GreaterOrEqual(t, oldestAgeSeconds, float64(6*60))
+
+	saved, err := store.FindByID(ctx, pending.ID(), time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
+}
+
 func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")

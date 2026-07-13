@@ -24,6 +24,25 @@ func NewPaymentStore(db *sql.DB) *PaymentStore {
 	return &PaymentStore{db: db}
 }
 
+// PendingPaymentMetrics returns aggregate current Pending Payment visibility. The
+// query is read-only and intentionally returns no Payment, order, customer, bank,
+// fingerprint, or card data.
+func (r *PaymentStore) PendingPaymentMetrics(ctx context.Context) (int64, float64, error) {
+	var count int64
+	var oldestAgeSeconds float64
+	err := r.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at)), 0)
+		   FROM payments
+		  WHERE status = $1`,
+		domain.PaymentStatusPending,
+	).Scan(&count, &oldestAgeSeconds)
+	if err != nil {
+		return 0, 0, app.NewInternalPaymentError(err)
+	}
+	return count, oldestAgeSeconds, nil
+}
+
 func (r *PaymentStore) ClaimPaymentCommand(ctx context.Context, request app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
