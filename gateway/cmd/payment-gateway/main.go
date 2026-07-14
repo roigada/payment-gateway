@@ -32,7 +32,7 @@ func main() {
 		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("payment-gateway stopped", "error", err)
 		os.Exit(1)
 	}
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(cfg.Runtime.LogLevel)
 	if err := run(cfg, logger); err != nil {
 		logger.Error("payment-gateway stopped", "error", err)
 		os.Exit(1)
@@ -48,7 +48,7 @@ func newLogger(level string) *slog.Logger {
 }
 
 func run(cfg config, logger *slog.Logger) error {
-	dbCtx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseStartupTimeout)
+	dbCtx, cancel := context.WithTimeout(context.Background(), cfg.Database.StartupTimeout)
 	defer cancel()
 
 	db, err := connectDatabase(dbCtx, cfg)
@@ -62,7 +62,7 @@ func run(cfg config, logger *slog.Logger) error {
 		return err
 	}
 
-	listener, err := net.Listen("tcp", cfg.Addr)
+	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
 	if err != nil {
 		return err
 	}
@@ -72,16 +72,16 @@ func run(cfg config, logger *slog.Logger) error {
 	signal.Notify(shutdownSignals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(shutdownSignals)
 
-	logger.Info("payment-gateway starting", "addr", cfg.Addr)
+	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr)
 	return runHTTPServerWithConfig(listener, handler, readiness, cfg, shutdownSignals, logger)
 }
 
 func connectDatabase(ctx context.Context, cfg config) (*sql.DB, error) {
-	db, err := postgres.Connect(ctx, cfg.DatabaseURL)
+	db, err := postgres.Connect(ctx, cfg.Database.URL)
 	if err != nil {
 		return nil, err
 	}
-	configureDatabasePool(db, cfg)
+	configureDatabasePool(db, cfg.Database)
 	return db, nil
 }
 
@@ -90,11 +90,11 @@ func configureDatabasePool(db interface {
 	SetMaxIdleConns(int)
 	SetConnMaxLifetime(time.Duration)
 	SetConnMaxIdleTime(time.Duration)
-}, cfg config) {
-	db.SetMaxOpenConns(cfg.DatabaseMaxOpenConnections)
-	db.SetMaxIdleConns(cfg.DatabaseMaxIdleConnections)
-	db.SetConnMaxLifetime(cfg.DatabaseConnectionMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.DatabaseConnectionMaxIdleTime)
+}, cfg DatabaseConfig) {
+	db.SetMaxOpenConns(cfg.MaxOpenConnections)
+	db.SetMaxIdleConns(cfg.MaxIdleConnections)
+	db.SetConnMaxLifetime(cfg.ConnectionMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnectionMaxIdleTime)
 }
 
 func newHandler(cfg config, db *sql.DB, logger *slog.Logger) (http.Handler, *shutdownReadiness, error) {
@@ -128,25 +128,25 @@ func newHandler(cfg config, db *sql.DB, logger *slog.Logger) (http.Handler, *shu
 	}
 
 	transport := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: cfg.MockBankConnectTimeout}).DialContext,
-		TLSHandshakeTimeout:   cfg.MockBankTLSHandshakeTimeout,
-		ResponseHeaderTimeout: cfg.MockBankResponseHeaderTimeout,
-		IdleConnTimeout:       cfg.MockBankIdleConnectionTimeout,
+		DialContext:           (&net.Dialer{Timeout: cfg.MockBank.ConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   cfg.MockBank.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: cfg.MockBank.ResponseHeaderTimeout,
+		IdleConnTimeout:       cfg.MockBank.IdleConnectionTimeout,
 	}
-	mockBank, err := mockbank.NewClientWithTimeout(cfg.MockBankBaseURL, &http.Client{Transport: transport}, mockBankMetrics, cfg.MockBankTimeout)
+	mockBank, err := mockbank.NewClientWithTimeout(cfg.MockBank.BaseURL, &http.Client{Transport: transport}, mockBankMetrics, cfg.MockBank.Timeout)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	paymentIDs := uuidgen.NewPaymentIDGenerator()
 	bankOperationKeys := uuidgen.NewBankOperationKeyGenerator()
-	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.FingerprintSecret, cfg.IdempotencyClaimStuckAfter)
+	paymentService := app.NewPaymentService(paymentStore, paymentIDs, bankOperationKeys, mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	return httpapi.NewServer(paymentService, readiness, logger, httpMetrics, metricsHandler, httpapi.ServerOptions{
-		PaymentCommandTimeout: cfg.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.PaymentReadTimeout,
+		PaymentCommandTimeout: cfg.Payment.CommandTimeout,
+		PaymentReadTimeout:    cfg.Payment.ReadTimeout,
 		ReadinessTimeout:      defaultReadyTimeout,
-		MaxRequestBodyBytes:   cfg.HTTPMaxRequestBodyBytes,
+		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
 	}), readiness, nil
 }

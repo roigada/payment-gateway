@@ -41,10 +41,10 @@ func runHTTPServer(listener net.Listener, handler http.Handler, readiness *shutd
 
 func runHTTPServerWithConfig(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, cfg config, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
 	server := &http.Server{
-		Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout,
-		WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout,
+		Handler: handler, ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout,
+		WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout,
 	}
-	return serveHTTPServer(listener, handler, readiness, server, cfg.ShutdownTimeout, shutdownSignals, logger)
+	return serveHTTPServer(listener, handler, readiness, server, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
 }
 
 func serveHTTPServer(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, server *http.Server, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
