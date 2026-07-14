@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/postgres"
 )
 
 const (
@@ -77,6 +79,35 @@ type MockBankConfig struct {
 	TLSHandshakeTimeout   time.Duration
 	ResponseHeaderTimeout time.Duration
 	IdleConnectionTimeout time.Duration
+}
+
+type httpHandlerConfig struct {
+	Payment  PaymentConfig
+	MockBank MockBankConfig
+	Options  httpapi.HandlerOptions
+}
+
+func (cfg config) httpHandler() httpHandlerConfig {
+	return httpHandlerConfig{
+		Payment:  cfg.Payment,
+		MockBank: cfg.MockBank,
+		Options: httpapi.HandlerOptions{
+			PaymentCommandTimeout: cfg.Payment.CommandTimeout,
+			PaymentReadTimeout:    cfg.Payment.ReadTimeout,
+			ReadinessTimeout:      defaultReadyTimeout,
+			MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
+		},
+	}
+}
+
+func (cfg DatabaseConfig) postgresOptions() postgres.Options {
+	return postgres.Options{
+		URL:                   cfg.URL,
+		MaxOpenConnections:    cfg.MaxOpenConnections,
+		MaxIdleConnections:    cfg.MaxIdleConnections,
+		ConnectionMaxLifetime: cfg.ConnectionMaxLifetime,
+		ConnectionMaxIdleTime: cfg.ConnectionMaxIdleTime,
+	}
 }
 
 func loadConfig() (config, error) {

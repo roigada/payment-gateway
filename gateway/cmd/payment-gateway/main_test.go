@@ -4,30 +4,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConfigureDatabasePoolAppliesConfig(t *testing.T) {
-	pool := &recordingDatabasePool{}
+func TestDatabaseConfigPostgresOptions(t *testing.T) {
 	cfg := validConfig()
 	cfg.Database.MaxOpenConnections = 20
 	cfg.Database.MaxIdleConnections = 8
 	cfg.Database.ConnectionMaxLifetime = 45 * time.Minute
 	cfg.Database.ConnectionMaxIdleTime = 10 * time.Minute
-	configureDatabasePool(pool, cfg.Database)
-	assert.Equal(t, 20, pool.maxOpenConnections)
-	assert.Equal(t, 8, pool.maxIdleConnections)
-	assert.Equal(t, 45*time.Minute, pool.connectionMaxLifetime)
-	assert.Equal(t, 10*time.Minute, pool.connectionMaxIdleTime)
+	assert.Equal(t, postgres.Options{URL: cfg.Database.URL, MaxOpenConnections: 20, MaxIdleConnections: 8, ConnectionMaxLifetime: 45 * time.Minute, ConnectionMaxIdleTime: 10 * time.Minute}, cfg.Database.postgresOptions())
 }
-
-type recordingDatabasePool struct {
-	maxOpenConnections, maxIdleConnections int
-	connectionMaxLifetime                  time.Duration
-	connectionMaxIdleTime                  time.Duration
-}
-
-func (p *recordingDatabasePool) SetMaxOpenConns(n int)              { p.maxOpenConnections = n }
-func (p *recordingDatabasePool) SetMaxIdleConns(n int)              { p.maxIdleConnections = n }
-func (p *recordingDatabasePool) SetConnMaxLifetime(d time.Duration) { p.connectionMaxLifetime = d }
-func (p *recordingDatabasePool) SetConnMaxIdleTime(d time.Duration) { p.connectionMaxIdleTime = d }

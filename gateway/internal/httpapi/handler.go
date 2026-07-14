@@ -11,16 +11,16 @@ import (
 	"github.com/roigada/payment-gateway/internal/app"
 )
 
-type Server struct {
+type Handler struct {
 	handler   http.Handler
 	logger    *slog.Logger
 	metrics   httpMetrics
 	payments  paymentApplication
 	readiness readinessChecker
-	options   ServerOptions
+	options   HandlerOptions
 }
 
-type ServerOptions struct {
+type HandlerOptions struct {
 	PaymentCommandTimeout time.Duration
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
@@ -47,27 +47,27 @@ type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
 }
 
-func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options ...ServerOptions) *Server {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options ...HandlerOptions) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	config := ServerOptions{PaymentCommandTimeout: 10 * time.Second, PaymentReadTimeout: 3 * time.Second, ReadinessTimeout: 2 * time.Second, MaxRequestBodyBytes: maxJSONBodyBytes}
+	config := HandlerOptions{PaymentCommandTimeout: 10 * time.Second, PaymentReadTimeout: 3 * time.Second, ReadinessTimeout: 2 * time.Second, MaxRequestBodyBytes: maxJSONBodyBytes}
 	if len(options) > 0 {
 		config = options[0]
 	}
-	server := &Server{
+	handler := &Handler{
 		logger:    logger,
 		metrics:   metrics,
 		payments:  payments,
 		readiness: readiness,
 		options:   config,
 	}
-	server.handler = server.routes(metricsHandler)
-	return server
+	handler.handler = handler.routes(metricsHandler)
+	return handler
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength > s.options.MaxRequestBodyBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 		return
@@ -79,7 +79,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func (s *Server) routes(metricsHandler http.Handler) http.Handler {
+func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	s.handle(mux, "GET /healthz", s.healthz)
@@ -98,7 +98,7 @@ func (s *Server) routes(metricsHandler http.Handler) http.Handler {
 	return s.logRequest(mux)
 }
 
-func (s *Server) handle(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
+func (s *Handler) handle(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
 	_, route, ok := strings.Cut(pattern, " ")
 	if !ok {
 		route = pattern
@@ -106,11 +106,11 @@ func (s *Server) handle(mux *http.ServeMux, pattern string, handler http.Handler
 	mux.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(handler)))
 }
 
-func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 	if s.readiness == nil {
 		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
@@ -125,7 +125,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) withCommandDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
+func (s *Handler) withCommandDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
 	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentCommandTimeout)
 	defer cancel()
 	if err := call(ctx); err != nil {
@@ -143,7 +143,7 @@ func (s *Server) withCommandDeadline(w http.ResponseWriter, r *http.Request, cal
 	return true
 }
 
-func (s *Server) withReadDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
+func (s *Handler) withReadDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
 	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
 	defer cancel()
 	if err := call(ctx); err != nil {

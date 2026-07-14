@@ -28,7 +28,7 @@ const (
 	errorCodeRequestTimeout        = "request_timeout"
 )
 
-func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 	if !isJSONRequest(r) {
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
@@ -86,7 +86,7 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
-func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 	if !isJSONRequest(r) {
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
@@ -138,7 +138,7 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
-func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
@@ -170,7 +170,7 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
-func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
@@ -202,7 +202,7 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
-func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
@@ -234,7 +234,7 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 
-func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 	query, err := app.NewGetPaymentQuery(r.PathValue("id"))
 	if err != nil {
 		writePaymentServiceError(w, r, err)
@@ -252,7 +252,7 @@ func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newPaymentEnvelope(payment))
 }
 
-func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
+func (s *Handler) searchPayments(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	for key := range query {
 		switch key {

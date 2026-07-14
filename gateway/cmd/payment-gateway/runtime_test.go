@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
+func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	finish := make(chan struct{})
@@ -34,11 +34,11 @@ func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 		}
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	type requestResult struct {
 		response *http.Response
@@ -72,7 +72,7 @@ func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
 }
 
-func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
+func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	requestEnded := make(chan struct{})
@@ -83,11 +83,11 @@ func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
@@ -103,7 +103,7 @@ func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown forced connections closed")
 }
 
-func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
+func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	requestEnded := make(chan struct{})
@@ -114,11 +114,11 @@ func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *test
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
 	shutdownSignals := make(chan os.Signal, 2)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")

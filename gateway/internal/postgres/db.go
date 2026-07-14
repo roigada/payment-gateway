@@ -3,15 +3,28 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func Connect(ctx context.Context, databaseURL string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", databaseURL)
+type Options struct {
+	URL                   string
+	MaxOpenConnections    int
+	MaxIdleConnections    int
+	ConnectionMaxLifetime time.Duration
+	ConnectionMaxIdleTime time.Duration
+}
+
+func Open(ctx context.Context, options Options) (*sql.DB, error) {
+	db, err := sql.Open("pgx", options.URL)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(options.MaxOpenConnections)
+	db.SetMaxIdleConns(options.MaxIdleConnections)
+	db.SetConnMaxLifetime(options.ConnectionMaxLifetime)
+	db.SetConnMaxIdleTime(options.ConnectionMaxIdleTime)
 
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
@@ -19,10 +32,6 @@ func Connect(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	}
 
 	return db, nil
-}
-
-func Open(databaseURL string) (*sql.DB, error) {
-	return sql.Open("pgx", databaseURL)
 }
 
 type ReadinessChecker struct {

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func (s *Server) recoverPanic(next http.Handler) http.Handler {
+func (s *Handler) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w}
 
@@ -36,7 +36,7 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) logRequest(next http.Handler) http.Handler {
+func (s *Handler) logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
@@ -66,7 +66,7 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) recordHTTPRequest(route string, next http.Handler) http.Handler {
+func (s *Handler) recordHTTPRequest(route string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}

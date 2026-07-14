@@ -1450,7 +1450,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 	databaseURL, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	db, err := postgres.Connect(ctx, databaseURL)
+	db, err := postgres.Open(ctx, postgres.Options{URL: databaseURL})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, db.Close())

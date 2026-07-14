@@ -50,7 +50,7 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 		<-ctx.Done()
 		return app.PaymentCommandResult{}, ctx.Err()
 	}}
-	handler := httpapi.NewServer(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.ServerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	handler := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
@@ -75,7 +75,7 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 		<-ctx.Done()
 		return app.PaymentResult{}, ctx.Err()
 	}}
-	handler := httpapi.NewServer(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.ServerOptions{PaymentCommandTimeout: time.Second, PaymentReadTimeout: time.Millisecond, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	handler := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.HandlerOptions{PaymentCommandTimeout: time.Second, PaymentReadTimeout: time.Millisecond, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil))
 	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
@@ -607,7 +607,7 @@ func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	handler := httpapi.NewServer(payments, readiness, discardLogger(), metrics, metricsHandler)
+	handler := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, metricsHandler)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -665,7 +665,7 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 	return &paymentAPITest{
 		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewServer(payments, readiness, logger, metrics, nil),
+		handler:   httpapi.NewHandler(payments, readiness, logger, metrics, nil),
 		metrics:   metrics,
 	}
 }
