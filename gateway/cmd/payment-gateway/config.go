@@ -18,12 +18,14 @@ const (
 	defaultDatabaseConnectionMaxIdleTime       = 5 * time.Minute
 	defaultDatabaseStartupTimeout              = 5 * time.Second
 	defaultIdempotencyClaimStuckAfter          = app.DefaultIdempotencyClaimStuckAfter
+	defaultLogLevel                            = "info"
 	defaultShutdownTimeout                     = 30 * time.Second
 	defaultPaymentCommandTimeout               = 10 * time.Second
 	defaultPaymentReadTimeout                  = 3 * time.Second
 	defaultReadyTimeout                        = 2 * time.Second
 	defaultMockBankTimeout                     = 7 * time.Second
 	defaultHTTPReadHeaderTimeout               = 5 * time.Second
+	defaultHTTPAddr                            = ":8080"
 	defaultHTTPReadTimeout                     = 15 * time.Second
 	defaultHTTPWriteTimeout                    = 15 * time.Second
 	defaultHTTPIdleTimeout                     = 60 * time.Second
@@ -189,19 +191,12 @@ func loadConfig() (config, error) {
 	}
 
 	cfg := config{
-		Runtime:  RuntimeConfig{LogLevel: os.Getenv("LOG_LEVEL"), ShutdownTimeout: shutdownTimeout},
+		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout},
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
-		HTTP:     HTTPConfig{Addr: os.Getenv("ADDR"), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
+		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
 		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
 	}
-	if cfg.HTTP.Addr == "" {
-		cfg.HTTP.Addr = ":8080"
-	}
-	if cfg.Runtime.LogLevel == "" {
-		cfg.Runtime.LogLevel = "info"
-	}
-
 	return cfg, nil
 }
 
@@ -303,6 +298,14 @@ func envInt(name string, fallback int) (int, error) {
 	}
 
 	return parsed, nil
+}
+
+func envString(name string, fallback string) string {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func envInt64(name string, fallback int64) (int64, error) {

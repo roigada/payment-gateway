@@ -16,9 +16,9 @@ const (
 
 func validConfig() config {
 	return config{
-		Runtime:  RuntimeConfig{LogLevel: "info", ShutdownTimeout: defaultShutdownTimeout},
+		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout},
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
-		HTTP:     HTTPConfig{Addr: ":8080", ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
+		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
 		MockBank: MockBankConfig{BaseURL: validMockBankBaseURL, Timeout: defaultMockBankTimeout, ConnectTimeout: defaultMockBankConnectTimeout, TLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, ResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, IdleConnectionTimeout: defaultMockBankIdleConnectionTimeout},
 	}
@@ -60,13 +60,13 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
 	cfg, err := loadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, ":8080", cfg.HTTP.Addr)
+	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
 	assert.Equal(t, validDatabaseURL, cfg.Database.URL)
 	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
 	assert.Equal(t, defaultPaymentCommandTimeout, cfg.Payment.CommandTimeout)
 	assert.Equal(t, defaultMockBankTimeout, cfg.MockBank.Timeout)
-	assert.Equal(t, "info", cfg.Runtime.LogLevel)
+	assert.Equal(t, defaultLogLevel, cfg.Runtime.LogLevel)
 	assert.Equal(t, defaultShutdownTimeout, cfg.Runtime.ShutdownTimeout)
 }
 
