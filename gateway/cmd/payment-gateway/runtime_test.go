@@ -34,7 +34,7 @@ func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing
 		}
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
@@ -83,7 +83,7 @@ func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
@@ -114,7 +114,7 @@ func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t 
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
 	shutdownSignals := make(chan os.Signal, 2)
 	result := make(chan error, 1)
 	go func() {
@@ -144,6 +144,10 @@ func (runtimeHTTPMetricsFake) RecordHTTPRequest(string, string, int, time.Durati
 
 func discardRuntimeLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testRuntimeHandlerOptions() httpapi.HandlerOptions {
+	return validConfig().httpHandler().Options
 }
 func newTestListener(t *testing.T) net.Listener {
 	t.Helper()

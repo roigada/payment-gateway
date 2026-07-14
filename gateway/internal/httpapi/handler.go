@@ -47,21 +47,17 @@ type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options ...HandlerOptions) *Handler {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options HandlerOptions) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	config := HandlerOptions{PaymentCommandTimeout: 10 * time.Second, PaymentReadTimeout: 3 * time.Second, ReadinessTimeout: 2 * time.Second, MaxRequestBodyBytes: maxJSONBodyBytes}
-	if len(options) > 0 {
-		config = options[0]
-	}
 	handler := &Handler{
 		logger:    logger,
 		metrics:   metrics,
 		payments:  payments,
 		readiness: readiness,
-		options:   config,
+		options:   options,
 	}
 	handler.handler = handler.routes(metricsHandler)
 	return handler

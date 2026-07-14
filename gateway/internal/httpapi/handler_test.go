@@ -607,7 +607,7 @@ func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	handler := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, metricsHandler)
+	handler := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, metricsHandler, testHandlerOptions())
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -665,7 +665,7 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 	return &paymentAPITest{
 		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewHandler(payments, readiness, logger, metrics, nil),
+		handler:   httpapi.NewHandler(payments, readiness, logger, metrics, nil, testHandlerOptions()),
 		metrics:   metrics,
 	}
 }
@@ -714,6 +714,15 @@ func assertErrorResponse(t *testing.T, rec *httptest.ResponseRecorder, code, mes
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testHandlerOptions() httpapi.HandlerOptions {
+	return httpapi.HandlerOptions{
+		PaymentCommandTimeout: time.Second,
+		PaymentReadTimeout:    time.Second,
+		ReadinessTimeout:      time.Second,
+		MaxRequestBodyBytes:   64 * 1024,
+	}
 }
 
 type recordingHTTPMetrics struct {
