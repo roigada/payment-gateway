@@ -22,7 +22,7 @@ const (
 	defaultShutdownTimeout                     = 30 * time.Second
 	defaultPaymentCommandTimeout               = 10 * time.Second
 	defaultPaymentReadTimeout                  = 3 * time.Second
-	defaultReadyTimeout                        = 2 * time.Second
+	readinessCheckTimeout                      = 2 * time.Second
 	defaultMockBankTimeout                     = 7 * time.Second
 	defaultHTTPReadHeaderTimeout               = 5 * time.Second
 	defaultHTTPAddr                            = ":8080"
@@ -96,7 +96,7 @@ func (cfg config) httpHandler() httpHandlerConfig {
 		Options: httpapi.HandlerOptions{
 			PaymentCommandTimeout: cfg.Payment.CommandTimeout,
 			PaymentReadTimeout:    cfg.Payment.ReadTimeout,
-			ReadinessTimeout:      defaultReadyTimeout,
+			ReadinessTimeout:      readinessCheckTimeout,
 			MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
 		},
 	}
