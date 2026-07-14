@@ -45,6 +45,43 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.T) {
+	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		<-ctx.Done()
+		return app.PaymentCommandResult{}, ctx.Err()
+	}}
+	handler := httpapi.NewServer(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.ServerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
+}
+
+func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
+		"Content-Type": "application/json",
+	})
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assertErrorResponse(t, rec, "request_body_too_large", "request body is too large")
+	assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
+}
+
+func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
+	payments := &paymentApplicationFake{getPaymentFunc: func(ctx context.Context, _ app.GetPaymentQuery) (app.PaymentResult, error) {
+		<-ctx.Done()
+		return app.PaymentResult{}, ctx.Err()
+	}}
+	handler := httpapi.NewServer(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.ServerOptions{PaymentCommandTimeout: time.Second, PaymentReadTimeout: time.Millisecond, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil))
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "request_timeout", "payment request timed out")
+}
+
 func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	api := newPaymentAPITest(t)
 	payment := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -705,6 +742,7 @@ func (r recordedHTTPRequest) withoutDuration() recordedHTTPRequest {
 }
 
 type paymentApplicationFake struct {
+	authorizePaymentFunc      func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
 	authorizePaymentCommand   app.AuthorizePaymentCommand
 	authorizePaymentResult    app.PaymentResult
 	authorizePaymentErr       error
@@ -726,6 +764,7 @@ type paymentApplicationFake struct {
 	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
+	getPaymentFunc            func(context.Context, app.GetPaymentQuery) (app.PaymentResult, error)
 	searchPaymentsQuery       app.SearchPaymentsQuery
 	searchPaymentsResult      []app.PaymentResult
 	searchPaymentsErr         error
@@ -741,7 +780,10 @@ func (f *readinessCheckerFake) CheckReady(context.Context) error {
 	return f.err
 }
 
-func (f *paymentApplicationFake) AuthorizePayment(_ context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+	if f.authorizePaymentFunc != nil {
+		return f.authorizePaymentFunc(ctx, command)
+	}
 	if f.authorizePaymentPanic != nil {
 		panic(f.authorizePaymentPanic)
 	}
@@ -775,7 +817,10 @@ func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.Re
 	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
 }
 
-func (f *paymentApplicationFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+	if f.getPaymentFunc != nil {
+		return f.getPaymentFunc(ctx, query)
+	}
 	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
 }

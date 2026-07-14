@@ -46,7 +46,23 @@ DATABASE_URL                      required Postgres connection string
 DATABASE_MAX_OPEN_CONNECTIONS     optional Postgres pool max open connections, defaults to 10
 DATABASE_MAX_IDLE_CONNECTIONS     optional Postgres pool max idle connections, defaults to 5
 DATABASE_CONNECTION_MAX_LIFETIME  optional Postgres pool connection max lifetime, defaults to 30m
+DATABASE_CONNECTION_MAX_IDLE_TIME  optional Postgres pool connection max idle time, defaults to 5m
+DATABASE_STARTUP_TIMEOUT           optional initial database connectivity deadline, defaults to 5s
+LOG_LEVEL                          optional JSON log level: debug, info, warn, or error; defaults to info
+PAYMENT_COMMAND_TIMEOUT            optional synchronous Payment command deadline, defaults to 10s
+PAYMENT_READ_TIMEOUT               optional Payment read deadline, defaults to 3s
+MOCK_BANK_TIMEOUT                  optional per-call Mock Bank deadline, defaults to 7s
+MOCK_BANK_CONNECT_TIMEOUT          optional Mock Bank connect timeout, defaults to 2s
+MOCK_BANK_TLS_HANDSHAKE_TIMEOUT    optional Mock Bank TLS handshake timeout, defaults to 2s
+MOCK_BANK_RESPONSE_HEADER_TIMEOUT  optional Mock Bank response-header timeout, defaults to 6s
+MOCK_BANK_IDLE_CONNECTION_TIMEOUT  optional Mock Bank idle connection timeout, defaults to 60s
+HTTP_READ_HEADER_TIMEOUT           optional HTTP header-read timeout, defaults to 5s
+HTTP_READ_TIMEOUT                  optional HTTP read timeout, defaults to 15s
+HTTP_WRITE_TIMEOUT                 optional HTTP write timeout, defaults to 15s
+HTTP_IDLE_TIMEOUT                  optional HTTP idle timeout, defaults to 60s
+HTTP_MAX_REQUEST_BODY_BYTES        optional request body limit, defaults to 65536
 IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
+SHUTDOWN_TIMEOUT                  optional graceful shutdown deadline, defaults to 30s
 MOCK_BANK_BASE_URL                required Mock Bank base URL
 FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
 ADDR                              optional HTTP listen address, defaults to :8080
@@ -59,13 +75,27 @@ export DATABASE_URL='postgres://payment_gateway:payment_gateway@localhost:5432/p
 export DATABASE_MAX_OPEN_CONNECTIONS='10'
 export DATABASE_MAX_IDLE_CONNECTIONS='5'
 export DATABASE_CONNECTION_MAX_LIFETIME='30m'
+export DATABASE_CONNECTION_MAX_IDLE_TIME='5m'
+export DATABASE_STARTUP_TIMEOUT='5s'
 export IDEMPOTENCY_CLAIM_STUCK_AFTER='5m'
+export SHUTDOWN_TIMEOUT='30s'
+export LOG_LEVEL='info'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
+export MOCK_BANK_TIMEOUT='7s'
+export PAYMENT_COMMAND_TIMEOUT='10s'
+export PAYMENT_READ_TIMEOUT='3s'
+export HTTP_READ_HEADER_TIMEOUT='5s'
+export HTTP_READ_TIMEOUT='15s'
+export HTTP_WRITE_TIMEOUT='15s'
+export HTTP_IDLE_TIMEOUT='60s'
+export HTTP_MAX_REQUEST_BODY_BYTES='65536'
 export FINGERPRINT_SECRET='local-development-secret'
 export ADDR=':8080'
 ```
 
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
+
+Payment reads have a fixed three-second request deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
 
 ## Database
 
@@ -99,8 +129,20 @@ DATABASE_URL=postgres://payment_gateway:payment_gateway@postgres:5432/payment_ga
 DATABASE_MAX_OPEN_CONNECTIONS=10
 DATABASE_MAX_IDLE_CONNECTIONS=5
 DATABASE_CONNECTION_MAX_LIFETIME=30m
+DATABASE_CONNECTION_MAX_IDLE_TIME=5m
+DATABASE_STARTUP_TIMEOUT=5s
 IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
+SHUTDOWN_TIMEOUT=30s
+LOG_LEVEL=info
 MOCK_BANK_BASE_URL=http://mock-bank:9090
+MOCK_BANK_TIMEOUT=7s
+PAYMENT_COMMAND_TIMEOUT=10s
+PAYMENT_READ_TIMEOUT=3s
+HTTP_READ_HEADER_TIMEOUT=5s
+HTTP_READ_TIMEOUT=15s
+HTTP_WRITE_TIMEOUT=15s
+HTTP_IDLE_TIMEOUT=60s
+HTTP_MAX_REQUEST_BODY_BYTES=65536
 FINGERPRINT_SECRET=local-development-secret
 ```
 

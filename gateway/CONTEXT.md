@@ -20,6 +20,10 @@ _Avoid_: Failed, processing
 A **Pending** **Payment** that has remained unresolved long enough to require operational inspection.
 _Avoid_: Stuck payment, failed payment, abandoned payment
 
+**Payment Command Timeout**:
+The API outcome when a synchronous payment command does not produce a final gateway response before its deadline. It does not mean that the **Payment** failed or that the **Mock Bank** did not complete the requested operation; the caller retries with the same **Idempotency Key** to recover the outcome.
+_Avoid_: Failed payment, bank timeout
+
 **Authorized**:
 A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and can still be captured or voided.
 _Avoid_: Approved, held

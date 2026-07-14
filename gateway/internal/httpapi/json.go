@@ -11,7 +11,7 @@ import (
 
 const (
 	invalidJSONBodyMessage = "invalid JSON body"
-	maxJSONBodyBytes       = 1 << 20
+	maxJSONBodyBytes       = 64 * 1024
 )
 
 var (
@@ -30,19 +30,25 @@ func requireEmptyRequestBody(r *http.Request) error {
 		return nil
 	}
 
-	var firstByte [1]byte
-	n, err := io.ReadFull(r.Body, firstByte[:])
-	if n > 0 {
+	n, err := io.Copy(io.Discard, r.Body)
+	if err == nil {
+		if n == 0 {
+			return nil
+		}
 		return errNonEmptyBody
 	}
-	if errors.Is(err, io.EOF) {
-		return nil
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		return errOversizedJSONBody
 	}
 	return err
 }
 
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, body any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	limit := int64(maxJSONBodyBytes)
+	if configuredLimit, ok := r.Context().Value(requestBodyLimitContextKey{}).(int64); ok {
+		limit = configuredLimit
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()

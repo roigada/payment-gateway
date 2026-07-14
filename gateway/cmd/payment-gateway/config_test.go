@@ -20,10 +20,25 @@ func validConfig() config {
 		DatabaseMaxOpenConnections:    defaultDatabaseMaxOpenConnections,
 		DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
 		DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
+		DatabaseConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime,
+		DatabaseStartupTimeout:        defaultDatabaseStartupTimeout,
 		MockBankBaseURL:               validMockBankBaseURL,
 		FingerprintSecret:             validFingerprintSecret,
 		IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
 		ShutdownTimeout:               defaultShutdownTimeout,
+		LogLevel:                      "info",
+		PaymentCommandTimeout:         defaultPaymentCommandTimeout,
+		PaymentReadTimeout:            defaultPaymentReadTimeout,
+		MockBankTimeout:               defaultMockBankTimeout,
+		HTTPReadHeaderTimeout:         defaultHTTPReadHeaderTimeout,
+		HTTPReadTimeout:               defaultHTTPReadTimeout,
+		HTTPWriteTimeout:              defaultHTTPWriteTimeout,
+		HTTPIdleTimeout:               defaultHTTPIdleTimeout,
+		HTTPMaxRequestBodyBytes:       defaultHTTPMaxRequestBodyBytes,
+		MockBankConnectTimeout:        defaultMockBankConnectTimeout,
+		MockBankTLSHandshakeTimeout:   defaultMockBankTLSHandshakeTimeout,
+		MockBankResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout,
+		MockBankIdleConnectionTimeout: defaultMockBankIdleConnectionTimeout,
 	}
 }
 
@@ -124,6 +139,20 @@ func TestConfigValidateRequiresDatabasePoolConfiguration(t *testing.T) {
 				cfg.ShutdownTimeout = 0
 			},
 			wantErr: "SHUTDOWN_TIMEOUT must be a positive duration",
+		},
+		{
+			name: "mock bank timeout must leave command completion time",
+			mutate: func(cfg *config) {
+				cfg.MockBankTimeout = cfg.PaymentCommandTimeout
+			},
+			wantErr: "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT",
+		},
+		{
+			name: "HTTP write timeout must exceed command timeout",
+			mutate: func(cfg *config) {
+				cfg.HTTPWriteTimeout = cfg.PaymentCommandTimeout
+			},
+			wantErr: "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT",
 		},
 	}
 

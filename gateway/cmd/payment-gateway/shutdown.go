@@ -36,11 +36,22 @@ func (r *shutdownReadiness) beginDrain() {
 }
 
 func runHTTPServer(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
+	return serveHTTPServer(listener, handler, readiness, &http.Server{Handler: handler}, shutdownTimeout, shutdownSignals, logger)
+}
+
+func runHTTPServerWithConfig(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, cfg config, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
+	server := &http.Server{
+		Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout,
+		WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout,
+	}
+	return serveHTTPServer(listener, handler, readiness, server, cfg.ShutdownTimeout, shutdownSignals, logger)
+}
+
+func serveHTTPServer(listener net.Listener, handler http.Handler, readiness *shutdownReadiness, server *http.Server, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	server := &http.Server{Handler: handler}
 	serveResult := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)

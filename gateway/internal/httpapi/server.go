@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -16,7 +17,17 @@ type Server struct {
 	metrics   httpMetrics
 	payments  paymentApplication
 	readiness readinessChecker
+	options   ServerOptions
 }
+
+type ServerOptions struct {
+	PaymentCommandTimeout time.Duration
+	PaymentReadTimeout    time.Duration
+	ReadinessTimeout      time.Duration
+	MaxRequestBodyBytes   int64
+}
+
+type requestBodyLimitContextKey struct{}
 
 type paymentApplication interface {
 	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
@@ -36,22 +47,35 @@ type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
 }
 
-func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler) *Server {
+func NewServer(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options ...ServerOptions) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
+	config := ServerOptions{PaymentCommandTimeout: 10 * time.Second, PaymentReadTimeout: 3 * time.Second, ReadinessTimeout: 2 * time.Second, MaxRequestBodyBytes: maxJSONBodyBytes}
+	if len(options) > 0 {
+		config = options[0]
+	}
 	server := &Server{
 		logger:    logger,
 		metrics:   metrics,
 		payments:  payments,
 		readiness: readiness,
+		options:   config,
 	}
 	server.handler = server.routes(metricsHandler)
 	return server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > s.options.MaxRequestBodyBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+		return
+	}
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, s.options.MaxRequestBodyBytes)
+		r = r.WithContext(context.WithValue(r.Context(), requestBodyLimitContextKey{}, s.options.MaxRequestBodyBytes))
+	}
 	s.handler.ServeHTTP(w, r)
 }
 
@@ -91,10 +115,48 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
-	if err := s.readiness.CheckReady(r.Context()); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), s.options.ReadinessTimeout)
+	defer cancel()
+	if err := s.readiness.CheckReady(ctx); err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) withCommandDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
+	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentCommandTimeout)
+	defer cancel()
+	if err := call(ctx); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+			return false
+		}
+		writePaymentServiceError(w, r, err)
+		return false
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return false
+	}
+	return true
+}
+
+func (s *Server) withReadDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
+	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	defer cancel()
+	if err := call(ctx); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment request timed out")
+			return false
+		}
+		writePaymentServiceError(w, r, err)
+		return false
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment request timed out")
+		return false
+	}
+	return true
 }

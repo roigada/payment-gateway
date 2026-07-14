@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -23,6 +24,8 @@ const (
 	errorCodeBankStateConflict     = "bank_state_conflict"
 	errorCodeBankUnavailable       = "bank_unavailable"
 	errorCodeBankTimeout           = "bank_timeout"
+	errorCodePaymentTimeout        = "payment_timeout"
+	errorCodeRequestTimeout        = "request_timeout"
 )
 
 func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +46,10 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		} `json:"card"`
 	}
 	if err := decodeJSONRequest(w, r, &request); err != nil {
+		if errors.Is(err, errOversizedJSONBody) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		if errors.Is(err, errInvalidJSONBody) {
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, invalidJSONBodyMessage)
 			return
@@ -66,9 +73,12 @@ func (s *Server) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	result, err := s.payments.AuthorizePayment(r.Context(), command)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var result app.PaymentCommandResult
+	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		result, err = s.payments.AuthorizePayment(ctx, command)
+		return err
+	}) {
 		return
 	}
 
@@ -91,6 +101,10 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		} `json:"card"`
 	}
 	if err := decodeJSONRequest(w, r, &request); err != nil {
+		if errors.Is(err, errOversizedJSONBody) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		if errors.Is(err, errInvalidJSONBody) {
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, invalidJSONBodyMessage)
 			return
@@ -112,9 +126,12 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	result, err := s.payments.RetryAuthorization(r.Context(), command)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var result app.PaymentCommandResult
+	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		result, err = s.payments.RetryAuthorization(ctx, command)
+		return err
+	}) {
 		return
 	}
 
@@ -123,6 +140,10 @@ func (s *Server) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
+		if errors.Is(err, errOversizedJSONBody) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		if errors.Is(err, errNonEmptyBody) {
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
@@ -137,9 +158,12 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	result, err := s.payments.CapturePayment(r.Context(), command)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var result app.PaymentCommandResult
+	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		result, err = s.payments.CapturePayment(ctx, command)
+		return err
+	}) {
 		return
 	}
 
@@ -148,6 +172,10 @@ func (s *Server) capturePayment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
+		if errors.Is(err, errOversizedJSONBody) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		if errors.Is(err, errNonEmptyBody) {
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
@@ -162,9 +190,12 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	result, err := s.payments.VoidPayment(r.Context(), command)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var result app.PaymentCommandResult
+	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		result, err = s.payments.VoidPayment(ctx, command)
+		return err
+	}) {
 		return
 	}
 
@@ -173,6 +204,10 @@ func (s *Server) voidPayment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 	if err := requireEmptyRequestBody(r); err != nil {
+		if errors.Is(err, errOversizedJSONBody) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		if errors.Is(err, errNonEmptyBody) {
 			writeError(w, http.StatusBadRequest, errorCodeInvalidJSONBody, "request body must be empty")
 			return
@@ -187,9 +222,12 @@ func (s *Server) refundPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	result, err := s.payments.RefundPayment(r.Context(), command)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var result app.PaymentCommandResult
+	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		result, err = s.payments.RefundPayment(ctx, command)
+		return err
+	}) {
 		return
 	}
 
@@ -202,9 +240,12 @@ func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payment, err := s.payments.GetPayment(r.Context(), query)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var payment app.PaymentResult
+	if !s.withReadDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		payment, err = s.payments.GetPayment(ctx, query)
+		return err
+	}) {
 		return
 	}
 
@@ -227,9 +268,12 @@ func (s *Server) searchPayments(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	payments, err := s.payments.SearchPayments(r.Context(), searchQuery)
-	if err != nil {
-		writePaymentServiceError(w, r, err)
+	var payments []app.PaymentResult
+	if !s.withReadDeadline(w, r, func(ctx context.Context) error {
+		var err error
+		payments, err = s.payments.SearchPayments(ctx, searchQuery)
+		return err
+	}) {
 		return
 	}
 
