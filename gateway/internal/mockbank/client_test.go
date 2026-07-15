@@ -340,6 +340,70 @@ func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(context.Context, *mockbank.Client) error
+	}{
+		{name: "authorize", call: func(ctx context.Context, client *mockbank.Client) error {
+			_, err := client.AuthorizePayment(ctx, validAuthorizationRequest())
+			return err
+		}},
+		{name: "capture", call: func(ctx context.Context, client *mockbank.Client) error {
+			_, err := client.CapturePayment(ctx, validCaptureRequest())
+			return err
+		}},
+		{name: "void", call: func(ctx context.Context, client *mockbank.Client) error {
+			_, err := client.VoidPayment(ctx, validVoidRequest())
+			return err
+		}},
+		{name: "refund", call: func(ctx context.Context, client *mockbank.Client) error {
+			_, err := client.RefundPayment(ctx, validRefundRequest())
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			parentDeadline, ok := parent.Deadline()
+			require.True(t, ok)
+
+			transport := &deadlineRecordingRoundTripper{done: make(chan struct{})}
+			client, err := mockbank.NewClientWithTimeout("http://mockbank.example", &http.Client{Transport: transport}, nil, time.Second)
+			require.NoError(t, err)
+
+			err = tt.call(parent, client)
+
+			require.Error(t, err)
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+			select {
+			case <-transport.done:
+			case <-time.After(time.Second):
+				require.FailNow(t, "mock bank request did not observe the parent deadline")
+			}
+			require.False(t, transport.deadline.IsZero())
+			assert.WithinDuration(t, parentDeadline, transport.deadline, time.Millisecond)
+		})
+	}
+}
+
+func TestMockBankTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	client, err := mockbank.NewClientWithTimeout(server.URL, server.Client(), nil, time.Millisecond)
+	require.NoError(t, err)
+
+	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+}
+
 func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -715,6 +779,17 @@ func (timeoutError) Timeout() bool {
 
 func (timeoutError) Temporary() bool {
 	return true
+}
+
+type deadlineRecordingRoundTripper struct {
+	deadline time.Time
+	done     chan struct{}
+}
+
+func (t *deadlineRecordingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.deadline, _ = request.Context().Deadline()
+	close(t.done)
+	return nil, timeoutError{}
 }
 
 type recordingMockBankMetrics struct {
