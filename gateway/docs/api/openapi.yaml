@@ -29,7 +29,9 @@ paths:
         authorization request but did not produce a definitive approval or
         decline outcome. Mock Bank dependency failures before a usable bank
         response are returned as public `bank_unavailable` or `bank_timeout`
-        errors.
+        errors. If the synchronous command exhausts its overall deadline, it
+        returns `payment_timeout`; this does not mean that the Payment failed.
+        Retry either timeout with the same Idempotency Key.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -70,6 +72,8 @@ paths:
                 $ref: "#/components/schemas/PaymentEnvelope"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
         "409":
           $ref: "#/components/responses/IdempotencyConflict"
         "415":
@@ -79,7 +83,7 @@ paths:
         "502":
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
-          $ref: "#/components/responses/BankTimeout"
+          $ref: "#/components/responses/PaymentCommandTimeout"
     get:
       tags:
         - Payments
@@ -113,6 +117,8 @@ paths:
                 $ref: "#/components/schemas/PaymentsEnvelope"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "504":
+          $ref: "#/components/responses/PaymentReadTimeout"
   /v1/payments/{payment_id}:
     get:
       tags:
@@ -132,6 +138,8 @@ paths:
           $ref: "#/components/responses/PaymentNotFound"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "504":
+          $ref: "#/components/responses/PaymentReadTimeout"
   /v1/payments/{payment_id}/authorization-retries:
     post:
       tags:
@@ -160,6 +168,8 @@ paths:
                 $ref: "#/components/schemas/PaymentEnvelope"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
         "404":
           $ref: "#/components/responses/PaymentNotFound"
         "409":
@@ -171,7 +181,7 @@ paths:
         "502":
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
-          $ref: "#/components/responses/BankTimeout"
+          $ref: "#/components/responses/PaymentCommandTimeout"
   /v1/payments/{payment_id}/capture:
     post:
       tags:
@@ -196,6 +206,8 @@ paths:
                 $ref: "#/components/schemas/PaymentEnvelope"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
         "404":
           $ref: "#/components/responses/PaymentNotFound"
         "409":
@@ -205,7 +217,7 @@ paths:
         "502":
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
-          $ref: "#/components/responses/BankTimeout"
+          $ref: "#/components/responses/PaymentCommandTimeout"
   /v1/payments/{payment_id}/void:
     post:
       tags:
@@ -230,6 +242,8 @@ paths:
                 $ref: "#/components/schemas/PaymentEnvelope"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
         "404":
           $ref: "#/components/responses/PaymentNotFound"
         "409":
@@ -239,7 +253,7 @@ paths:
         "502":
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
-          $ref: "#/components/responses/BankTimeout"
+          $ref: "#/components/responses/PaymentCommandTimeout"
   /v1/payments/{payment_id}/refund:
     post:
       tags:
@@ -264,6 +278,8 @@ paths:
                 $ref: "#/components/schemas/PaymentEnvelope"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
+        "413":
+          $ref: "#/components/responses/RequestBodyTooLarge"
         "404":
           $ref: "#/components/responses/PaymentNotFound"
         "409":
@@ -273,7 +289,7 @@ paths:
         "502":
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
-          $ref: "#/components/responses/BankTimeout"
+          $ref: "#/components/responses/PaymentCommandTimeout"
 components:
   parameters:
     PaymentID:
@@ -316,6 +332,18 @@ components:
                 error:
                   code: invalid_json_body
                   message: invalid JSON body
+    RequestBodyTooLarge:
+      description: Request body exceeds the configured gateway limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            requestBodyTooLarge:
+              value:
+                error:
+                  code: request_body_too_large
+                  message: request body is too large
     UnsupportedMediaType:
       description: |
         JSON request endpoints require `Content-Type: application/json`.
@@ -412,8 +440,8 @@ components:
                 error:
                   code: bank_state_conflict
                   message: bank state conflicts with local payment state
-    BankTimeout:
-      description: Mock Bank request timed out.
+    PaymentCommandTimeout:
+      description: The Mock Bank request or the overall synchronous Payment command timed out. Retry with the same Idempotency Key; a timeout does not mean the Payment failed.
       content:
         application/json:
           schema:
@@ -424,6 +452,23 @@ components:
                 error:
                   code: bank_timeout
                   message: bank request timed out
+            paymentTimeout:
+              value:
+                error:
+                  code: payment_timeout
+                  message: payment command timed out; retry with the same idempotency key
+    PaymentReadTimeout:
+      description: The Payment read exceeded its request deadline.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            requestTimeout:
+              value:
+                error:
+                  code: request_timeout
+                  message: payment request timed out
   schemas:
     AuthorizePaymentRequest:
       type: object
@@ -605,6 +650,9 @@ components:
                 - bank_state_conflict
                 - bank_unavailable
                 - bank_timeout
+                - payment_timeout
+                - request_timeout
+                - request_body_too_large
                 - internal_server_error
                 - service_unavailable
               example: payment_not_found
