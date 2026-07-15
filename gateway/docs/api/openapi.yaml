@@ -441,7 +441,7 @@ components:
                   code: bank_state_conflict
                   message: bank state conflicts with local payment state
     PaymentCommandTimeout:
-      description: A timeout has one of two distinct outcomes: `bank_timeout` means the Mock Bank child budget expired while command time remained, and `payment_timeout` means the overall synchronous Payment command budget expired. Retry either with the same Idempotency Key; neither means the Payment failed.
+      description: "A timeout has one of two distinct outcomes: `bank_timeout` means the Mock Bank child budget expired while command time remained, and `payment_timeout` means the overall synchronous Payment command budget expired. Retry either with the same Idempotency Key; neither means the Payment failed."
       content:
         application/json:
           schema:
