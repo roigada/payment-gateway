@@ -74,39 +74,31 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 }
 
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.ContentLength > s.options.MaxRequestBodyBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
-		return
-	}
-	if r.Body != nil {
-		r.Body = http.MaxBytesReader(w, r.Body, s.options.MaxRequestBodyBytes)
-	}
 	s.handler.ServeHTTP(w, r)
 }
 
 func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	registerRoute := func(pattern string, handler http.HandlerFunc) {
+		_, route, ok := strings.Cut(pattern, " ")
+		if !ok {
+			panic("httpapi: route pattern must include a method")
+		}
+		mux.Handle(pattern, s.recordHTTPRequest(route, s.limitRequestBody(s.recoverPanic(handler))))
+	}
 
-	s.handle(mux, "GET /healthz", s.healthz)
-	s.handle(mux, "GET /readyz", s.readyz)
-	mux.Handle("GET /metrics", metricsHandler)
-	s.handle(mux, "GET /v1/payments", s.searchPayments)
-	s.handle(mux, "GET /v1/payments/{id}", s.getPayment)
-	s.handle(mux, "POST /v1/payments", s.authorizePayment)
-	s.handle(mux, "POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
-	s.handle(mux, "POST /v1/payments/{payment_id}/capture", s.capturePayment)
-	s.handle(mux, "POST /v1/payments/{payment_id}/void", s.voidPayment)
-	s.handle(mux, "POST /v1/payments/{payment_id}/refund", s.refundPayment)
+	registerRoute("GET /healthz", s.healthz)
+	registerRoute("GET /readyz", s.readyz)
+	mux.Handle("GET /metrics", s.limitRequestBody(metricsHandler))
+	registerRoute("GET /v1/payments", s.searchPayments)
+	registerRoute("GET /v1/payments/{id}", s.getPayment)
+	registerRoute("POST /v1/payments", s.authorizePayment)
+	registerRoute("POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
+	registerRoute("POST /v1/payments/{payment_id}/capture", s.capturePayment)
+	registerRoute("POST /v1/payments/{payment_id}/void", s.voidPayment)
+	registerRoute("POST /v1/payments/{payment_id}/refund", s.refundPayment)
 
 	return s.logRequest(mux)
-}
-
-func (s *Handler) handle(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
-	_, route, ok := strings.Cut(pattern, " ")
-	if !ok {
-		route = pattern
-	}
-	mux.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(handler)))
 }
 
 func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {

@@ -81,6 +81,19 @@ func (s *Handler) recordHTTPRequest(route string, next http.Handler) http.Handle
 	})
 }
 
+func (s *Handler) limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > s.options.MaxRequestBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, s.options.MaxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 type responseRecorder struct {
 	http.ResponseWriter
 	wroteHeader bool

@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -146,6 +147,95 @@ func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	assertErrorResponse(t, rec, "request_body_too_large", "request body is too large")
 	assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
+}
+
+func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
+	tests := []struct {
+		name    string
+		request func() *http.Request
+	}{
+		{
+			name: "declared content length",
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(oversizedJSONBody()))
+			},
+		},
+		{
+			name: "streamed body",
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/v1/payments", nil)
+				req.Body = io.NopCloser(strings.NewReader(oversizedJSONBody()))
+				req.ContentLength = -1
+				return req
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
+			req := tt.request()
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			api.handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "request_body_too_large", "request body is too large")
+			assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
+			require.Len(t, api.metrics.requests, 1)
+			assert.Equal(t, recordedHTTPRequest{
+				method: http.MethodPost,
+				route:  "/v1/payments",
+				status: http.StatusRequestEntityTooLarge,
+			}, api.metrics.requests[0].withoutDuration())
+
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
+			assert.Equal(t, "http request", entry["msg"])
+			assert.Equal(t, float64(http.StatusRequestEntityTooLarge), entry["status"])
+		})
+	}
+}
+
+func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{
+			name:   "unknown path",
+			method: http.MethodPost,
+			path:   "/unknown",
+			status: http.StatusNotFound,
+		},
+		{
+			name:   "unsupported method",
+			method: http.MethodPost,
+			path:   "/healthz",
+			status: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(oversizedJSONBody()))
+			rec := httptest.NewRecorder()
+
+			api.handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			assert.Empty(t, api.metrics.requests)
+		})
+	}
+}
+
+func oversizedJSONBody() string {
+	return `{"order_id":"` + strings.Repeat("x", int(testHandlerOptions().MaxRequestBodyBytes)+1) + `"}`
 }
 
 func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
