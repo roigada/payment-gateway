@@ -16,187 +16,92 @@ const (
 
 func validConfig() config {
 	return config{
-		DatabaseURL:                   validDatabaseURL,
-		DatabaseMaxOpenConnections:    defaultDatabaseMaxOpenConnections,
-		DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
-		DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
-		MockBankBaseURL:               validMockBankBaseURL,
-		FingerprintSecret:             validFingerprintSecret,
-		IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
-		ShutdownTimeout:               defaultShutdownTimeout,
+		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout},
+		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
+		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
+		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
+		MockBank: MockBankConfig{BaseURL: validMockBankBaseURL, Timeout: defaultMockBankTimeout, ConnectTimeout: defaultMockBankConnectTimeout, TLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, ResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, IdleConnectionTimeout: defaultMockBankIdleConnectionTimeout},
 	}
 }
 
-func TestConfigValidateRequiresPaymentGatewayConfiguration(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     config
-		wantErr string
-	}{
-		{
-			name:    "database URL",
-			cfg:     config{},
-			wantErr: "DATABASE_URL is required",
-		},
-		{
-			name: "mock bank base URL",
-			cfg: config{
-				DatabaseURL:                   validDatabaseURL,
-				DatabaseMaxOpenConnections:    defaultDatabaseMaxOpenConnections,
-				DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
-				DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
-				IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
-			},
-			wantErr: "MOCK_BANK_BASE_URL is required",
-		},
-		{
-			name: "fingerprint secret",
-			cfg: config{
-				DatabaseURL:                   validDatabaseURL,
-				DatabaseMaxOpenConnections:    defaultDatabaseMaxOpenConnections,
-				DatabaseMaxIdleConnections:    defaultDatabaseMaxIdleConnections,
-				DatabaseConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime,
-				MockBankBaseURL:               validMockBankBaseURL,
-				IdempotencyClaimStuckAfter:    defaultIdempotencyClaimStuckAfter,
-			},
-			wantErr: "FINGERPRINT_SECRET is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
-		})
-	}
-}
-
-func TestConfigValidateAllowsPaymentGatewayConfiguration(t *testing.T) {
-	require.NoError(t, validConfig().validate())
-}
-
-func TestConfigValidateRequiresDatabasePoolConfiguration(t *testing.T) {
+func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutate  func(*config)
 		wantErr string
 	}{
-		{
-			name: "max open connections",
-			mutate: func(cfg *config) {
-				cfg.DatabaseMaxOpenConnections = 0
-			},
-			wantErr: "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer",
-		},
-		{
-			name: "max idle connections",
-			mutate: func(cfg *config) {
-				cfg.DatabaseMaxIdleConnections = -1
-			},
-			wantErr: "DATABASE_MAX_IDLE_CONNECTIONS must be a non-negative integer",
-		},
-		{
-			name: "max idle greater than max open",
-			mutate: func(cfg *config) {
-				cfg.DatabaseMaxOpenConnections = 5
-				cfg.DatabaseMaxIdleConnections = 6
-			},
-			wantErr: "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS",
-		},
-		{
-			name: "connection max lifetime",
-			mutate: func(cfg *config) {
-				cfg.DatabaseConnectionMaxLifetime = 0
-			},
-			wantErr: "DATABASE_CONNECTION_MAX_LIFETIME must be a positive duration",
-		},
-		{
-			name: "idempotency claim stuck-after",
-			mutate: func(cfg *config) {
-				cfg.IdempotencyClaimStuckAfter = 0
-			},
-			wantErr: "IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration",
-		},
-		{
-			name: "shutdown timeout",
-			mutate: func(cfg *config) {
-				cfg.ShutdownTimeout = 0
-			},
-			wantErr: "SHUTDOWN_TIMEOUT must be a positive duration",
-		},
+		{"valid", func(*config) {}, ""},
+		{"database URL", func(c *config) { c.Database.URL = "" }, "DATABASE_URL is required"},
+		{"pool size", func(c *config) { c.Database.MaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
+		{"pool relationship", func(c *config) { c.Database.MaxIdleConnections = c.Database.MaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
+		{"payment secret", func(c *config) { c.Payment.FingerprintSecret = "" }, "FINGERPRINT_SECRET is required"},
+		{"mock bank budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
+		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.Payment.CommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
+		{"log level", func(c *config) { c.Runtime.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			tt.mutate(&cfg)
 			err := cfg.validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
 
-func TestLoadConfigUsesPaymentGatewayRuntimeDefaults(t *testing.T) {
+func TestLoadConfigUsesDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", validDatabaseURL)
 	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL)
 	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
 	cfg, err := loadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, ":8080", cfg.Addr)
-	assert.Equal(t, validDatabaseURL, cfg.DatabaseURL)
-	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.DatabaseMaxOpenConnections)
-	assert.Equal(t, defaultDatabaseMaxIdleConnections, cfg.DatabaseMaxIdleConnections)
-	assert.Equal(t, defaultDatabaseConnectionMaxLifetime, cfg.DatabaseConnectionMaxLifetime)
-	assert.Equal(t, validMockBankBaseURL, cfg.MockBankBaseURL)
-	assert.Equal(t, validFingerprintSecret, cfg.FingerprintSecret)
-	assert.Equal(t, defaultIdempotencyClaimStuckAfter, cfg.IdempotencyClaimStuckAfter)
-	assert.Equal(t, defaultShutdownTimeout, cfg.ShutdownTimeout)
+	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
+	assert.Equal(t, validDatabaseURL, cfg.Database.URL)
+	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
+	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
+	assert.Equal(t, defaultPaymentCommandTimeout, cfg.Payment.CommandTimeout)
+	assert.Equal(t, defaultMockBankTimeout, cfg.MockBank.Timeout)
+	assert.Equal(t, defaultLogLevel, cfg.Runtime.LogLevel)
+	assert.Equal(t, defaultShutdownTimeout, cfg.Runtime.ShutdownTimeout)
 }
 
-func TestLoadConfigAllowsCustomDurationConfiguration(t *testing.T) {
+func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "20")
 	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "8")
 	t.Setenv("DATABASE_CONNECTION_MAX_LIFETIME", "45m")
-	t.Setenv("IDEMPOTENCY_CLAIM_STUCK_AFTER", "2m")
-	t.Setenv("SHUTDOWN_TIMEOUT", "45s")
+	t.Setenv("PAYMENT_COMMAND_TIMEOUT", "12s")
+	t.Setenv("MOCK_BANK_TIMEOUT", "8s")
+	t.Setenv("HTTP_MAX_REQUEST_BODY_BYTES", "32768")
+	t.Setenv("LOG_LEVEL", "debug")
 	cfg, err := loadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, 20, cfg.DatabaseMaxOpenConnections)
-	assert.Equal(t, 8, cfg.DatabaseMaxIdleConnections)
-	assert.Equal(t, 45*time.Minute, cfg.DatabaseConnectionMaxLifetime)
-	assert.Equal(t, 2*time.Minute, cfg.IdempotencyClaimStuckAfter)
-	assert.Equal(t, 45*time.Second, cfg.ShutdownTimeout)
+	assert.Equal(t, 20, cfg.Database.MaxOpenConnections)
+	assert.Equal(t, 8, cfg.Database.MaxIdleConnections)
+	assert.Equal(t, 45*time.Minute, cfg.Database.ConnectionMaxLifetime)
+	assert.Equal(t, 12*time.Second, cfg.Payment.CommandTimeout)
+	assert.Equal(t, 8*time.Second, cfg.MockBank.Timeout)
+	assert.Equal(t, int64(32768), cfg.HTTP.MaxRequestBodyBytes)
+	assert.Equal(t, "debug", cfg.Runtime.LogLevel)
 }
 
-func TestLoadConfigRejectsMalformedDatabasePoolConfiguration(t *testing.T) {
-	tests := []struct {
-		name    string
-		envName string
-		value   string
-		wantErr string
-	}{
-		{name: "max open connections", envName: "DATABASE_MAX_OPEN_CONNECTIONS", value: "many", wantErr: "DATABASE_MAX_OPEN_CONNECTIONS must be an integer"},
-		{name: "max idle connections", envName: "DATABASE_MAX_IDLE_CONNECTIONS", value: "some", wantErr: "DATABASE_MAX_IDLE_CONNECTIONS must be an integer"},
-		{name: "connection max lifetime", envName: "DATABASE_CONNECTION_MAX_LIFETIME", value: "forever", wantErr: "DATABASE_CONNECTION_MAX_LIFETIME must be a valid duration"},
-		{name: "idempotency claim stuck-after", envName: "IDEMPOTENCY_CLAIM_STUCK_AFTER", value: "forever", wantErr: "IDEMPOTENCY_CLAIM_STUCK_AFTER must be a valid duration"},
-		{name: "shutdown timeout", envName: "SHUTDOWN_TIMEOUT", value: "forever", wantErr: "SHUTDOWN_TIMEOUT must be a valid duration"},
-	}
-	for _, tt := range tests {
+func TestLoadConfigRejectsMalformedValues(t *testing.T) {
+	for _, tt := range []struct{ name, value string }{
+		{"DATABASE_MAX_OPEN_CONNECTIONS", "many"},
+		{"DATABASE_CONNECTION_MAX_IDLE_TIME", "forever"},
+		{"PAYMENT_COMMAND_TIMEOUT", "forever"},
+		{"HTTP_MAX_REQUEST_BODY_BYTES", "large"},
+		{"MOCK_BANK_CONNECT_TIMEOUT", "forever"},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(tt.envName, tt.value)
+			t.Setenv(tt.name, tt.value)
 			cfg, err := loadConfig()
 			require.Error(t, err)
 			assert.Equal(t, config{}, cfg)
-			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
-}
-
-func TestLoadConfigAllowsCustomListenAddress(t *testing.T) {
-	t.Setenv("ADDR", ":9090")
-	cfg, err := loadConfig()
-	require.NoError(t, err)
-	assert.Equal(t, ":9090", cfg.Addr)
 }

@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,211 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 		}
 	}`, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
+func TestNewHandlerRequiresDependencies(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected string
+		new      func() (*httpapi.Handler, error)
+	}{
+		{
+			name:     "payment application",
+			expected: "httpapi handler: payment application is required",
+			new: func() (*httpapi.Handler, error) {
+				return httpapi.NewHandler(nil, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+			},
+		},
+		{
+			name:     "readiness checker",
+			expected: "httpapi handler: readiness checker is required",
+			new: func() (*httpapi.Handler, error) {
+				return httpapi.NewHandler(&paymentApplicationFake{}, nil, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+			},
+		},
+		{
+			name:     "logger",
+			expected: "httpapi handler: logger is required",
+			new: func() (*httpapi.Handler, error) {
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+			},
+		},
+		{
+			name:     "HTTP metrics recorder",
+			expected: "httpapi handler: HTTP metrics recorder is required",
+			new: func() (*httpapi.Handler, error) {
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), nil, http.NotFoundHandler(), testHandlerOptions())
+			},
+		},
+		{
+			name:     "metrics handler",
+			expected: "httpapi handler: metrics handler is required",
+			new: func() (*httpapi.Handler, error) {
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, testHandlerOptions())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, err := tt.new()
+
+			require.EqualError(t, err, tt.expected)
+			assert.Nil(t, handler)
+		})
+	}
+}
+
+func TestNewHandlerConstructsWithCompleteDependencies(t *testing.T) {
+	handler, err := httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+
+	require.NoError(t, err)
+	assert.NotNil(t, handler)
+}
+
+func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.T) {
+	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		<-ctx.Done()
+		return app.PaymentCommandResult{}, ctx.Err()
+	}}
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
+}
+
+func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
+	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		return app.PaymentCommandResult{}, nil
+	}}
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
+}
+
+func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
+	api := newPaymentAPITest(t)
+	rec := api.request(t, http.MethodPost, "/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
+		"Content-Type": "application/json",
+	})
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assertErrorResponse(t, rec, "request_body_too_large", "request body is too large")
+	assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
+}
+
+func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
+	tests := []struct {
+		name    string
+		request func() *http.Request
+	}{
+		{
+			name: "declared content length",
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(oversizedJSONBody()))
+			},
+		},
+		{
+			name: "streamed body",
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/v1/payments", nil)
+				req.Body = io.NopCloser(strings.NewReader(oversizedJSONBody()))
+				req.ContentLength = -1
+				return req
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
+			req := tt.request()
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			api.handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "request_body_too_large", "request body is too large")
+			assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
+			require.Len(t, api.metrics.requests, 1)
+			assert.Equal(t, recordedHTTPRequest{
+				method: http.MethodPost,
+				route:  "/v1/payments",
+				status: http.StatusRequestEntityTooLarge,
+			}, api.metrics.requests[0].withoutDuration())
+
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
+			assert.Equal(t, "http request", entry["msg"])
+			assert.Equal(t, float64(http.StatusRequestEntityTooLarge), entry["status"])
+		})
+	}
+}
+
+func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{
+			name:   "unknown path",
+			method: http.MethodPost,
+			path:   "/unknown",
+			status: http.StatusNotFound,
+		},
+		{
+			name:   "unsupported method",
+			method: http.MethodPost,
+			path:   "/healthz",
+			status: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(oversizedJSONBody()))
+			rec := httptest.NewRecorder()
+
+			api.handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			assert.Empty(t, api.metrics.requests)
+		})
+	}
+}
+
+func oversizedJSONBody() string {
+	return `{"order_id":"` + strings.Repeat("x", int(testHandlerOptions().MaxRequestBodyBytes)+1) + `"}`
+}
+
+func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
+	payments := &paymentApplicationFake{getPaymentFunc: func(ctx context.Context, _ app.GetPaymentQuery) (app.PaymentResult, error) {
+		<-ctx.Done()
+		return app.PaymentResult{}, ctx.Err()
+	}}
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Second, PaymentReadTimeout: time.Millisecond, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil))
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "request_timeout", "payment read timed out")
 }
 
 func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
@@ -570,7 +776,8 @@ func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	handler := httpapi.NewServer(payments, readiness, discardLogger(), metrics, metricsHandler)
+	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, metricsHandler, testHandlerOptions())
+	require.NoError(t, err)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -578,6 +785,20 @@ func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, "# metrics\n", rec.Body.String())
 	assert.Empty(t, metrics.requests)
+}
+
+type delayedReader struct {
+	io.Reader
+	Delay   time.Duration
+	delayed bool
+}
+
+func (r *delayedReader) Read(p []byte) (int, error) {
+	if !r.delayed {
+		r.delayed = true
+		time.Sleep(r.Delay)
+	}
+	return r.Reader.Read(p)
 }
 
 func validAuthorizeBody() string {
@@ -625,10 +846,13 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
 
+	handler, err := httpapi.NewHandler(payments, readiness, logger, metrics, http.NotFoundHandler(), testHandlerOptions())
+	require.NoError(t, err)
+
 	return &paymentAPITest{
 		payments:  payments,
 		readiness: readiness,
-		handler:   httpapi.NewServer(payments, readiness, logger, metrics, nil),
+		handler:   handler,
 		metrics:   metrics,
 	}
 }
@@ -679,6 +903,15 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func testHandlerOptions() httpapi.HandlerOptions {
+	return httpapi.HandlerOptions{
+		PaymentCommandTimeout: time.Second,
+		PaymentReadTimeout:    time.Second,
+		ReadinessTimeout:      time.Second,
+		MaxRequestBodyBytes:   64 * 1024,
+	}
+}
+
 type recordingHTTPMetrics struct {
 	requests []recordedHTTPRequest
 }
@@ -705,6 +938,7 @@ func (r recordedHTTPRequest) withoutDuration() recordedHTTPRequest {
 }
 
 type paymentApplicationFake struct {
+	authorizePaymentFunc      func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
 	authorizePaymentCommand   app.AuthorizePaymentCommand
 	authorizePaymentResult    app.PaymentResult
 	authorizePaymentErr       error
@@ -726,6 +960,7 @@ type paymentApplicationFake struct {
 	getPaymentQuery           app.GetPaymentQuery
 	getPaymentResult          app.PaymentResult
 	getPaymentErr             error
+	getPaymentFunc            func(context.Context, app.GetPaymentQuery) (app.PaymentResult, error)
 	searchPaymentsQuery       app.SearchPaymentsQuery
 	searchPaymentsResult      []app.PaymentResult
 	searchPaymentsErr         error
@@ -741,7 +976,10 @@ func (f *readinessCheckerFake) CheckReady(context.Context) error {
 	return f.err
 }
 
-func (f *paymentApplicationFake) AuthorizePayment(_ context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+	if f.authorizePaymentFunc != nil {
+		return f.authorizePaymentFunc(ctx, command)
+	}
 	if f.authorizePaymentPanic != nil {
 		panic(f.authorizePaymentPanic)
 	}
@@ -775,7 +1013,10 @@ func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.Re
 	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
 }
 
-func (f *paymentApplicationFake) GetPayment(_ context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+func (f *paymentApplicationFake) GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
+	if f.getPaymentFunc != nil {
+		return f.getPaymentFunc(ctx, query)
+	}
 	f.getPaymentQuery = query
 	return f.getPaymentResult, f.getPaymentErr
 }

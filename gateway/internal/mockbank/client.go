@@ -20,9 +20,14 @@ type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	metrics    metrics
+	timeout    time.Duration
 }
 
 func NewClient(baseURL string, httpClient *http.Client, metrics metrics) (*Client, error) {
+	return NewClientWithTimeout(baseURL, httpClient, metrics, 0)
+}
+
+func NewClientWithTimeout(baseURL string, httpClient *http.Client, metrics metrics, timeout time.Duration) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return nil, err
@@ -33,7 +38,14 @@ func NewClient(baseURL string, httpClient *http.Client, metrics metrics) (*Clien
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics}, nil
+	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics, timeout: timeout}, nil
+}
+
+func (c *Client) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.timeout)
 }
 
 type metrics interface {
@@ -41,6 +53,8 @@ type metrics interface {
 }
 
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
+	ctx, cancel := c.requestContext(ctx)
+	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
 	defer func() {
@@ -113,6 +127,8 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 }
 
 func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
+	ctx, cancel := c.requestContext(ctx)
+	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
 	defer func() {
@@ -185,6 +201,8 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 }
 
 func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
+	ctx, cancel := c.requestContext(ctx)
+	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
 	defer func() {
@@ -256,6 +274,8 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 }
 
 func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
+	ctx, cancel := c.requestContext(ctx)
+	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
 	defer func() {

@@ -134,12 +134,12 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func newMiddlewareTestServer() *Server {
+func newMiddlewareTestServer() *Handler {
 	return newMiddlewareTestServerWithLogger(discardLogger())
 }
 
-func newMiddlewareTestServerWithLogger(logger *slog.Logger) *Server {
-	return &Server{logger: logger}
+func newMiddlewareTestServerWithLogger(logger *slog.Logger) *Handler {
+	return &Handler{logger: logger}
 }
 
 func decodeLogEntry(t *testing.T, data []byte) map[string]any {

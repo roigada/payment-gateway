@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func (s *Server) recoverPanic(next http.Handler) http.Handler {
+func (s *Handler) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w}
 
@@ -36,7 +36,7 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) logRequest(next http.Handler) http.Handler {
+func (s *Handler) logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
@@ -66,22 +66,31 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) recordHTTPRequest(route string, next http.Handler) http.Handler {
+func (s *Handler) recordHTTPRequest(route string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		rec := &responseRecorder{ResponseWriter: w}
 
 		next.ServeHTTP(rec, r)
 
-		if s.metrics == nil {
-			return
-		}
-
 		status := rec.status
 		if status == 0 {
 			status = http.StatusOK
 		}
 		s.metrics.RecordHTTPRequest(r.Method, route, status, time.Since(startedAt))
+	})
+}
+
+func (s *Handler) limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > s.options.MaxRequestBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, s.options.MaxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

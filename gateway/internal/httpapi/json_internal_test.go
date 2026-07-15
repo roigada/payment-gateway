@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testMaxJSONBodyBytes int64 = 64 * 1024
+
 func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -40,7 +42,7 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 		},
 		{
 			name:     "oversized body",
-			body:     `{"order_id":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`,
+			body:     `{"order_id":"` + strings.Repeat("a", int(testMaxJSONBodyBytes)) + `"}`,
 			category: errOversizedJSONBody,
 		},
 		{
@@ -74,8 +76,23 @@ func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(`{"order_id":"order-1"}`))
 
 	assert.Panics(t, func() {
-		_ = decodeJSONRequest(rec, req, nil)
+		_ = decodeJSONRequest(rec, req, nil, testMaxJSONBodyBytes)
 	})
+}
+
+func TestDecodeJSONRequestUsesProvidedBodyLimit(t *testing.T) {
+	body := `{"order_id":"order-1"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(body))
+	var request struct {
+		OrderID string `json:"order_id"`
+	}
+
+	err := decodeJSONRequest(rec, req, &request, int64(len(body)-1))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInvalidJSONBody)
+	assert.ErrorIs(t, err, errOversizedJSONBody)
 }
 
 func TestRequireEmptyRequestBodyAcceptsAbsentOrEmptyBody(t *testing.T) {
@@ -134,7 +151,7 @@ func decodePaymentRequest(body string) error {
 	var request struct {
 		OrderID string `json:"order_id"`
 	}
-	return decodeJSONRequest(rec, req, &request)
+	return decodeJSONRequest(rec, req, &request, testMaxJSONBodyBytes)
 }
 
 func TestWriteJSONWritesStatusContentTypeAndBody(t *testing.T) {

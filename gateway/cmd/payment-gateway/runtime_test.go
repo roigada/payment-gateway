@@ -13,12 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
+func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	finish := make(chan struct{})
@@ -34,11 +35,11 @@ func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 		}
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	type requestResult struct {
 		response *http.Response
@@ -72,7 +73,7 @@ func TestRunHTTPServerDrainsStartedRequestAndChangesAvailability(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
 }
 
-func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
+func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	requestEnded := make(chan struct{})
@@ -83,11 +84,11 @@ func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
@@ -103,7 +104,7 @@ func TestRunHTTPServerForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown forced connections closed")
 }
 
-func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
+func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	requestEnded := make(chan struct{})
@@ -114,11 +115,11 @@ func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *test
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewServer(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil)
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 2)
 	result := make(chan error, 1)
 	go func() {
-		result <- runHTTPServer(listener, handler, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
@@ -134,6 +135,12 @@ func TestRunHTTPServerSecondSignalForceClosesRequestsBeforeDrainDeadline(t *test
 	assert.Contains(t, logs.String(), "payment-gateway shutdown force requested")
 }
 
+func TestServeUntilShutdownRequiresLogger(t *testing.T) {
+	err := serveUntilShutdown(nil, nil, nil, 0, nil, nil)
+
+	require.EqualError(t, err, "runtime logger is required")
+}
+
 type readinessCheckerFunc func(context.Context) error
 
 func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }
@@ -142,8 +149,50 @@ type runtimeHTTPMetricsFake struct{}
 
 func (runtimeHTTPMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
 
+type runtimePaymentApplicationFake struct{}
+
+func (runtimePaymentApplicationFake) AuthorizePayment(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) RetryAuthorization(context.Context, app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) CapturePayment(context.Context, app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) VoidPayment(context.Context, app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) RefundPayment(context.Context, app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) GetPayment(context.Context, app.GetPaymentQuery) (app.PaymentResult, error) {
+	return app.PaymentResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
+	return nil, nil
+}
+
+func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
+	t.Helper()
+
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, http.NotFoundHandler(), testRuntimeHandlerOptions())
+	require.NoError(t, err)
+	return handler
+}
+
 func discardRuntimeLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testRuntimeHandlerOptions() httpapi.HandlerOptions {
+	return validConfig().httpHandler().Options
 }
 func newTestListener(t *testing.T) net.Listener {
 	t.Helper()
