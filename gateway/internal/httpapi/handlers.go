@@ -29,6 +29,9 @@ const (
 )
 
 func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
+	r, cancel := s.commandRequest(r)
+	defer cancel()
+
 	if !isJSONRequest(r) {
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
@@ -87,6 +90,9 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
+	r, cancel := s.commandRequest(r)
+	defer cancel()
+
 	if !isJSONRequest(r) {
 		writeError(w, http.StatusUnsupportedMediaType, errorCodeUnsupportedMediaType, "content type must be application/json")
 		return
@@ -139,6 +145,9 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
+	r, cancel := s.commandRequest(r)
+	defer cancel()
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
@@ -171,6 +180,9 @@ func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
+	r, cancel := s.commandRequest(r)
+	defer cancel()
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
@@ -203,6 +215,9 @@ func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
+	r, cancel := s.commandRequest(r)
+	defer cancel()
+
 	if err := requireEmptyRequestBody(r); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")

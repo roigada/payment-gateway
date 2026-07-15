@@ -60,6 +60,22 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
+	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		return app.PaymentCommandResult{}, nil
+	}}
+	handler := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
+}
+
 func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
@@ -79,7 +95,7 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil))
 	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
-	assertErrorResponse(t, rec, "request_timeout", "payment request timed out")
+	assertErrorResponse(t, rec, "request_timeout", "payment read timed out")
 }
 
 func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
@@ -615,6 +631,20 @@ func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, "# metrics\n", rec.Body.String())
 	assert.Empty(t, metrics.requests)
+}
+
+type delayedReader struct {
+	io.Reader
+	Delay   time.Duration
+	delayed bool
+}
+
+func (r *delayedReader) Read(p []byte) (int, error) {
+	if !r.delayed {
+		r.delayed = true
+		time.Sleep(r.Delay)
+	}
+	return r.Reader.Read(p)
 }
 
 func validAuthorizeBody() string {
