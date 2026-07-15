@@ -73,10 +73,6 @@ func (s *Handler) recordHTTPRequest(route string, next http.Handler) http.Handle
 
 		next.ServeHTTP(rec, r)
 
-		if s.metrics == nil {
-			return
-		}
-
 		status := rec.status
 		if status == 0 {
 			status = http.StatusOK

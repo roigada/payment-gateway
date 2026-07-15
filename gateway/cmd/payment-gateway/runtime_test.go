@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing
 		}
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
@@ -83,7 +84,7 @@ func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
@@ -114,7 +115,7 @@ func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t 
 		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
-	handler := httpapi.NewHandler(nil, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, nil, testRuntimeHandlerOptions())
+	handler := newRuntimeHandler(t, readiness)
 	shutdownSignals := make(chan os.Signal, 2)
 	result := make(chan error, 1)
 	go func() {
@@ -134,6 +135,12 @@ func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t 
 	assert.Contains(t, logs.String(), "payment-gateway shutdown force requested")
 }
 
+func TestServeUntilShutdownRequiresLogger(t *testing.T) {
+	err := serveUntilShutdown(nil, nil, nil, 0, nil, nil)
+
+	require.EqualError(t, err, "runtime logger is required")
+}
+
 type readinessCheckerFunc func(context.Context) error
 
 func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }
@@ -141,6 +148,44 @@ func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(c
 type runtimeHTTPMetricsFake struct{}
 
 func (runtimeHTTPMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
+
+type runtimePaymentApplicationFake struct{}
+
+func (runtimePaymentApplicationFake) AuthorizePayment(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) RetryAuthorization(context.Context, app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) CapturePayment(context.Context, app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) VoidPayment(context.Context, app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) RefundPayment(context.Context, app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
+	return app.PaymentCommandResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) GetPayment(context.Context, app.GetPaymentQuery) (app.PaymentResult, error) {
+	return app.PaymentResult{}, nil
+}
+
+func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
+	return nil, nil
+}
+
+func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
+	t.Helper()
+
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, http.NotFoundHandler(), testRuntimeHandlerOptions())
+	require.NoError(t, err)
+	return handler
+}
 
 func discardRuntimeLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

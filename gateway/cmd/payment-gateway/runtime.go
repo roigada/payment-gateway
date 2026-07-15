@@ -95,7 +95,7 @@ func buildHTTPHandler(db *sql.DB, readiness readinessChecker, logger *slog.Logge
 
 	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
-	return httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, metricsHandler, cfg.Options), nil
+	return httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, metricsHandler, cfg.Options)
 }
 
 func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {
@@ -131,7 +131,7 @@ func (r *shutdownReadiness) beginDrain() {
 
 func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
 	if logger == nil {
-		logger = slog.Default()
+		return errors.New("runtime logger is required")
 	}
 
 	serveResult := make(chan error, 1)

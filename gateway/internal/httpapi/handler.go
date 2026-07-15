@@ -45,9 +45,21 @@ type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options HandlerOptions) *Handler {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options HandlerOptions) (*Handler, error) {
+	if payments == nil {
+		return nil, errors.New("httpapi handler: payment application is required")
+	}
+	if readiness == nil {
+		return nil, errors.New("httpapi handler: readiness checker is required")
+	}
 	if logger == nil {
-		logger = slog.Default()
+		return nil, errors.New("httpapi handler: logger is required")
+	}
+	if metrics == nil {
+		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
+	}
+	if metricsHandler == nil {
+		return nil, errors.New("httpapi handler: metrics handler is required")
 	}
 
 	handler := &Handler{
@@ -58,7 +70,7 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 		options:   options,
 	}
 	handler.handler = handler.routes(metricsHandler)
-	return handler
+	return handler, nil
 }
 
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +89,7 @@ func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
 
 	s.handle(mux, "GET /healthz", s.healthz)
 	s.handle(mux, "GET /readyz", s.readyz)
-	if metricsHandler != nil {
-		mux.Handle("GET /metrics", metricsHandler)
-	}
+	mux.Handle("GET /metrics", metricsHandler)
 	s.handle(mux, "GET /v1/payments", s.searchPayments)
 	s.handle(mux, "GET /v1/payments/{id}", s.getPayment)
 	s.handle(mux, "POST /v1/payments", s.authorizePayment)
@@ -104,10 +114,6 @@ func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
-	if s.readiness == nil {
-		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.options.ReadinessTimeout)
 	defer cancel()
 	if err := s.readiness.CheckReady(ctx); err != nil {
