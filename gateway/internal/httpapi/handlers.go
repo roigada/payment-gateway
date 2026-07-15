@@ -48,7 +48,7 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return
@@ -106,7 +106,7 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return

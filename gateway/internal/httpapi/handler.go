@@ -27,8 +27,6 @@ type HandlerOptions struct {
 	MaxRequestBodyBytes   int64
 }
 
-type requestBodyLimitContextKey struct{}
-
 type paymentApplication interface {
 	AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
 	RetryAuthorization(ctx context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error)
@@ -70,7 +68,6 @@ func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, s.options.MaxRequestBodyBytes)
-		r = r.WithContext(context.WithValue(r.Context(), requestBodyLimitContextKey{}, s.options.MaxRequestBodyBytes))
 	}
 	s.handler.ServeHTTP(w, r)
 }

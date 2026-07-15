@@ -9,10 +9,7 @@ import (
 	"strings"
 )
 
-const (
-	invalidJSONBodyMessage = "invalid JSON body"
-	maxJSONBodyBytes       = 64 * 1024
-)
+const invalidJSONBodyMessage = "invalid JSON body"
 
 var (
 	errInvalidJSONBody    = errors.New("invalid JSON body")
@@ -43,11 +40,7 @@ func requireEmptyRequestBody(r *http.Request) error {
 	return err
 }
 
-func decodeJSONRequest(w http.ResponseWriter, r *http.Request, body any) error {
-	limit := int64(maxJSONBodyBytes)
-	if configuredLimit, ok := r.Context().Value(requestBodyLimitContextKey{}).(int64); ok {
-		limit = configuredLimit
-	}
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, body any, limit int64) error {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 
 	decoder := json.NewDecoder(r.Body)
