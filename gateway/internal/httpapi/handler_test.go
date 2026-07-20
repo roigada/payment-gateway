@@ -122,6 +122,24 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
+	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		<-ctx.Done()
+		return app.PaymentCommandResult{}, app.NewPaymentBankTimeoutError(ctx.Err())
+	}}
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
+}
+
 func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		return app.PaymentCommandResult{}, nil
