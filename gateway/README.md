@@ -232,7 +232,7 @@ Payment operation `operation` labels use gateway command names: `authorize_payme
 
 Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.
 
-`payment_gateway_mock_bank_retries_total` records authorization retry outcomes with bounded `operation` and `result` labels. Its results are `attempted`, `succeeded`, and `exhausted`; the existing Mock Bank request metrics record each physical attempt.
+`payment_gateway_mock_bank_retries_total` records bounded retry outcomes for authorization, capture, void, and refund with `operation` and `result` labels. Its results are `attempted`, `succeeded`, and `exhausted`; the existing Mock Bank request metrics record each physical attempt.
 
 Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
 
