@@ -59,23 +59,9 @@ type metrics interface {
 }
 
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
-	result, err := c.authorizePaymentAttempt(ctx, request, c.initialAttemptTimeout())
-	if err == nil || !isRetryablePaymentError(err) || c.config.RetryDelay <= 0 || c.config.RetryAttemptTimeout <= 0 {
-		return result, err
-	}
-
-	c.recordRetry("authorize", "attempted")
-	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
-		return app.BankAuthorizationResult{}, retryWaitError(err)
-	}
-
-	result, err = c.authorizePaymentAttempt(ctx, request, c.config.RetryAttemptTimeout)
-	if err != nil {
-		c.recordRetry("authorize", "exhausted")
-		return app.BankAuthorizationResult{}, err
-	}
-	c.recordRetry("authorize", "succeeded")
-	return result, nil
+	return retryTransient(c, ctx, "authorize", func(ctx context.Context, timeout time.Duration) (app.BankAuthorizationResult, error) {
+		return c.authorizePaymentAttempt(ctx, request, timeout)
+	})
 }
 
 func (c *Client) initialAttemptTimeout() time.Duration {
@@ -160,7 +146,13 @@ func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAu
 }
 
 func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
-	ctx, cancel := requestContext(ctx, c.config.Timeout)
+	return retryTransient(c, ctx, "capture", func(ctx context.Context, timeout time.Duration) (app.BankCaptureResult, error) {
+		return c.capturePaymentAttempt(ctx, request, timeout)
+	})
+}
+
+func (c *Client) capturePaymentAttempt(ctx context.Context, request app.BankCaptureRequest, timeout time.Duration) (app.BankCaptureResult, error) {
+	ctx, cancel := requestContext(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -234,7 +226,13 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 }
 
 func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
-	ctx, cancel := requestContext(ctx, c.config.Timeout)
+	return retryTransient(c, ctx, "void", func(ctx context.Context, timeout time.Duration) (app.BankVoidResult, error) {
+		return c.voidPaymentAttempt(ctx, request, timeout)
+	})
+}
+
+func (c *Client) voidPaymentAttempt(ctx context.Context, request app.BankVoidRequest, timeout time.Duration) (app.BankVoidResult, error) {
+	ctx, cancel := requestContext(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -307,7 +305,13 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 }
 
 func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
-	ctx, cancel := requestContext(ctx, c.config.Timeout)
+	return retryTransient(c, ctx, "refund", func(ctx context.Context, timeout time.Duration) (app.BankRefundResult, error) {
+		return c.refundPaymentAttempt(ctx, request, timeout)
+	})
+}
+
+func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefundRequest, timeout time.Duration) (app.BankRefundResult, error) {
+	ctx, cancel := requestContext(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -388,6 +392,28 @@ func (c *Client) recordRetry(operation string, result string) {
 		return
 	}
 	c.metrics.RecordMockBankRetry(operation, result)
+}
+
+func retryTransient[T any](c *Client, ctx context.Context, operation string, attempt func(context.Context, time.Duration) (T, error)) (T, error) {
+	result, err := attempt(ctx, c.initialAttemptTimeout())
+	if err == nil || !isRetryablePaymentError(err) || c.config.RetryDelay <= 0 || c.config.RetryAttemptTimeout <= 0 {
+		return result, err
+	}
+
+	c.recordRetry(operation, "attempted")
+	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
+		var zero T
+		return zero, retryWaitError(err)
+	}
+
+	result, err = attempt(ctx, c.config.RetryAttemptTimeout)
+	if err != nil {
+		c.recordRetry(operation, "exhausted")
+		var zero T
+		return zero, err
+	}
+	c.recordRetry(operation, "succeeded")
+	return result, nil
 }
 
 func isRetryablePaymentError(err error) bool {
