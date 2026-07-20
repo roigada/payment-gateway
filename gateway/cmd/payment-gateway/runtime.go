@@ -33,10 +33,21 @@ func run(cfg config, logger *slog.Logger) error {
 	defer db.Close()
 
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
-	handler, err := buildHTTPHandler(db, readiness, logger, cfg.httpHandler())
+	paymentStore := postgres.NewPaymentStore(db)
+	handler, err := buildHTTPHandler(db, paymentStore, readiness, logger, cfg.httpHandler())
 	if err != nil {
 		return err
 	}
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, idempotencyReplayCleanupInterval)
+	}()
+	defer func() {
+		cancelCleanup()
+		<-cleanupDone
+	}()
 
 	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
 	if err != nil {
@@ -52,9 +63,8 @@ func run(cfg config, logger *slog.Logger) error {
 	return serveUntilShutdown(listener, newHTTPServer(handler, cfg.HTTP), readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
 }
 
-func buildHTTPHandler(db *sql.DB, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (http.Handler, error) {
+func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (http.Handler, error) {
 	metricsRegistry := observability.NewRegistry()
-	paymentStore := postgres.NewPaymentStore(db)
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
 		return nil, err
@@ -100,7 +110,11 @@ func buildHTTPHandler(db *sql.DB, readiness readinessChecker, logger *slog.Logge
 
 	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
-	return httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, metricsHandler, cfg.Options)
+	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, metricsHandler, cfg.Options)
+	if err != nil {
+		return nil, err
+	}
+	return handler, nil
 }
 
 func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {

@@ -64,6 +64,45 @@ func TestAuthorizePaymentCallsBankStoresAuthorizedPaymentAndReturnsPublicResult(
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
+func TestAuthorizePaymentReplaysBeforeRetentionCutoffAndStartsNewCommandAfterCleanup(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	firstBank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
+	firstService := newPaymentService(repo, firstBank, now)
+
+	first, err := firstService.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+
+	removed, err := repo.CleanupCompletedIdempotencyRecords(context.Background(), now)
+	require.NoError(t, err)
+	assert.Zero(t, removed)
+	replayed, err := firstService.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	assert.Equal(t, first, replayed)
+	assert.Equal(t, 1, firstBank.calls)
+
+	removed, err = repo.CleanupCompletedIdempotencyRecords(context.Background(), now.Add(time.Microsecond))
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+
+	secondBank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-2"}}
+	secondService := app.NewPaymentService(
+		repo,
+		testsupport.FixedPaymentIDGenerator{ID: domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001")},
+		testsupport.FixedBankOperationKeyGenerator{Key: "bok_124"},
+		secondBank,
+		&paymentOperationMetricsFake{},
+		testsupport.FixedClock{Time: now.Add(time.Microsecond)},
+		"fingerprint-secret",
+		app.DefaultIdempotencyClaimStuckAfter,
+	)
+
+	second, err := secondService.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440001", second.Payment.ID)
+	assert.Equal(t, 1, secondBank.calls)
+}
+
 func TestAuthorizePaymentPersistsPendingPaymentBeforeCallingBank(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)

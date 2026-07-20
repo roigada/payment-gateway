@@ -542,7 +542,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, payment, claimed.Payment())
 	require.NoError(t, payment.MarkDeclined(domain.DeclineReasonInvalidCard, now))
-	require.NoError(t, store.CompletePaymentCommand(ctx, claimed, result))
+	require.NoError(t, store.CompletePaymentCommand(ctx, claimed, result, now.Add(time.Minute)))
 
 	saved, err := store.ClaimPaymentCommand(ctx, request)
 	require.NoError(t, err)
@@ -572,6 +572,59 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	missing, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("missing-key", "fingerprint-1", missingPayment, now, app.DefaultIdempotencyClaimStuckAfter))
 	require.NoError(t, err)
 	assert.Same(t, missingPayment, missing.Payment())
+}
+
+func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
+	completedAt := now.Add(time.Minute)
+	payment := newStorePayment(t, 90, "order-1", "customer-1", domain.PaymentStatusPending, now)
+	request := app.NewAuthorizationStartClaim("completed-key", "fingerprint-1", payment, now, app.DefaultIdempotencyClaimStuckAfter)
+	claim, err := store.ClaimPaymentCommand(ctx, request)
+	require.NoError(t, err)
+	require.NoError(t, claim.Payment().MarkDeclined(domain.DeclineReasonInvalidCard, completedAt))
+	require.NoError(t, store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 201), completedAt))
+
+	var (
+		status      string
+		paymentData []byte
+		storedAt    time.Time
+	)
+	err = db.QueryRowContext(ctx, `SELECT status, payment_result, completed_at FROM idempotency_records WHERE operation = $1 AND key = $2`, app.AuthorizePaymentOperation, "completed-key").Scan(&status, &paymentData, &storedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status)
+	assert.NotEmpty(t, paymentData)
+	assert.True(t, storedAt.Equal(completedAt), "completed_at = %s, want %s", storedAt, completedAt)
+
+	inProgressPayment := newStorePayment(t, 91, "order-2", "customer-1", domain.PaymentStatusPending, now)
+	insertPaymentFixture(t, db, inProgressPayment)
+	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "in-progress-key", "fingerprint-2", inProgressPayment.ID(), now.Add(-48*time.Hour))
+
+	removed, err := store.CleanupCompletedIdempotencyRecords(ctx, completedAt)
+	require.NoError(t, err)
+	assert.Zero(t, removed)
+	_, err = store.ClaimPaymentCommand(ctx, request)
+	require.NoError(t, err)
+
+	removed, err = store.CleanupCompletedIdempotencyRecords(ctx, completedAt.Add(time.Microsecond))
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+
+	replacement := newStorePayment(t, 92, "order-3", "customer-1", domain.PaymentStatusPending, now)
+	newClaim, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("completed-key", "fingerprint-3", replacement, now, app.DefaultIdempotencyClaimStuckAfter))
+	require.NoError(t, err)
+	assert.Same(t, replacement, newClaim.Payment())
+
+	var inProgressCount int
+	err = db.QueryRowContext(ctx, `SELECT count(*) FROM idempotency_records WHERE operation = $1 AND key = $2 AND status = 'in_progress'`, app.AuthorizePaymentOperation, "in-progress-key").Scan(&inProgressCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inProgressCount)
 }
 
 func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
@@ -625,7 +678,7 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 
 	require.NoError(t, claim.Payment().MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now))
 	result := newStorePaymentCommandResult(claim.Payment(), 201)
-	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result))
+	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result, now.Add(time.Minute)))
 
 	replayed, err := store.ClaimPaymentCommand(ctx, request)
 	require.NoError(t, err)
@@ -1053,7 +1106,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "authorize_payment", "public-key-1")
 	require.NoError(t, err)
 
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201), now.Add(2*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -1083,7 +1136,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "capture_payment", "public-capture-key-1")
 	require.NoError(t, err)
 
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 200))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 200), now.Add(2*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -1215,7 +1268,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 
 	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, app.DefaultIdempotencyClaimStuckAfter)
 	claim := app.NewClaimedPaymentCommand(request, payment)
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201), now.Add(time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -1441,6 +1494,7 @@ func newTestDatabase(t *testing.T) *sql.DB {
 		tcpostgres.WithPassword("payment_gateway"),
 		tcpostgres.WithInitScripts(
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
+			filepath.Join("..", "..", "migrations", "000002_add_idempotency_completion_time.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)

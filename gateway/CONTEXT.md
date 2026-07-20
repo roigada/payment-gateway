@@ -128,6 +128,10 @@ _Avoid_: Request ID, correlation ID
 The gateway response to a repeated payment command that uses the same **Idempotency Key** and the same request values as an already completed command.
 _Avoid_: Duplicate operation, cached request
 
+**Idempotency Replay Window**:
+The 24-hour period after a payment command completes during which the gateway guarantees an **Idempotency Replay** for the same operation, **Idempotency Key**, and request values. After this window, the same key may initiate a new payment command.
+_Avoid_: Cache TTL, key lifetime, deduplication window
+
 **Stuck Idempotency Claim**:
 A public idempotency record still marked in progress long enough that the gateway treats the original command attempt as no longer active and may let the same operation, same **Idempotency Key**, and same request values continue recovery.
 _Avoid_: Expired claim, stale payment, timeout

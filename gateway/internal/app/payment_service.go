@@ -126,8 +126,9 @@ type PaymentStore interface {
 	FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error)
 	Search(ctx context.Context, query SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error)
 	ClaimPaymentCommand(ctx context.Context, request PaymentCommandClaimRequest) (PaymentCommandClaim, error)
-	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult) error
+	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult, completedAt time.Time) error
 	ReleasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) error
+	CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error)
 }
 
 type PaymentCommandClaimRequest struct {
@@ -685,7 +686,7 @@ func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPayment
 }
 
 func (s *PaymentService) completePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult) error {
-	return ensurePaymentError(s.store.CompletePaymentCommand(ctx, claim, result))
+	return ensurePaymentError(s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()))
 }
 
 func (s *PaymentService) releasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) {
