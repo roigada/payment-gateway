@@ -88,7 +88,12 @@ func buildHTTPHandler(db *sql.DB, readiness readinessChecker, logger *slog.Logge
 		ResponseHeaderTimeout: cfg.MockBank.ResponseHeaderTimeout,
 		IdleConnTimeout:       cfg.MockBank.IdleConnectionTimeout,
 	}
-	mockBank, err := mockbank.NewClientWithTimeout(cfg.MockBank.BaseURL, &http.Client{Transport: transport}, mockBankMetrics, cfg.MockBank.Timeout)
+	mockBank, err := mockbank.NewClient(cfg.MockBank.BaseURL, &http.Client{Transport: transport}, mockBankMetrics, mockbank.ClientConfig{
+		Timeout:               cfg.MockBank.Timeout,
+		InitialAttemptTimeout: cfg.MockBank.InitialAttemptTimeout,
+		RetryDelay:            cfg.MockBank.RetryDelay,
+		RetryAttemptTimeout:   cfg.MockBank.RetryAttemptTimeout,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +138,9 @@ func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *s
 	if logger == nil {
 		return errors.New("runtime logger is required")
 	}
+	requestWork, cancelRequestWork := context.WithCancel(context.Background())
+	defer cancelRequestWork()
+	server.BaseContext = func(net.Listener) context.Context { return requestWork }
 
 	serveResult := make(chan error, 1)
 	go func() {
@@ -151,6 +159,7 @@ func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *s
 	}
 
 	readiness.beginDrain()
+	cancelRequestWork()
 	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

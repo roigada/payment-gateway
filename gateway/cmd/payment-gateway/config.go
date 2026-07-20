@@ -23,7 +23,11 @@ const (
 	defaultPaymentCommandTimeout               = 10 * time.Second
 	defaultPaymentReadTimeout                  = 3 * time.Second
 	readinessCheckTimeout                      = 2 * time.Second
+	defaultMockBankInitialAttemptTimeout       = 2 * time.Second
+	defaultMockBankRetryDelay                  = 250 * time.Millisecond
+	defaultMockBankRetryAttemptTimeout         = 5 * time.Second
 	defaultMockBankTimeout                     = 7 * time.Second
+	paymentCommandCompletionReserve            = time.Second
 	defaultHTTPReadHeaderTimeout               = 5 * time.Second
 	defaultHTTPAddr                            = ":8080"
 	defaultHTTPReadTimeout                     = 15 * time.Second
@@ -77,6 +81,9 @@ type PaymentConfig struct {
 type MockBankConfig struct {
 	BaseURL               string
 	Timeout               time.Duration
+	InitialAttemptTimeout time.Duration
+	RetryDelay            time.Duration
+	RetryAttemptTimeout   time.Duration
 	ConnectTimeout        time.Duration
 	TLSHandshakeTimeout   time.Duration
 	ResponseHeaderTimeout time.Duration
@@ -145,6 +152,18 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	mockBankInitialAttemptTimeout, err := envDuration("MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT", defaultMockBankInitialAttemptTimeout)
+	if err != nil {
+		return config{}, err
+	}
+	mockBankRetryDelay, err := envDuration("MOCK_BANK_RETRY_DELAY", defaultMockBankRetryDelay)
+	if err != nil {
+		return config{}, err
+	}
+	mockBankRetryAttemptTimeout, err := envDuration("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT", defaultMockBankRetryAttemptTimeout)
+	if err != nil {
+		return config{}, err
+	}
 	mockBankTimeout, err := envDuration("MOCK_BANK_TIMEOUT", defaultMockBankTimeout)
 	if err != nil {
 		return config{}, err
@@ -195,7 +214,7 @@ func loadConfig() (config, error) {
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
-		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
+		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, InitialAttemptTimeout: mockBankInitialAttemptTimeout, RetryDelay: mockBankRetryDelay, RetryAttemptTimeout: mockBankRetryAttemptTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
 	}
 	return cfg, nil
 }
@@ -243,11 +262,23 @@ func (cfg config) validate() error {
 	if cfg.Payment.ReadTimeout <= 0 {
 		return fmt.Errorf("PAYMENT_READ_TIMEOUT must be a positive duration")
 	}
+	if cfg.MockBank.InitialAttemptTimeout <= 0 {
+		return fmt.Errorf("MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration")
+	}
 	if cfg.MockBank.Timeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_TIMEOUT must be a positive duration")
 	}
 	if cfg.MockBank.Timeout >= cfg.Payment.CommandTimeout {
 		return fmt.Errorf("MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT")
+	}
+	if cfg.MockBank.RetryDelay <= 0 {
+		return fmt.Errorf("MOCK_BANK_RETRY_DELAY must be a positive duration")
+	}
+	if cfg.MockBank.RetryAttemptTimeout <= 0 {
+		return fmt.Errorf("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration")
+	}
+	if cfg.MockBank.InitialAttemptTimeout+cfg.MockBank.RetryDelay+cfg.MockBank.RetryAttemptTimeout+paymentCommandCompletionReserve >= cfg.Payment.CommandTimeout {
+		return fmt.Errorf("Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT to persist the final payment outcome")
 	}
 	if cfg.HTTP.ReadHeaderTimeout <= 0 {
 		return fmt.Errorf("HTTP_READ_HEADER_TIMEOUT must be a positive duration")

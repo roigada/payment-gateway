@@ -36,3 +36,17 @@ func TestMockBankMetricsRecordsRequestCountAndDuration(t *testing.T) {
 		"result":    "state_conflict",
 	})
 }
+
+func TestMockBankMetricsRecordsRetryOutcomes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMockBankMetrics(registry)
+	require.NoError(t, err)
+
+	metrics.RecordMockBankRetry("authorize", "attempted")
+	metrics.RecordMockBankRetry("authorize", "succeeded")
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	retries := metricFamilyByName(t, families, "payment_gateway_mock_bank_retries_total")
+	require.Len(t, retries.GetMetric(), 2)
+}
