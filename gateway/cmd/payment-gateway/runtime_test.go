@@ -35,7 +35,7 @@ func TestServeUntilShutdownCancelsStartedRequestAndChangesAvailability(t *testin
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)), nil)
 	}()
 	type requestResult struct {
 		response *http.Response
@@ -83,7 +83,7 @@ func TestServeUntilShutdownCancelsActiveRequestsDuringDrain(t *testing.T) {
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
-		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, 10*time.Millisecond, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)), nil)
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
@@ -113,7 +113,7 @@ func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t 
 	shutdownSignals := make(chan os.Signal, 2)
 	result := make(chan error, 1)
 	go func() {
-		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		result <- serveUntilShutdown(listener, &http.Server{Handler: handler}, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)), nil)
 	}()
 	go func() {
 		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
@@ -130,33 +130,86 @@ func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t 
 }
 
 func TestServeUntilShutdownRequiresLogger(t *testing.T) {
-	err := serveUntilShutdown(nil, nil, nil, 0, nil, nil)
+	err := serveUntilShutdown(nil, nil, nil, 0, nil, nil, nil)
 
 	require.EqualError(t, err, "runtime logger is required")
 }
 
-func TestRunIdempotencyReplayCleanupUsesReplayWindowAndStopsWithContext(t *testing.T) {
+func TestRunIdempotencyReplayCleanupUsesReplayWindowRecordsOutcomesAndStopsWithContext(t *testing.T) {
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
-	cutoffs := make(chan time.Time, 1)
+	cutoffs := make(chan time.Time, 3)
+	cleanupCalls := 0
 	store := cleanupPaymentStore{
 		PaymentStore: testsupport.NewPaymentStore(),
 		cleanup: func(_ context.Context, completedBefore time.Time) (int, error) {
 			cutoffs <- completedBefore
-			return 3, nil
+			cleanupCalls++
+			switch cleanupCalls {
+			case 1:
+				return 0, assert.AnError
+			case 2:
+				return 0, nil
+			default:
+				return 3, nil
+			}
 		},
 	}
 	logs := &bytes.Buffer{}
 	ctx, cancel := context.WithCancel(context.Background())
+	ticker := &cleanupTickerFake{ticks: make(chan time.Time, 3)}
+	metrics := &cleanupMetricsFake{}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runIdempotencyReplayCleanup(ctx, store, testsupport.FixedClock{Time: now}, slog.New(slog.NewJSONHandler(logs, nil)), time.Millisecond)
+		runIdempotencyReplayCleanup(ctx, store, testsupport.FixedClock{Time: now}, slog.New(slog.NewJSONHandler(logs, nil)), metrics, defaultIdempotencyReplayWindow, ticker)
 	}()
 
-	assert.Equal(t, now.Add(-idempotencyReplayWindow), requireReceive(t, cutoffs))
+	ticker.ticks <- now
+	ticker.ticks <- now
+	ticker.ticks <- now
+	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
+	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
+	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
 	cancel()
 	requireReceive(t, done)
+	assert.True(t, ticker.stopped)
+	assert.Equal(t, []cleanupMetricCall{{result: idempotencyReplayCleanupFailed}, {result: idempotencyReplayCleanupEmpty}, {result: idempotencyReplayCleanupCompleted, removed: 3}}, metrics.calls)
+	assert.Contains(t, logs.String(), "idempotency replay cleanup failed")
 	assert.Contains(t, logs.String(), "idempotency replay cleanup completed")
+	assert.NotContains(t, logs.String(), assert.AnError.Error())
+}
+
+func TestServeUntilShutdownCancelsIdempotencyReplayCleanupAtDrainStart(t *testing.T) {
+	listener := newTestListener(t)
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	defer cancelCleanup()
+	cleanupStarted := make(chan struct{})
+	cleanupCanceled := make(chan struct{})
+	ticker := &cleanupTickerFake{ticks: make(chan time.Time, 1)}
+	store := cleanupPaymentStore{PaymentStore: testsupport.NewPaymentStore(), cleanup: func(ctx context.Context, _ time.Time) (int, error) {
+		close(cleanupStarted)
+		<-ctx.Done()
+		close(cleanupCanceled)
+		return 0, ctx.Err()
+	}}
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		runIdempotencyReplayCleanup(cleanupCtx, store, testsupport.FixedClock{}, discardRuntimeLogger(), &cleanupMetricsFake{}, defaultIdempotencyReplayWindow, ticker)
+	}()
+	ticker.ticks <- time.Now()
+	requireReceive(t, cleanupStarted)
+
+	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
+	shutdownSignals := make(chan os.Signal, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- serveUntilShutdown(listener, &http.Server{Handler: newRuntimeHandler(t, readiness)}, readiness, time.Second, shutdownSignals, discardRuntimeLogger(), cancelCleanup)
+	}()
+	shutdownSignals <- syscall.SIGTERM
+	requireReceive(t, cleanupCanceled)
+	requireReceive(t, cleanupDone)
+	require.NoError(t, <-result)
 }
 
 type readinessCheckerFunc func(context.Context) error
@@ -170,6 +223,25 @@ type cleanupPaymentStore struct {
 
 func (s cleanupPaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error) {
 	return s.cleanup(ctx, completedBefore)
+}
+
+type cleanupTickerFake struct {
+	ticks   chan time.Time
+	stopped bool
+}
+
+func (t *cleanupTickerFake) Chan() <-chan time.Time { return t.ticks }
+func (t *cleanupTickerFake) Stop()                  { t.stopped = true }
+
+type cleanupMetricCall struct {
+	result  string
+	removed int
+}
+
+type cleanupMetricsFake struct{ calls []cleanupMetricCall }
+
+func (m *cleanupMetricsFake) RecordIdempotencyReplayCleanup(result string, removed int) {
+	m.calls = append(m.calls, cleanupMetricCall{result: result, removed: removed})
 }
 
 type runtimeHTTPMetricsFake struct{}

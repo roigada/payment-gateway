@@ -16,7 +16,7 @@ const (
 
 func validConfig() config {
 	return config{
-		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout},
+		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout, IdempotencyReplayWindow: defaultIdempotencyReplayWindow, IdempotencyReplayCleanupInterval: defaultIdempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
@@ -43,6 +43,8 @@ func TestConfigValidate(t *testing.T) {
 		{"mock bank retry budget", func(c *config) { c.MockBank.RetryAttemptTimeout = c.Payment.CommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
 		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.Payment.CommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"log level", func(c *config) { c.Runtime.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
+		{"idempotency replay window", func(c *config) { c.Runtime.IdempotencyReplayWindow = 0 }, "IDEMPOTENCY_REPLAY_WINDOW must be a positive duration"},
+		{"idempotency replay cleanup interval", func(c *config) { c.Runtime.IdempotencyReplayCleanupInterval = 0 }, "IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,6 +77,8 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultMockBankRetryAttemptTimeout, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, defaultLogLevel, cfg.Runtime.LogLevel)
 	assert.Equal(t, defaultShutdownTimeout, cfg.Runtime.ShutdownTimeout)
+	assert.Equal(t, defaultIdempotencyReplayWindow, cfg.Runtime.IdempotencyReplayWindow)
+	assert.Equal(t, defaultIdempotencyReplayCleanupInterval, cfg.Runtime.IdempotencyReplayCleanupInterval)
 }
 
 func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
@@ -87,6 +91,8 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	t.Setenv("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT", "6s")
 	t.Setenv("HTTP_MAX_REQUEST_BODY_BYTES", "32768")
 	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("IDEMPOTENCY_REPLAY_WINDOW", "48h")
+	t.Setenv("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL", "30m")
 	cfg, err := loadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, 20, cfg.Database.MaxOpenConnections)
@@ -98,6 +104,8 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, 6*time.Second, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, int64(32768), cfg.HTTP.MaxRequestBodyBytes)
 	assert.Equal(t, "debug", cfg.Runtime.LogLevel)
+	assert.Equal(t, 48*time.Hour, cfg.Runtime.IdempotencyReplayWindow)
+	assert.Equal(t, 30*time.Minute, cfg.Runtime.IdempotencyReplayCleanupInterval)
 }
 
 func TestLoadConfigRejectsMalformedValues(t *testing.T) {
@@ -108,6 +116,7 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 		{"MOCK_BANK_RETRY_DELAY", "later"},
 		{"HTTP_MAX_REQUEST_BODY_BYTES", "large"},
 		{"MOCK_BANK_CONNECT_TIMEOUT", "forever"},
+		{"IDEMPOTENCY_REPLAY_WINDOW", "forever"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(tt.name, tt.value)

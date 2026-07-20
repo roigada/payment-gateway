@@ -9,24 +9,43 @@ import (
 )
 
 const (
-	idempotencyReplayWindow          = 24 * time.Hour
-	idempotencyReplayCleanupInterval = time.Hour
+	idempotencyReplayCleanupCompleted = "completed"
+	idempotencyReplayCleanupEmpty     = "empty"
+	idempotencyReplayCleanupFailed    = "failed"
 )
 
-func runIdempotencyReplayCleanup(ctx context.Context, store app.PaymentStore, clock app.Clock, logger *slog.Logger, interval time.Duration) {
-	ticker := time.NewTicker(interval)
+type idempotencyReplayCleanupTicker interface {
+	Chan() <-chan time.Time
+	Stop()
+}
+
+type idempotencyReplayCleanupMetrics interface {
+	RecordIdempotencyReplayCleanup(result string, removed int)
+}
+
+type timeTicker struct{ *time.Ticker }
+
+func (t timeTicker) Chan() <-chan time.Time { return t.C }
+
+func runIdempotencyReplayCleanup(ctx context.Context, store app.PaymentStore, clock app.Clock, logger *slog.Logger, metrics idempotencyReplayCleanupMetrics, replayWindow time.Duration, ticker idempotencyReplayCleanupTicker) {
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			removed, err := store.CleanupCompletedIdempotencyRecords(ctx, clock.Now().Add(-idempotencyReplayWindow))
+		case <-ticker.Chan():
+			removed, err := store.CleanupCompletedIdempotencyRecords(ctx, clock.Now().Add(-replayWindow))
 			if err != nil {
-				logger.Warn("idempotency replay cleanup failed", "error", err)
+				metrics.RecordIdempotencyReplayCleanup(idempotencyReplayCleanupFailed, 0)
+				logger.Warn("idempotency replay cleanup failed", "result", idempotencyReplayCleanupFailed)
 				continue
 			}
-			logger.Info("idempotency replay cleanup completed", "removed", removed)
+			result := idempotencyReplayCleanupCompleted
+			if removed == 0 {
+				result = idempotencyReplayCleanupEmpty
+			}
+			metrics.RecordIdempotencyReplayCleanup(result, removed)
+			logger.Info("idempotency replay cleanup completed", "result", result, "removed", removed)
 		}
 	}
 }

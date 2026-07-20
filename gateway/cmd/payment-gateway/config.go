@@ -12,32 +12,34 @@ import (
 )
 
 const (
-	defaultDatabaseMaxOpenConnections          = 10
-	defaultDatabaseMaxIdleConnections          = 5
-	defaultDatabaseConnectionMaxLifetime       = 30 * time.Minute
-	defaultDatabaseConnectionMaxIdleTime       = 5 * time.Minute
-	defaultDatabaseStartupTimeout              = 5 * time.Second
-	defaultIdempotencyClaimStuckAfter          = app.DefaultIdempotencyClaimStuckAfter
-	defaultLogLevel                            = "info"
-	defaultShutdownTimeout                     = 30 * time.Second
-	defaultPaymentCommandTimeout               = 10 * time.Second
-	defaultPaymentReadTimeout                  = 3 * time.Second
-	readinessCheckTimeout                      = 2 * time.Second
-	defaultMockBankInitialAttemptTimeout       = 2 * time.Second
-	defaultMockBankRetryDelay                  = 250 * time.Millisecond
-	defaultMockBankRetryAttemptTimeout         = 5 * time.Second
-	defaultMockBankTimeout                     = 7 * time.Second
-	paymentCommandCompletionReserve            = time.Second
-	defaultHTTPReadHeaderTimeout               = 5 * time.Second
-	defaultHTTPAddr                            = ":8080"
-	defaultHTTPReadTimeout                     = 15 * time.Second
-	defaultHTTPWriteTimeout                    = 15 * time.Second
-	defaultHTTPIdleTimeout                     = 60 * time.Second
-	defaultHTTPMaxRequestBodyBytes       int64 = 64 * 1024
-	defaultMockBankConnectTimeout              = 2 * time.Second
-	defaultMockBankTLSHandshakeTimeout         = 2 * time.Second
-	defaultMockBankResponseHeaderTimeout       = 6 * time.Second
-	defaultMockBankIdleConnectionTimeout       = 60 * time.Second
+	defaultDatabaseMaxOpenConnections             = 10
+	defaultDatabaseMaxIdleConnections             = 5
+	defaultDatabaseConnectionMaxLifetime          = 30 * time.Minute
+	defaultDatabaseConnectionMaxIdleTime          = 5 * time.Minute
+	defaultDatabaseStartupTimeout                 = 5 * time.Second
+	defaultIdempotencyClaimStuckAfter             = app.DefaultIdempotencyClaimStuckAfter
+	defaultIdempotencyReplayWindow                = 24 * time.Hour
+	defaultIdempotencyReplayCleanupInterval       = time.Hour
+	defaultLogLevel                               = "info"
+	defaultShutdownTimeout                        = 30 * time.Second
+	defaultPaymentCommandTimeout                  = 10 * time.Second
+	defaultPaymentReadTimeout                     = 3 * time.Second
+	readinessCheckTimeout                         = 2 * time.Second
+	defaultMockBankInitialAttemptTimeout          = 2 * time.Second
+	defaultMockBankRetryDelay                     = 250 * time.Millisecond
+	defaultMockBankRetryAttemptTimeout            = 5 * time.Second
+	defaultMockBankTimeout                        = 7 * time.Second
+	paymentCommandCompletionReserve               = time.Second
+	defaultHTTPReadHeaderTimeout                  = 5 * time.Second
+	defaultHTTPAddr                               = ":8080"
+	defaultHTTPReadTimeout                        = 15 * time.Second
+	defaultHTTPWriteTimeout                       = 15 * time.Second
+	defaultHTTPIdleTimeout                        = 60 * time.Second
+	defaultHTTPMaxRequestBodyBytes          int64 = 64 * 1024
+	defaultMockBankConnectTimeout                 = 2 * time.Second
+	defaultMockBankTLSHandshakeTimeout            = 2 * time.Second
+	defaultMockBankResponseHeaderTimeout          = 6 * time.Second
+	defaultMockBankIdleConnectionTimeout          = 60 * time.Second
 )
 
 type config struct {
@@ -49,8 +51,10 @@ type config struct {
 }
 
 type RuntimeConfig struct {
-	LogLevel        string
-	ShutdownTimeout time.Duration
+	LogLevel                         string
+	ShutdownTimeout                  time.Duration
+	IdempotencyReplayWindow          time.Duration
+	IdempotencyReplayCleanupInterval time.Duration
 }
 
 type DatabaseConfig struct {
@@ -144,6 +148,14 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	idempotencyReplayWindow, err := envDuration("IDEMPOTENCY_REPLAY_WINDOW", defaultIdempotencyReplayWindow)
+	if err != nil {
+		return config{}, err
+	}
+	idempotencyReplayCleanupInterval, err := envDuration("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL", defaultIdempotencyReplayCleanupInterval)
+	if err != nil {
+		return config{}, err
+	}
 	paymentCommandTimeout, err := envDuration("PAYMENT_COMMAND_TIMEOUT", defaultPaymentCommandTimeout)
 	if err != nil {
 		return config{}, err
@@ -210,7 +222,7 @@ func loadConfig() (config, error) {
 	}
 
 	cfg := config{
-		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout},
+		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayWindow: idempotencyReplayWindow, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
@@ -246,6 +258,12 @@ func (cfg config) validate() error {
 	}
 	if cfg.Runtime.ShutdownTimeout <= 0 {
 		return fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive duration")
+	}
+	if cfg.Runtime.IdempotencyReplayWindow <= 0 {
+		return fmt.Errorf("IDEMPOTENCY_REPLAY_WINDOW must be a positive duration")
+	}
+	if cfg.Runtime.IdempotencyReplayCleanupInterval <= 0 {
+		return fmt.Errorf("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration")
 	}
 	if cfg.Database.ConnectionMaxIdleTime <= 0 {
 		return fmt.Errorf("DATABASE_CONNECTION_MAX_IDLE_TIME must be a positive duration")

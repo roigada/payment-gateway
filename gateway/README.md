@@ -65,6 +65,8 @@ HTTP_WRITE_TIMEOUT                 optional HTTP write timeout, defaults to 15s
 HTTP_IDLE_TIMEOUT                  optional HTTP idle timeout, defaults to 60s
 HTTP_MAX_REQUEST_BODY_BYTES        optional request body limit, defaults to 65536
 IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
+IDEMPOTENCY_REPLAY_WINDOW          optional Idempotency Replay Window, defaults to 24h
+IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL optional completed replay cleanup interval, defaults to 1h
 SHUTDOWN_TIMEOUT                  optional graceful shutdown deadline, defaults to 30s
 MOCK_BANK_BASE_URL                required Mock Bank base URL
 FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
@@ -81,6 +83,8 @@ export DATABASE_CONNECTION_MAX_LIFETIME='30m'
 export DATABASE_CONNECTION_MAX_IDLE_TIME='5m'
 export DATABASE_STARTUP_TIMEOUT='5s'
 export IDEMPOTENCY_CLAIM_STUCK_AFTER='5m'
+export IDEMPOTENCY_REPLAY_WINDOW='24h'
+export IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL='1h'
 export SHUTDOWN_TIMEOUT='30s'
 export LOG_LEVEL='info'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
@@ -106,6 +110,8 @@ export ADDR=':8080'
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
 Payment reads have a fixed three-second request deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
+
+Completed payment commands have a 24-hour Idempotency Replay Window by default. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
 ## Database
 
@@ -142,6 +148,8 @@ DATABASE_CONNECTION_MAX_LIFETIME=30m
 DATABASE_CONNECTION_MAX_IDLE_TIME=5m
 DATABASE_STARTUP_TIMEOUT=5s
 IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
+IDEMPOTENCY_REPLAY_WINDOW=24h
+IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL=1h
 SHUTDOWN_TIMEOUT=30s
 LOG_LEVEL=info
 MOCK_BANK_BASE_URL=http://mock-bank:9090
@@ -229,6 +237,8 @@ payment_gateway_postgres_pool_max_idle_time_closed_total
 ```
 
 Payment operation `operation` labels use gateway command names: `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, and `refund_payment`. Payment operation `outcome` labels use gateway-owned outcomes: public Payment Status values such as `authorized`, `declined`, `pending`, `expired`, `captured`, `voided`, `refunded`; PaymentErrorKind values such as `invalid_input`, `not_found`, `idempotency_conflict`, `idempotency_in_progress`, `payment_status_conflict`, `bank_state_conflict`, `bank_unavailable`, `bank_timeout`, and `internal`; or `replayed` for an Idempotency Replay.
+
+Completed Idempotency Replay cleanup exports `payment_gateway_idempotency_replay_cleanup_runs_total{result}` with bounded `completed`, `empty`, and `failed` results, plus `payment_gateway_idempotency_replay_cleanup_records_deleted_total`. These metrics and the corresponding logs never include Idempotency Keys, Payment IDs, request fingerprints, card data, bank identifiers, or raw errors.
 
 Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.
 

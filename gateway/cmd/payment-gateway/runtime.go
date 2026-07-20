@@ -34,7 +34,7 @@ func run(cfg config, logger *slog.Logger) error {
 
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	paymentStore := postgres.NewPaymentStore(db)
-	handler, err := buildHTTPHandler(db, paymentStore, readiness, logger, cfg.httpHandler())
+	handler, cleanupMetrics, err := buildHTTPHandler(db, paymentStore, readiness, logger, cfg.httpHandler())
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func run(cfg config, logger *slog.Logger) error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		defer close(cleanupDone)
-		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, idempotencyReplayCleanupInterval)
+		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
 	}()
 	defer func() {
 		cancelCleanup()
@@ -60,36 +60,40 @@ func run(cfg config, logger *slog.Logger) error {
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr)
-	return serveUntilShutdown(listener, newHTTPServer(handler, cfg.HTTP), readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
+	return serveUntilShutdown(listener, newHTTPServer(handler, cfg.HTTP), readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger, cancelCleanup)
 }
 
-func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (http.Handler, error) {
+func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (http.Handler, *observability.IdempotencyReplayCleanupMetrics, error) {
 	metricsRegistry := observability.NewRegistry()
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mockBankMetrics, err := observability.NewMockBankMetrics(metricsRegistry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	paymentOperationMetrics, err := observability.NewPaymentOperationMetrics(metricsRegistry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	cleanupMetrics, err := observability.NewIdempotencyReplayCleanupMetrics(metricsRegistry)
+	if err != nil {
+		return nil, nil, err
 	}
 	postgresPoolCollector, err := observability.NewPostgresPoolCollector(db)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := metricsRegistry.Register(postgresPoolCollector); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pendingPaymentCollector, err := observability.NewPendingPaymentCollector(paymentStore)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := metricsRegistry.Register(pendingPaymentCollector); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	transport := &http.Transport{
@@ -105,16 +109,16 @@ func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 		RetryAttemptTimeout:   cfg.MockBank.RetryAttemptTimeout,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	metricsHandler := promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})
 	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, metricsHandler, cfg.Options)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return handler, nil
+	return handler, cleanupMetrics, nil
 }
 
 func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {
@@ -148,7 +152,7 @@ func (r *shutdownReadiness) beginDrain() {
 	r.draining.Store(true)
 }
 
-func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
+func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
 	if logger == nil {
 		return errors.New("runtime logger is required")
 	}
@@ -172,6 +176,9 @@ func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *s
 		logger.Info("payment-gateway shutdown signal received", "signal", receivedSignal.String())
 	}
 
+	if onShutdownStart != nil {
+		onShutdownStart()
+	}
 	readiness.beginDrain()
 	cancelRequestWork()
 	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
