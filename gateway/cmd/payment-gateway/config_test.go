@@ -20,7 +20,7 @@ func validConfig() config {
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
-		MockBank: MockBankConfig{BaseURL: validMockBankBaseURL, Timeout: defaultMockBankTimeout, ConnectTimeout: defaultMockBankConnectTimeout, TLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, ResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, IdleConnectionTimeout: defaultMockBankIdleConnectionTimeout},
+		MockBank: MockBankConfig{BaseURL: validMockBankBaseURL, Timeout: defaultMockBankTimeout, InitialAttemptTimeout: defaultMockBankInitialAttemptTimeout, RetryDelay: defaultMockBankRetryDelay, RetryAttemptTimeout: defaultMockBankRetryAttemptTimeout, ConnectTimeout: defaultMockBankConnectTimeout, TLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, ResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, IdleConnectionTimeout: defaultMockBankIdleConnectionTimeout},
 	}
 }
 
@@ -35,7 +35,12 @@ func TestConfigValidate(t *testing.T) {
 		{"pool size", func(c *config) { c.Database.MaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
 		{"pool relationship", func(c *config) { c.Database.MaxIdleConnections = c.Database.MaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
 		{"payment secret", func(c *config) { c.Payment.FingerprintSecret = "" }, "FINGERPRINT_SECRET is required"},
-		{"mock bank budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
+		{"mock bank initial attempt", func(c *config) { c.MockBank.InitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
+		{"mock bank timeout", func(c *config) { c.MockBank.Timeout = 0 }, "MOCK_BANK_TIMEOUT must be a positive duration"},
+		{"mock bank timeout budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
+		{"mock bank retry delay", func(c *config) { c.MockBank.RetryDelay = 0 }, "MOCK_BANK_RETRY_DELAY must be a positive duration"},
+		{"mock bank retry attempt", func(c *config) { c.MockBank.RetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
+		{"mock bank retry budget", func(c *config) { c.MockBank.RetryAttemptTimeout = c.Payment.CommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
 		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.Payment.CommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"log level", func(c *config) { c.Runtime.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
 	}
@@ -65,7 +70,9 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
 	assert.Equal(t, defaultPaymentCommandTimeout, cfg.Payment.CommandTimeout)
-	assert.Equal(t, defaultMockBankTimeout, cfg.MockBank.Timeout)
+	assert.Equal(t, defaultMockBankInitialAttemptTimeout, cfg.MockBank.InitialAttemptTimeout)
+	assert.Equal(t, defaultMockBankRetryDelay, cfg.MockBank.RetryDelay)
+	assert.Equal(t, defaultMockBankRetryAttemptTimeout, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, defaultLogLevel, cfg.Runtime.LogLevel)
 	assert.Equal(t, defaultShutdownTimeout, cfg.Runtime.ShutdownTimeout)
 }
@@ -75,7 +82,9 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "8")
 	t.Setenv("DATABASE_CONNECTION_MAX_LIFETIME", "45m")
 	t.Setenv("PAYMENT_COMMAND_TIMEOUT", "12s")
-	t.Setenv("MOCK_BANK_TIMEOUT", "8s")
+	t.Setenv("MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT", "3s")
+	t.Setenv("MOCK_BANK_RETRY_DELAY", "500ms")
+	t.Setenv("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT", "6s")
 	t.Setenv("HTTP_MAX_REQUEST_BODY_BYTES", "32768")
 	t.Setenv("LOG_LEVEL", "debug")
 	cfg, err := loadConfig()
@@ -84,7 +93,9 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, 8, cfg.Database.MaxIdleConnections)
 	assert.Equal(t, 45*time.Minute, cfg.Database.ConnectionMaxLifetime)
 	assert.Equal(t, 12*time.Second, cfg.Payment.CommandTimeout)
-	assert.Equal(t, 8*time.Second, cfg.MockBank.Timeout)
+	assert.Equal(t, 3*time.Second, cfg.MockBank.InitialAttemptTimeout)
+	assert.Equal(t, 500*time.Millisecond, cfg.MockBank.RetryDelay)
+	assert.Equal(t, 6*time.Second, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, int64(32768), cfg.HTTP.MaxRequestBodyBytes)
 	assert.Equal(t, "debug", cfg.Runtime.LogLevel)
 }
@@ -94,6 +105,7 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 		{"DATABASE_MAX_OPEN_CONNECTIONS", "many"},
 		{"DATABASE_CONNECTION_MAX_IDLE_TIME", "forever"},
 		{"PAYMENT_COMMAND_TIMEOUT", "forever"},
+		{"MOCK_BANK_RETRY_DELAY", "later"},
 		{"HTTP_MAX_REQUEST_BODY_BYTES", "large"},
 		{"MOCK_BANK_CONNECT_TIMEOUT", "forever"},
 	} {

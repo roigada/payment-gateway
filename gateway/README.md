@@ -51,7 +51,10 @@ DATABASE_STARTUP_TIMEOUT           optional initial database connectivity deadli
 LOG_LEVEL                          optional JSON log level: debug, info, warn, or error; defaults to info
 PAYMENT_COMMAND_TIMEOUT            optional synchronous Payment command deadline, defaults to 10s
 PAYMENT_READ_TIMEOUT               optional Payment read deadline, defaults to 3s
-MOCK_BANK_TIMEOUT                  optional per-call Mock Bank deadline, defaults to 7s
+MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT  optional initial Mock Bank attempt deadline, defaults to 2s
+MOCK_BANK_RETRY_DELAY              optional cancellable delay before one authorization retry, defaults to 250ms
+MOCK_BANK_RETRY_ATTEMPT_TIMEOUT    optional second Mock Bank attempt deadline, defaults to 5s
+MOCK_BANK_TIMEOUT                  optional non-retried Mock Bank call deadline, defaults to 7s
 MOCK_BANK_CONNECT_TIMEOUT          optional Mock Bank connect timeout, defaults to 2s
 MOCK_BANK_TLS_HANDSHAKE_TIMEOUT    optional Mock Bank TLS handshake timeout, defaults to 2s
 MOCK_BANK_RESPONSE_HEADER_TIMEOUT  optional Mock Bank response-header timeout, defaults to 6s
@@ -81,6 +84,9 @@ export IDEMPOTENCY_CLAIM_STUCK_AFTER='5m'
 export SHUTDOWN_TIMEOUT='30s'
 export LOG_LEVEL='info'
 export MOCK_BANK_BASE_URL='http://localhost:9090'
+export MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT='2s'
+export MOCK_BANK_RETRY_DELAY='250ms'
+export MOCK_BANK_RETRY_ATTEMPT_TIMEOUT='5s'
 export MOCK_BANK_TIMEOUT='7s'
 export MOCK_BANK_CONNECT_TIMEOUT='2s'
 export MOCK_BANK_TLS_HANDSHAKE_TIMEOUT='2s'
@@ -139,6 +145,9 @@ IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
 SHUTDOWN_TIMEOUT=30s
 LOG_LEVEL=info
 MOCK_BANK_BASE_URL=http://mock-bank:9090
+MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT=2s
+MOCK_BANK_RETRY_DELAY=250ms
+MOCK_BANK_RETRY_ATTEMPT_TIMEOUT=5s
 MOCK_BANK_TIMEOUT=7s
 MOCK_BANK_CONNECT_TIMEOUT=2s
 MOCK_BANK_TLS_HANDSHAKE_TIMEOUT=2s
@@ -222,6 +231,8 @@ payment_gateway_postgres_pool_max_idle_time_closed_total
 Payment operation `operation` labels use gateway command names: `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, and `refund_payment`. Payment operation `outcome` labels use gateway-owned outcomes: public Payment Status values such as `authorized`, `declined`, `pending`, `expired`, `captured`, `voided`, `refunded`; PaymentErrorKind values such as `invalid_input`, `not_found`, `idempotency_conflict`, `idempotency_in_progress`, `payment_status_conflict`, `bank_state_conflict`, `bank_unavailable`, `bank_timeout`, and `internal`; or `replayed` for an Idempotency Replay.
 
 Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `void`, and `refund`. Mock Bank `result` labels are bounded gateway-facing outcomes: `success`, `declined`, `expired`, `state_conflict`, `invalid_input`, `timeout`, `unavailable`, and `internal`. Dependency-health errors are primarily `timeout` and `unavailable`; `internal` indicates a gateway adapter failure before a usable bank response.
+
+`payment_gateway_mock_bank_retries_total` records authorization retry outcomes with bounded `operation` and `result` labels. Its results are `attempted`, `succeeded`, and `exhausted`; the existing Mock Bank request metrics record each physical attempt.
 
 Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
 

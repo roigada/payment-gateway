@@ -20,14 +20,19 @@ type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	metrics    metrics
-	timeout    time.Duration
+	config     ClientConfig
 }
 
-func NewClient(baseURL string, httpClient *http.Client, metrics metrics) (*Client, error) {
-	return NewClientWithTimeout(baseURL, httpClient, metrics, 0)
+// ClientConfig contains all Mock Bank call budgets. A zero value disables
+// deadlines and automatic retries, which is useful for isolated adapter tests.
+type ClientConfig struct {
+	Timeout               time.Duration
+	InitialAttemptTimeout time.Duration
+	RetryDelay            time.Duration
+	RetryAttemptTimeout   time.Duration
 }
 
-func NewClientWithTimeout(baseURL string, httpClient *http.Client, metrics metrics, timeout time.Duration) (*Client, error) {
+func NewClient(baseURL string, httpClient *http.Client, metrics metrics, config ClientConfig) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return nil, err
@@ -38,22 +43,50 @@ func NewClientWithTimeout(baseURL string, httpClient *http.Client, metrics metri
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics, timeout: timeout}, nil
+	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics, config: config}, nil
 }
 
-func (c *Client) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if c.timeout <= 0 {
+func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, c.timeout)
+	return context.WithTimeout(ctx, timeout)
 }
 
 type metrics interface {
 	RecordMockBankRequest(operation string, result string, duration time.Duration)
+	RecordMockBankRetry(operation string, result string)
 }
 
 func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
-	ctx, cancel := c.requestContext(ctx)
+	result, err := c.authorizePaymentAttempt(ctx, request, c.initialAttemptTimeout())
+	if err == nil || !isRetryablePaymentError(err) || c.config.RetryDelay <= 0 || c.config.RetryAttemptTimeout <= 0 {
+		return result, err
+	}
+
+	c.recordRetry("authorize", "attempted")
+	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
+		return app.BankAuthorizationResult{}, retryWaitError(err)
+	}
+
+	result, err = c.authorizePaymentAttempt(ctx, request, c.config.RetryAttemptTimeout)
+	if err != nil {
+		c.recordRetry("authorize", "exhausted")
+		return app.BankAuthorizationResult{}, err
+	}
+	c.recordRetry("authorize", "succeeded")
+	return result, nil
+}
+
+func (c *Client) initialAttemptTimeout() time.Duration {
+	if c.config.InitialAttemptTimeout > 0 {
+		return c.config.InitialAttemptTimeout
+	}
+	return c.config.Timeout
+}
+
+func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAuthorizationRequest, timeout time.Duration) (app.BankAuthorizationResult, error) {
+	ctx, cancel := requestContext(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -127,7 +160,7 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 }
 
 func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
-	ctx, cancel := c.requestContext(ctx)
+	ctx, cancel := requestContext(ctx, c.config.Timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -201,7 +234,7 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 }
 
 func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
-	ctx, cancel := c.requestContext(ctx)
+	ctx, cancel := requestContext(ctx, c.config.Timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -274,7 +307,7 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 }
 
 func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
-	ctx, cancel := c.requestContext(ctx)
+	ctx, cancel := requestContext(ctx, c.config.Timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := "internal"
@@ -348,6 +381,35 @@ func (c *Client) recordRequest(operation string, result string, duration time.Du
 		return
 	}
 	c.metrics.RecordMockBankRequest(operation, result, duration)
+}
+
+func (c *Client) recordRetry(operation string, result string) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.RecordMockBankRetry(operation, result)
+}
+
+func isRetryablePaymentError(err error) bool {
+	return app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout) || app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable)
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func retryWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return app.NewPaymentBankTimeoutError(err)
+	}
+	return app.NewPaymentBankUnavailableError(err)
 }
 
 func isTimeout(err error) bool {

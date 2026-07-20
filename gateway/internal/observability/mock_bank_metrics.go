@@ -22,6 +22,7 @@ var mockBankRequestDurationBuckets = []float64{
 type MockBankMetrics struct {
 	requestsTotal   *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
+	retriesTotal    *prometheus.CounterVec
 }
 
 func NewMockBankMetrics(registry *prometheus.Registry) (*MockBankMetrics, error) {
@@ -39,6 +40,10 @@ func NewMockBankMetrics(registry *prometheus.Registry) (*MockBankMetrics, error)
 			Help:    "Duration of Mock Bank requests made by the payment gateway.",
 			Buckets: mockBankRequestDurationBuckets,
 		}, []string{"operation", "result"}),
+		retriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "payment_gateway_mock_bank_retries_total",
+			Help: "Total number of automatic Mock Bank retry outcomes.",
+		}, []string{"operation", "result"}),
 	}
 
 	if err := registry.Register(metrics.requestsTotal); err != nil {
@@ -47,8 +52,15 @@ func NewMockBankMetrics(registry *prometheus.Registry) (*MockBankMetrics, error)
 	if err := registry.Register(metrics.requestDuration); err != nil {
 		return nil, err
 	}
+	if err := registry.Register(metrics.retriesTotal); err != nil {
+		return nil, err
+	}
 
 	return metrics, nil
+}
+
+func (m *MockBankMetrics) RecordMockBankRetry(operation string, result string) {
+	m.retriesTotal.WithLabelValues(operation, result).Inc()
 }
 
 func (m *MockBankMetrics) RecordMockBankRequest(operation string, result string, duration time.Duration) {

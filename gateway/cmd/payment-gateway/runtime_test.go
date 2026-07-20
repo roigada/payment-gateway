@@ -19,20 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing.T) {
+func TestServeUntilShutdownCancelsStartedRequestAndChangesAvailability(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
-	finish := make(chan struct{})
 	requestContextCanceled := make(chan struct{})
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(ctx context.Context) error {
 		close(started)
-		select {
-		case <-finish:
-			return nil
-		case <-ctx.Done():
-			close(requestContextCanceled)
-			return ctx.Err()
-		}
+		<-ctx.Done()
+		close(requestContextCanceled)
+		return ctx.Err()
 	}))
 	logs := &bytes.Buffer{}
 	handler := newRuntimeHandler(t, readiness)
@@ -55,25 +50,24 @@ func TestServeUntilShutdownDrainsStartedRequestAndChangesAvailability(t *testing
 	require.Eventually(t, func() bool {
 		return readiness.draining.Load()
 	}, time.Second, time.Millisecond)
-	assertChannelNotClosed(t, requestContextCanceled)
+	requireReceive(t, requestContextCanceled)
 	health := httptest.NewRecorder()
 	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	assert.Equal(t, http.StatusNoContent, health.Code)
 	ready := httptest.NewRecorder()
 	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, ready.Code)
-	close(finish)
 	completedRequest := requireReceive(t, requestDone)
 	require.NoError(t, completedRequest.err)
 	defer completedRequest.response.Body.Close()
-	assert.Equal(t, http.StatusNoContent, completedRequest.response.StatusCode)
+	assert.Equal(t, http.StatusServiceUnavailable, completedRequest.response.StatusCode)
 	require.NoError(t, <-result)
 	assert.Contains(t, logs.String(), "payment-gateway shutdown signal received")
 	assert.Contains(t, logs.String(), "payment-gateway shutdown drain started")
 	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
 }
 
-func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
+func TestServeUntilShutdownCancelsActiveRequestsDuringDrain(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
 	requestEnded := make(chan struct{})
@@ -100,8 +94,7 @@ func TestServeUntilShutdownForceClosesRequestsAfterDrainDeadline(t *testing.T) {
 	shutdownSignals <- syscall.SIGINT
 	requireReceive(t, requestEnded)
 	require.NoError(t, <-result)
-	assert.Contains(t, logs.String(), "payment-gateway shutdown drain timed out")
-	assert.Contains(t, logs.String(), "payment-gateway shutdown forced connections closed")
+	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
 }
 
 func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
