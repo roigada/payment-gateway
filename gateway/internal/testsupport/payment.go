@@ -224,16 +224,27 @@ func shouldExpireBeforeNewBankCall(request app.PaymentCommandClaimRequest, payme
 	}
 }
 
-func (r *PaymentStore) CompletePaymentCommand(_ context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult) error {
+func (r *PaymentStore) CompletePaymentCommand(_ context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
 	if err := r.saveIfStatus(context.Background(), claim.Payment(), claim.ExpectedStatus()); err != nil {
 		return err
 	}
-	return r.complete(claim, result)
+	return r.complete(claim, result, completedAt)
 }
 
 func (r *PaymentStore) ReleasePaymentCommand(_ context.Context, claim app.PaymentCommandClaim) error {
 	delete(r.records, idempotencyMapKey(claim.Operation(), claim.Key()))
 	return nil
+}
+
+func (r *PaymentStore) CleanupCompletedIdempotencyRecords(_ context.Context, completedBefore time.Time) (int, error) {
+	removed := 0
+	for mapKey, entry := range r.records {
+		if entry.status == idempotencyRecordCompleted && entry.record.completedAt.Before(completedBefore) {
+			delete(r.records, mapKey)
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
@@ -356,13 +367,14 @@ func canAttemptIdempotencyRecovery(request app.PaymentCommandClaimRequest) bool 
 	}
 }
 
-func (r *PaymentStore) complete(claim app.PaymentCommandClaim, result app.PaymentCommandResult) error {
+func (r *PaymentStore) complete(claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
 	r.records[idempotencyMapKey(claim.Operation(), claim.Key())] = idempotencyEntry{
 		status: idempotencyRecordCompleted,
 		record: idempotencyRecord{
 			operation:          claim.Operation(),
 			key:                claim.Key(),
 			requestFingerprint: claim.RequestFingerprint(),
+			completedAt:        completedAt,
 			result:             result,
 		},
 	}
@@ -423,6 +435,7 @@ type idempotencyRecord struct {
 	paymentID          domain.PaymentID
 	status             idempotencyRecordStatus
 	claimedAt          time.Time
+	completedAt        time.Time
 	result             app.PaymentCommandResult
 }
 
@@ -453,6 +466,7 @@ func cloneIdempotencyRecord(record idempotencyRecord) idempotencyRecord {
 		paymentID:          record.paymentID,
 		status:             record.status,
 		claimedAt:          record.claimedAt,
+		completedAt:        record.completedAt,
 		result:             record.result,
 	}
 }

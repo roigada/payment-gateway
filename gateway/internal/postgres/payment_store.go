@@ -161,7 +161,7 @@ func shouldExpireBeforeNewBankCall(request app.PaymentCommandClaimRequest, payme
 	}
 }
 
-func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult) error {
+func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
 	paymentResult, err := encodePaymentResultSnapshot(result.Payment)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
@@ -181,7 +181,8 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 		`UPDATE idempotency_records
 		    SET status = 'completed',
 		        http_status = $4,
-		        payment_result = $5::jsonb
+		        payment_result = $5::jsonb,
+		        completed_at = $6
 		  WHERE operation = $1
 		    AND key = $2
 		    AND request_fingerprint = $3
@@ -191,6 +192,7 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 		claim.RequestFingerprint(),
 		result.HTTPStatus,
 		string(paymentResult),
+		completedAt,
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
@@ -206,6 +208,24 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 		return app.NewInternalPaymentError(err)
 	}
 	return nil
+}
+
+func (r *PaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error) {
+	result, err := r.db.ExecContext(
+		ctx,
+		`DELETE FROM idempotency_records
+		  WHERE status = 'completed'
+		    AND completed_at < $1`,
+		completedBefore,
+	)
+	if err != nil {
+		return 0, app.NewInternalPaymentError(err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, app.NewInternalPaymentError(err)
+	}
+	return int(rowsAffected), nil
 }
 
 func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim) error {

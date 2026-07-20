@@ -15,6 +15,7 @@ import (
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/testsupport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,9 +135,42 @@ func TestServeUntilShutdownRequiresLogger(t *testing.T) {
 	require.EqualError(t, err, "runtime logger is required")
 }
 
+func TestRunIdempotencyReplayCleanupUsesReplayWindowAndStopsWithContext(t *testing.T) {
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	cutoffs := make(chan time.Time, 1)
+	store := cleanupPaymentStore{
+		PaymentStore: testsupport.NewPaymentStore(),
+		cleanup: func(_ context.Context, completedBefore time.Time) (int, error) {
+			cutoffs <- completedBefore
+			return 3, nil
+		},
+	}
+	logs := &bytes.Buffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runIdempotencyReplayCleanup(ctx, store, testsupport.FixedClock{Time: now}, slog.New(slog.NewJSONHandler(logs, nil)), time.Millisecond)
+	}()
+
+	assert.Equal(t, now.Add(-idempotencyReplayWindow), requireReceive(t, cutoffs))
+	cancel()
+	requireReceive(t, done)
+	assert.Contains(t, logs.String(), "idempotency replay cleanup completed")
+}
+
 type readinessCheckerFunc func(context.Context) error
 
 func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }
+
+type cleanupPaymentStore struct {
+	app.PaymentStore
+	cleanup func(context.Context, time.Time) (int, error)
+}
+
+func (s cleanupPaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error) {
+	return s.cleanup(ctx, completedBefore)
+}
 
 type runtimeHTTPMetricsFake struct{}
 
