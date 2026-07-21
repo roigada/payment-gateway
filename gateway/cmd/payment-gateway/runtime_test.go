@@ -98,6 +98,69 @@ func TestServeUntilShutdownCancelsActiveRequestsDuringDrain(t *testing.T) {
 	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
 }
 
+func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
+	publicListener := newTestListener(t)
+	metricsListener := newTestListener(t)
+	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
+	publicHandler := newRuntimeHandler(t, readiness)
+	metricsHandler := newMetricsHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# gateway metrics\n"))
+	}))
+	shutdownSignals := make(chan os.Signal, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- serveUntilShutdownAll([]runtimeServer{
+			{listener: publicListener, server: &http.Server{Handler: publicHandler}},
+			{listener: metricsListener, server: &http.Server{Handler: metricsHandler}},
+		}, readiness, time.Second, shutdownSignals, discardRuntimeLogger(), nil)
+	}()
+
+	publicMetrics, err := http.Get("http://" + publicListener.Addr().String() + "/metrics")
+	require.NoError(t, err)
+	defer publicMetrics.Body.Close()
+	assert.Equal(t, http.StatusNotFound, publicMetrics.StatusCode)
+
+	metrics, err := http.Get("http://" + metricsListener.Addr().String() + "/metrics")
+	require.NoError(t, err)
+	defer metrics.Body.Close()
+	body, err := io.ReadAll(metrics.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, metrics.StatusCode)
+	assert.Equal(t, "# gateway metrics\n", string(body))
+	metricsFallback, err := http.Get("http://" + metricsListener.Addr().String() + "/not-metrics")
+	require.NoError(t, err)
+	defer metricsFallback.Body.Close()
+	assert.Equal(t, http.StatusNotFound, metricsFallback.StatusCode)
+
+	shutdownSignals <- syscall.SIGTERM
+	require.NoError(t, <-result)
+	_, err = http.Get("http://" + publicListener.Addr().String() + "/healthz")
+	assert.Error(t, err)
+	_, err = http.Get("http://" + metricsListener.Addr().String() + "/metrics")
+	assert.Error(t, err)
+}
+
+func TestServeUntilShutdownStopsPeerWhenListenerFails(t *testing.T) {
+	failedListener := newTestListener(t)
+	peerListener := newTestListener(t)
+	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
+	result := make(chan error, 1)
+	go func() {
+		result <- serveUntilShutdownAll([]runtimeServer{
+			{listener: failedListener, server: &http.Server{Handler: http.NotFoundHandler()}},
+			{listener: peerListener, server: &http.Server{Handler: http.NotFoundHandler()}},
+		}, readiness, time.Second, make(chan os.Signal), discardRuntimeLogger(), nil)
+	}()
+
+	peerResponse, err := http.Get("http://" + peerListener.Addr().String())
+	require.NoError(t, err)
+	peerResponse.Body.Close()
+	require.NoError(t, failedListener.Close())
+	require.Error(t, requireReceive(t, result))
+	_, err = http.Get("http://" + peerListener.Addr().String())
+	assert.Error(t, err)
+}
+
 func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
 	listener := newTestListener(t)
 	started := make(chan struct{})
@@ -281,7 +344,7 @@ func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchP
 func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
 	t.Helper()
 
-	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, http.NotFoundHandler(), testRuntimeHandlerOptions())
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, testRuntimeHandlerOptions())
 	require.NoError(t, err)
 	return handler
 }

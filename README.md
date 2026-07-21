@@ -53,7 +53,7 @@ Useful endpoints after `make demo`:
 ```text
 Gateway health:       http://localhost:8080/healthz
 Gateway readiness:    http://localhost:8080/readyz
-Gateway metrics:      http://localhost:8080/metrics
+Gateway metrics:      private to Compose; scrape through Prometheus
 Gateway API contract: gateway/docs/api/openapi.yaml
 Grafana:              http://localhost:3000
 Prometheus:           http://localhost:9090

@@ -88,7 +88,7 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	require.NoError(t, err)
 	options := testHandlerOptions()
 	options.Authenticator = authenticator
-	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, http.NotFoundHandler(), options)
+	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, options)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
@@ -139,35 +139,28 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 			name:     "payment application",
 			expected: "httpapi handler: payment application is required",
 			new: func() (*httpapi.Handler, error) {
-				return httpapi.NewHandler(nil, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+				return httpapi.NewHandler(nil, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testHandlerOptions())
 			},
 		},
 		{
 			name:     "readiness checker",
 			expected: "httpapi handler: readiness checker is required",
 			new: func() (*httpapi.Handler, error) {
-				return httpapi.NewHandler(&paymentApplicationFake{}, nil, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+				return httpapi.NewHandler(&paymentApplicationFake{}, nil, discardLogger(), &recordingHTTPMetrics{}, testHandlerOptions())
 			},
 		},
 		{
 			name:     "logger",
 			expected: "httpapi handler: logger is required",
 			new: func() (*httpapi.Handler, error) {
-				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{}, testHandlerOptions())
 			},
 		},
 		{
 			name:     "HTTP metrics recorder",
 			expected: "httpapi handler: HTTP metrics recorder is required",
 			new: func() (*httpapi.Handler, error) {
-				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), nil, http.NotFoundHandler(), testHandlerOptions())
-			},
-		},
-		{
-			name:     "metrics handler",
-			expected: "httpapi handler: metrics handler is required",
-			new: func() (*httpapi.Handler, error) {
-				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, testHandlerOptions())
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), nil, testHandlerOptions())
 			},
 		},
 	}
@@ -183,7 +176,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 }
 
 func TestNewHandlerConstructsWithCompleteDependencies(t *testing.T) {
-	handler, err := httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), testHandlerOptions())
+	handler, err := httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testHandlerOptions())
 
 	require.NoError(t, err)
 	assert.NotNil(t, handler)
@@ -196,7 +189,7 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	}}
 	options := testHandlerOptions()
 	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
@@ -215,7 +208,7 @@ func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	}}
 	options := testHandlerOptions()
 	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
@@ -235,7 +228,7 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	}}
 	options := testHandlerOptions()
 	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
 	req.Header.Set("Content-Type", "application/json")
@@ -356,7 +349,7 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	}}
 	options := testHandlerOptions()
 	options.PaymentReadTimeout = time.Millisecond
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
@@ -884,21 +877,17 @@ func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
 	assert.Equal(t, "/readyz", api.metrics.requests[1].route)
 }
 
-func TestMetricsEndpointIsServedWithoutRecordingItself(t *testing.T) {
-	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("# metrics\n"))
-	})
+func TestMetricsEndpointIsNotServedByThePublicHandler(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, metricsHandler, testHandlerOptions())
+	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, testHandlerOptions())
 	require.NoError(t, err)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "# metrics\n", rec.Body.String())
+	require.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
 	assert.Empty(t, metrics.requests)
 }
 
@@ -961,7 +950,7 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
 
-	handler, err := httpapi.NewHandler(payments, readiness, logger, metrics, http.NotFoundHandler(), testHandlerOptions())
+	handler, err := httpapi.NewHandler(payments, readiness, logger, metrics, testHandlerOptions())
 	require.NoError(t, err)
 
 	return &paymentAPITest{

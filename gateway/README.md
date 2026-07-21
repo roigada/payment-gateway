@@ -207,10 +207,10 @@ Readiness checks Postgres and does not require Mock Bank availability:
 curl -i http://localhost:8080/readyz
 ```
 
-Prometheus-format metrics are exposed on the same server:
+Prometheus-format metrics are served from the separate operational listener. It defaults to `:9091` and must be reachable only from the private operational network; it is not exposed as a Compose host port:
 
 ```sh
-curl -i http://localhost:8080/metrics
+curl -i http://localhost:9091/metrics
 ```
 
 Custom metrics include HTTP RED:

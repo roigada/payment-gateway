@@ -18,7 +18,7 @@ Then inspect:
 
 - Prometheus targets, rules, alerts, and ad hoc PromQL at `http://localhost:9090`.
 - Grafana Gateway Overview dashboard at `http://localhost:3000` with `admin` / `payment-gateway`.
-- Gateway metrics directly at `http://localhost:8080/metrics`.
+- Gateway metrics through the Prometheus target. The gateway's `:9091` operational listener remains private to the Compose network and is not published to the host.
 
 Run demo traffic with:
 
