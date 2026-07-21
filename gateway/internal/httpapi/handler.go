@@ -27,6 +27,7 @@ type HandlerOptions struct {
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
 	Authenticator         *serviceauth.Authenticator
+	RateLimiter           *RateLimiter
 }
 
 type paymentApplication interface {
@@ -45,6 +46,7 @@ type readinessChecker interface {
 
 type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
+	RecordRateLimitRejection(routeClass string)
 }
 
 func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, options HandlerOptions) (*Handler, error) {
@@ -62,6 +64,9 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 	}
 	if options.Authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
+	}
+	if options.RateLimiter == nil {
+		return nil, errors.New("httpapi handler: rate limiter is required")
 	}
 
 	handler := &Handler{
@@ -92,17 +97,17 @@ func (s *Handler) routes() http.Handler {
 	registerRoute("GET /healthz", s.healthz)
 	registerRoute("GET /readyz", s.readyz)
 	versioned := http.NewServeMux()
-	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, handler http.HandlerFunc) {
+	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, routeClass RouteClass, handler http.HandlerFunc) {
 		_, route, _ := strings.Cut(pattern, " ")
-		versioned.Handle(pattern, s.recordHTTPRequest("/v1"+route, s.limitRequestBody(s.recoverPanic(s.requireScope(scope, handler)))))
+		versioned.Handle(pattern, s.recordHTTPRequest("/v1"+route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
 	}
-	registerVersionedRoute("GET /payments", serviceauth.ScopePaymentsRead, s.searchPayments)
-	registerVersionedRoute("GET /payments/{id}", serviceauth.ScopePaymentsRead, s.getPayment)
-	registerVersionedRoute("POST /payments", serviceauth.ScopePaymentsWrite, s.authorizePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, s.retryAuthorization)
-	registerVersionedRoute("POST /payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, s.capturePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, s.voidPayment)
-	registerVersionedRoute("POST /payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, s.refundPayment)
+	registerVersionedRoute("GET /payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
+	registerVersionedRoute("GET /payments/{id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
+	registerVersionedRoute("POST /payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
+	registerVersionedRoute("POST /payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
+	registerVersionedRoute("POST /payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)
+	registerVersionedRoute("POST /payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.voidPayment)
+	registerVersionedRoute("POST /payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.refundPayment)
 	mux.Handle("/v1/", s.requireAuthentication(http.StripPrefix("/v1", versioned)))
 
 	return s.logRequest(mux)

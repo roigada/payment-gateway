@@ -26,6 +26,16 @@ Run demo traffic with:
 make demo-smoke
 ```
 
+## Payment API Rate Limits
+
+Rate-limit rejections are expected admission-control outcomes, not an alerting condition. Inspect the Gateway Overview panel or query Prometheus by the bounded route class:
+
+```promql
+sum by (route_class) (rate(payment_gateway_rate_limit_rejections_total[1m]))
+```
+
+The only route classes are `read` and `write`; the metric never includes a Service Principal, Service Credential, Payment ID, Idempotency Key, or raw URI. If the rejection rate is unexpected, check the configured `RATE_LIMIT_*` quotas and the Order Service's request pattern. A rejected caller receives `429 Too Many Requests` with a whole-second `Retry-After` header and can retry after that delay. There is intentionally no alert until production traffic establishes a useful threshold.
+
 ## Gateway Elevated 5xx Responses
 
 Alert: `GatewayElevated5xxResponses`

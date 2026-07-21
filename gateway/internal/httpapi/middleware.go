@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/serviceauth"
@@ -32,6 +33,24 @@ func (s *Handler) requireScope(scope serviceauth.Scope, next http.HandlerFunc) h
 		}
 		next(w, r)
 	}
+}
+
+func (s *Handler) limitRate(routeClass RouteClass, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := r.Context().Value(principalContextKey{}).(serviceauth.Principal)
+		if !ok {
+			writeError(w, http.StatusForbidden, "forbidden", http.StatusText(http.StatusForbidden))
+			return
+		}
+		allowed, retryAfter := s.options.RateLimiter.Reserve(principal.ID(), routeClass)
+		if !allowed {
+			s.metrics.RecordRateLimitRejection(string(routeClass))
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Handler) recoverPanic(next http.Handler) http.Handler {

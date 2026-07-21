@@ -9,42 +9,45 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/roigada/payment-gateway/internal/serviceauth"
 )
 
 const (
-	defaultDatabaseMaxOpenConnections             = 10
-	defaultDatabaseMaxIdleConnections             = 5
-	defaultDatabaseConnectionMaxLifetime          = 30 * time.Minute
-	defaultDatabaseConnectionMaxIdleTime          = 5 * time.Minute
-	defaultDatabaseStartupTimeout                 = 5 * time.Second
-	defaultIdempotencyClaimStuckAfter             = app.DefaultIdempotencyClaimStuckAfter
-	defaultIdempotencyReplayWindow                = 24 * time.Hour
-	defaultIdempotencyReplayCleanupInterval       = time.Hour
-	defaultLogLevel                               = "info"
-	defaultShutdownTimeout                        = 30 * time.Second
-	defaultPaymentCommandTimeout                  = 10 * time.Second
-	defaultPaymentReadTimeout                     = 3 * time.Second
-	readinessCheckTimeout                         = 2 * time.Second
-	defaultMockBankInitialAttemptTimeout          = 2 * time.Second
-	defaultMockBankRetryDelay                     = 250 * time.Millisecond
-	defaultMockBankRetryAttemptTimeout            = 5 * time.Second
-	defaultMockBankTimeout                        = 7 * time.Second
-	paymentCommandCompletionReserve               = time.Second
-	defaultHTTPReadHeaderTimeout                  = 5 * time.Second
-	defaultHTTPAddr                               = ":8080"
-	defaultMetricsAddr                            = ":9091"
-	defaultHTTPReadTimeout                        = 15 * time.Second
-	defaultHTTPWriteTimeout                       = 15 * time.Second
-	defaultHTTPIdleTimeout                        = 60 * time.Second
-	defaultHTTPMaxRequestBodyBytes          int64 = 64 * 1024
-	defaultMockBankConnectTimeout                 = 2 * time.Second
-	defaultMockBankTLSHandshakeTimeout            = 2 * time.Second
-	defaultMockBankResponseHeaderTimeout          = 6 * time.Second
-	defaultMockBankIdleConnectionTimeout          = 60 * time.Second
+	defaultDatabaseMaxOpenConnections                   = 10
+	defaultDatabaseMaxIdleConnections                   = 5
+	defaultDatabaseConnectionMaxLifetime                = 30 * time.Minute
+	defaultDatabaseConnectionMaxIdleTime                = 5 * time.Minute
+	defaultDatabaseStartupTimeout                       = 5 * time.Second
+	defaultIdempotencyClaimStuckAfter                   = 5 * time.Minute
+	defaultIdempotencyReplayWindow                      = 24 * time.Hour
+	defaultIdempotencyReplayCleanupInterval             = time.Hour
+	defaultLogLevel                                     = "info"
+	defaultShutdownTimeout                              = 30 * time.Second
+	defaultPaymentCommandTimeout                        = 10 * time.Second
+	defaultPaymentReadTimeout                           = 3 * time.Second
+	readinessCheckTimeout                               = 2 * time.Second
+	defaultMockBankInitialAttemptTimeout                = 2 * time.Second
+	defaultMockBankRetryDelay                           = 250 * time.Millisecond
+	defaultMockBankRetryAttemptTimeout                  = 5 * time.Second
+	defaultMockBankTimeout                              = 7 * time.Second
+	paymentCommandCompletionReserve                     = time.Second
+	defaultHTTPReadHeaderTimeout                        = 5 * time.Second
+	defaultHTTPAddr                                     = ":8080"
+	defaultMetricsAddr                                  = ":9091"
+	defaultHTTPReadTimeout                              = 15 * time.Second
+	defaultHTTPWriteTimeout                             = 15 * time.Second
+	defaultHTTPIdleTimeout                              = 60 * time.Second
+	defaultHTTPMaxRequestBodyBytes                int64 = 64 * 1024
+	defaultMockBankConnectTimeout                       = 2 * time.Second
+	defaultMockBankTLSHandshakeTimeout                  = 2 * time.Second
+	defaultMockBankResponseHeaderTimeout                = 6 * time.Second
+	defaultMockBankIdleConnectionTimeout                = 60 * time.Second
+	defaultPaymentReadRateLimitRequestsPerSecond        = 30
+	defaultPaymentReadRateLimitBurst                    = 60
+	defaultPaymentWriteRateLimitRequestsPerSecond       = 5
+	defaultPaymentWriteRateLimitBurst                   = 10
 )
 
 type config struct {
@@ -80,6 +83,7 @@ type HTTPConfig struct {
 	WriteTimeout        time.Duration
 	IdleTimeout         time.Duration
 	MaxRequestBodyBytes int64
+	RateLimit           httpapi.RateLimitConfig
 }
 
 type MetricsConfig struct {
@@ -111,16 +115,18 @@ type MockBankConfig struct {
 }
 
 type httpHandlerConfig struct {
-	Payment  PaymentConfig
-	MockBank MockBankConfig
-	Options  httpapi.HandlerOptions
-	Auth     AuthConfig
+	Payment   PaymentConfig
+	MockBank  MockBankConfig
+	RateLimit httpapi.RateLimitConfig
+	Options   httpapi.HandlerOptions
+	Auth      AuthConfig
 }
 
 func (cfg config) httpHandler() httpHandlerConfig {
 	return httpHandlerConfig{
-		Payment:  cfg.Payment,
-		MockBank: cfg.MockBank,
+		Payment:   cfg.Payment,
+		MockBank:  cfg.MockBank,
+		RateLimit: cfg.HTTP.RateLimit,
 		Options: httpapi.HandlerOptions{
 			PaymentCommandTimeout: cfg.Payment.CommandTimeout,
 			PaymentReadTimeout:    cfg.Payment.ReadTimeout,
@@ -230,6 +236,22 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	readRateLimitRequestsPerSecond, err := envInt("RATE_LIMIT_READ_REQUESTS_PER_SECOND", defaultPaymentReadRateLimitRequestsPerSecond)
+	if err != nil {
+		return config{}, err
+	}
+	readRateLimitBurst, err := envInt("RATE_LIMIT_READ_BURST", defaultPaymentReadRateLimitBurst)
+	if err != nil {
+		return config{}, err
+	}
+	writeRateLimitRequestsPerSecond, err := envInt("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND", defaultPaymentWriteRateLimitRequestsPerSecond)
+	if err != nil {
+		return config{}, err
+	}
+	writeRateLimitBurst, err := envInt("RATE_LIMIT_WRITE_BURST", defaultPaymentWriteRateLimitBurst)
+	if err != nil {
+		return config{}, err
+	}
 	mockBankConnectTimeout, err := envDuration("MOCK_BANK_CONNECT_TIMEOUT", defaultMockBankConnectTimeout)
 	if err != nil {
 		return config{}, err
@@ -254,7 +276,7 @@ func loadConfig() (config, error) {
 	cfg := config{
 		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayWindow: idempotencyReplayWindow, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
-		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
+		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: readRateLimitRequestsPerSecond, ReadBurst: readRateLimitBurst, WriteRequestsPerSecond: writeRateLimitRequestsPerSecond, WriteBurst: writeRateLimitBurst}},
 		Metrics:  MetricsConfig{Addr: envString("METRICS_ADDR", defaultMetricsAddr)},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
 		Auth:     AuthConfig{HMACKey: serviceCredentialHMACKey, Credentials: serviceCredentials},
@@ -362,6 +384,18 @@ func (cfg config) validate() error {
 	}
 	if cfg.HTTP.MaxRequestBodyBytes <= 0 {
 		return fmt.Errorf("HTTP_MAX_REQUEST_BODY_BYTES must be a positive integer")
+	}
+	if cfg.HTTP.RateLimit.ReadRequestsPerSecond <= 0 {
+		return fmt.Errorf("RATE_LIMIT_READ_REQUESTS_PER_SECOND must be a positive integer")
+	}
+	if cfg.HTTP.RateLimit.ReadBurst <= 0 {
+		return fmt.Errorf("RATE_LIMIT_READ_BURST must be a positive integer")
+	}
+	if cfg.HTTP.RateLimit.WriteRequestsPerSecond <= 0 {
+		return fmt.Errorf("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND must be a positive integer")
+	}
+	if cfg.HTTP.RateLimit.WriteBurst <= 0 {
+		return fmt.Errorf("RATE_LIMIT_WRITE_BURST must be a positive integer")
 	}
 	if cfg.MockBank.ConnectTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_CONNECT_TIMEOUT must be a positive duration")

@@ -19,6 +19,7 @@ image-smoke:
 	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./scripts/image-smoke.sh
 
 observability-check:
+	jq -e 'any(.panels[]; .title == "Rate-limit rejections by route class" and any(.targets[]; .expr == "sum by (route_class) (rate(payment_gateway_rate_limit_rejections_total[1m]))"))' observability/grafana/dashboards/gateway-overview.json
 	docker compose run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
 
 test:
