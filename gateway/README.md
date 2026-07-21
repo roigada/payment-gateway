@@ -111,6 +111,8 @@ export ORDER_SERVICE_CREDENTIALS='replace-with-a-configured-credential-digest=pa
 export ADDR=':8080'
 ```
 
+For the root Compose demo, provide `FINGERPRINT_SECRET`, `SERVICE_CREDENTIAL_HMAC_KEY`, `ORDER_SERVICE_CREDENTIALS`, and `ORDER_SERVICE_CREDENTIAL` through your shell or an ignored root `.env` file. Do not commit that file or any credential material. The gateway refuses to start without the first three values, while Compose cleanup and log commands remain usable without them.
+
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
 Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
@@ -184,7 +186,9 @@ HTTP_READ_TIMEOUT=15s
 HTTP_WRITE_TIMEOUT=15s
 HTTP_IDLE_TIMEOUT=60s
 HTTP_MAX_REQUEST_BODY_BYTES=65536
-FINGERPRINT_SECRET=local-development-secret
+FINGERPRINT_SECRET=${FINGERPRINT_SECRET}
+SERVICE_CREDENTIAL_HMAC_KEY=${SERVICE_CREDENTIAL_HMAC_KEY}
+ORDER_SERVICE_CREDENTIALS=${ORDER_SERVICE_CREDENTIALS}
 ```
 
 The bundled Mock Bank documentation is exposed on `http://localhost:8787/docs` when the root demo stack is running. For standalone gateway development outside root Compose, set `MOCK_BANK_BASE_URL` to a reachable Mock Bank URL.

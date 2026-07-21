@@ -4,6 +4,7 @@ set -eu
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 MOCK_BANK_BASE_URL="${MOCK_BANK_BASE_URL:-}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-180}"
+ORDER_SERVICE_CREDENTIAL="${ORDER_SERVICE_CREDENTIAL:?ORDER_SERVICE_CREDENTIAL is required}"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -106,6 +107,7 @@ JSON
 
 authorize_response="$tmpdir/authorize-response.json"
 request POST /v1/payments "$authorize_body" "$authorize_response" \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H "Idempotency-Key: demo-smoke-authorize-$(date +%s)"
 expect_status 201 "$authorize_response" "authorize Payment"
@@ -119,11 +121,13 @@ fi
 
 capture_response="$tmpdir/capture-response.json"
 request POST "/v1/payments/$payment_id/capture" - "$capture_response" \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H "Idempotency-Key: demo-smoke-capture-$(date +%s)"
 expect_status 200 "$capture_response" "capture Payment"
 
 fetch_response="$tmpdir/fetch-response.json"
-request GET "/v1/payments/$payment_id" - "$fetch_response"
+request GET "/v1/payments/$payment_id" - "$fetch_response" \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 expect_status 200 "$fetch_response" "fetch Payment"
 
 status="$(extract_payment_status "$fetch_response")"
