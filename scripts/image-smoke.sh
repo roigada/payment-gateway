@@ -28,5 +28,6 @@ curl --fail --show-error --silent "http://127.0.0.1:$mock_bank_port/health" >/de
 
 BASE_URL="http://127.0.0.1:$gateway_port" \
 MOCK_BANK_BASE_URL="http://127.0.0.1:$mock_bank_port" \
+PROMETHEUS_BASE_URL="" \
 READY_TIMEOUT_SECONDS="180" \
 ./demo/smoke.sh

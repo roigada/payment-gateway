@@ -111,7 +111,7 @@ export ORDER_SERVICE_CREDENTIALS='replace-with-a-configured-credential-digest=pa
 export ADDR=':8080'
 ```
 
-For the root Compose demo, provide `FINGERPRINT_SECRET`, `SERVICE_CREDENTIAL_HMAC_KEY`, `ORDER_SERVICE_CREDENTIALS`, and `ORDER_SERVICE_CREDENTIAL` through your shell or an ignored root `.env` file. Do not commit that file or any credential material. The gateway refuses to start without the first three values, while Compose cleanup and log commands remain usable without them.
+For the root Compose demo, `make demo` generates an ignored root `.env` file with a throwaway `FINGERPRINT_SECRET`, `SERVICE_CREDENTIAL_HMAC_KEY`, `ORDER_SERVICE_CREDENTIALS`, and `ORDER_SERVICE_CREDENTIAL`. Do not commit, copy, or reuse that file outside local development. Delete `.env` before the next `make demo` to rotate the local credential. The gateway refuses to start without the first three values, while Compose cleanup and log commands remain usable without them.
 
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
@@ -127,7 +127,7 @@ Generate a high-entropy credential and its configuration digest with a locally s
 go run ./cmd/service-credential -hmac-key "$SERVICE_CREDENTIAL_HMAC_KEY"
 ```
 
-Store the printed raw credential only in the Order Service secret store. Put its printed `digest=scopes` entry in `ORDER_SERVICE_CREDENTIALS`; comma-separate entries to keep overlapping active credentials during rotation. The gateway never needs the raw credential. Rotate or revoke a credential through normal configuration rollout. Terminate TLS before the gateway outside trusted local development.
+Store the printed raw credential only in the Order Service secret store. Put its printed `digest=scopes` entry in `ORDER_SERVICE_CREDENTIALS`; comma-separate entries to keep overlapping active credentials during planned rotation. The gateway never needs the raw credential. Revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; the HTTP-only root Compose demo is a trusted local-development exception.
 
 Completed payment commands have a 24-hour Idempotency Replay Window by default. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
@@ -270,7 +270,7 @@ Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric
 
 Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
 
-The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). The runnable request collection in [`../demo/payment-gateway.http`](../demo/payment-gateway.http) remains the companion artifact for manual exploration against a running demo stack.
+The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). The runnable request collection in [`../demo/payment-gateway.http`](../demo/payment-gateway.http) remains the companion artifact for manual exploration against a running demo stack; it reads the ignored local `ORDER_SERVICE_CREDENTIAL` from `.env`.
 
 ### Authorize a Payment
 
