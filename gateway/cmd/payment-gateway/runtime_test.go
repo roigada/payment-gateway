@@ -310,6 +310,7 @@ func (m *cleanupMetricsFake) RecordIdempotencyReplayCleanup(result string, remov
 type runtimeHTTPMetricsFake struct{}
 
 func (runtimeHTTPMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
+func (runtimeHTTPMetricsFake) RecordRateLimitRejection(string)                      {}
 
 type runtimePaymentApplicationFake struct{}
 

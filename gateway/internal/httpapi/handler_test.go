@@ -215,6 +215,7 @@ func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testin
 	require.Equal(t, http.StatusTooManyRequests, read().Code)
 	clock.now = clock.now.Add(time.Millisecond)
 	assert.Equal(t, http.StatusOK, read().Code)
+	assert.Equal(t, []string{"read", "write", "read"}, api.metrics.rateLimitRejections)
 }
 
 func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCredentialRotationQuota(t *testing.T) {
@@ -1236,7 +1237,8 @@ func testAuthenticator(t *testing.T) *serviceauth.Authenticator {
 }
 
 type recordingHTTPMetrics struct {
-	requests []recordedHTTPRequest
+	requests            []recordedHTTPRequest
+	rateLimitRejections []string
 }
 
 func (m *recordingHTTPMetrics) RecordHTTPRequest(method string, route string, status int, duration time.Duration) {
@@ -1246,6 +1248,10 @@ func (m *recordingHTTPMetrics) RecordHTTPRequest(method string, route string, st
 		status:   status,
 		duration: duration,
 	})
+}
+
+func (m *recordingHTTPMetrics) RecordRateLimitRejection(routeClass string) {
+	m.rateLimitRejections = append(m.rateLimitRejections, routeClass)
 }
 
 type recordedHTTPRequest struct {

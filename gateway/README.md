@@ -224,6 +224,16 @@ payment_gateway_http_server_requests_total{method,route,code}
 payment_gateway_http_server_request_duration_seconds{method,route,code}
 ```
 
+and Payment API rate-limit rejections:
+
+```text
+payment_gateway_rate_limit_rejections_total{route_class}
+```
+
+`route_class` is deliberately limited to `read` and `write`. This metric never labels a Service Principal or Service Credential, Payment ID, Idempotency Key, raw URI, or another sensitive or unbounded request value. Rejected requests still appear in HTTP RED as `429` responses. Use the **Rate-limit rejections by route class** panel on the Gateway Overview dashboard to inspect the signal; no alert is intentionally configured until production traffic establishes a useful threshold.
+
+The four `PAYMENT_*_RATE_LIMIT_*` environment variables above configure process-local token buckets for the authenticated Service Principal. A rejected request returns `429 Too Many Requests`, the normal `rate_limited` error envelope, and a whole-second `Retry-After` value; retry only after that delay. This policy supports one gateway process only: multiple replicas would give each process a separate quota. Before scaling out, move the principal-aware limiter to shared state while keeping this public API behavior. An edge limiter can provide coarse volumetric protection, but cannot replace the principal-aware limiter unless it authenticates the same Service Principal safely.
+
 payment operation outcome RED:
 
 ```text
