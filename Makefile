@@ -1,4 +1,6 @@
-.PHONY: demo demo-down demo-reset demo-smoke image-smoke observability-check test validate-openapi
+.PHONY: demo demo-down demo-reset demo-smoke demo-tls demo-tls-down demo-tls-reset demo-tls-smoke image-smoke observability-check test validate-openapi
+
+TLS_COMPOSE = docker compose -f compose.yaml -f compose.tls-demo.yaml
 
 demo:
 	./scripts/ensure-demo-credentials.sh
@@ -13,6 +15,20 @@ demo-reset:
 demo-smoke:
 	./scripts/ensure-demo-credentials.sh
 	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./demo/smoke.sh
+
+demo-tls:
+	./scripts/ensure-demo-credentials.sh
+	$(TLS_COMPOSE) up --build
+
+demo-tls-down:
+	$(TLS_COMPOSE) down
+
+demo-tls-reset:
+	$(TLS_COMPOSE) down -v
+
+demo-tls-smoke:
+	./scripts/ensure-demo-credentials.sh
+	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./demo/tls-smoke.sh
 
 image-smoke:
 	./scripts/ensure-demo-credentials.sh

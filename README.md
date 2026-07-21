@@ -78,6 +78,24 @@ Set `MOCK_BANK_BASE_URL=http://127.0.0.1:8787` when running `make demo-smoke` if
 
 `make demo` and `make demo-smoke` generate `.env` on first use with a fresh local fingerprint secret, Service Credential verification key, configured digest, and raw Order Service credential. `.env` is ignored and must never be committed or copied into examples. Delete `.env` before the next `make demo` to rotate this throwaway credential. In a deployed environment, keep raw credentials only in the Order Service secret store, overlap active credential digests during planned rotation, and revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; local Compose is the explicit HTTP-only exception.
 
+### Opt-in TLS edge demo
+
+The default demo is intentionally HTTP-only. To put Caddy in front of the same gateway, dependencies, and monitoring topology, run the opt-in overlay:
+
+```sh
+make demo-tls
+```
+
+Caddy is then the only public gateway edge. It redirects `http://localhost:8080` to `https://localhost:8443` with `308`, and proxies the public API, `/healthz`, and `/readyz`. The gateway application listener has no host-published port in this mode; its private metrics listener remains reachable only to Prometheus on the Compose network. Caddy returns `404` for `/metrics` and never proxies it.
+
+Caddy creates its development CA and certificates in Docker-managed named volumes (`caddy-data` and `caddy-config`). Nothing is committed and the demo does not install trust into the host system. Run this in a second terminal to validate the certificate chain, redirect, public endpoints, absent gateway host port, and private Prometheus scrape without disabling certificate verification:
+
+```sh
+make demo-tls-smoke
+```
+
+The smoke command copies only Caddy's public local root certificate into a temporary file for `curl`, then removes it when finished. Stop or reset the overlay with `make demo-tls-down` or `make demo-tls-reset`.
+
 ## Development checks
 
 ```sh

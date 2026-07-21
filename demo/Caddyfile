@@ -1,0 +1,26 @@
+{
+	http_port 8080
+	https_port 8443
+}
+
+http://localhost:8080 {
+	redir https://localhost:8443{uri} 308
+}
+
+https://localhost:8443 {
+	handle /v1/* {
+		reverse_proxy payment-gateway:8080
+	}
+
+	handle /healthz {
+		reverse_proxy payment-gateway:8080
+	}
+
+	handle /readyz {
+		reverse_proxy payment-gateway:8080
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}
