@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 )
 
 type Handler struct {
@@ -25,6 +26,7 @@ type HandlerOptions struct {
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
+	Authenticator         *serviceauth.Authenticator
 }
 
 type paymentApplication interface {
@@ -61,6 +63,9 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 	if metricsHandler == nil {
 		return nil, errors.New("httpapi handler: metrics handler is required")
 	}
+	if options.Authenticator == nil {
+		return nil, errors.New("httpapi handler: service authenticator is required")
+	}
 
 	handler := &Handler{
 		logger:    logger,
@@ -90,13 +95,19 @@ func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
 	registerRoute("GET /healthz", s.healthz)
 	registerRoute("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", s.limitRequestBody(metricsHandler))
-	registerRoute("GET /v1/payments", s.searchPayments)
-	registerRoute("GET /v1/payments/{id}", s.getPayment)
-	registerRoute("POST /v1/payments", s.authorizePayment)
-	registerRoute("POST /v1/payments/{payment_id}/authorization-retries", s.retryAuthorization)
-	registerRoute("POST /v1/payments/{payment_id}/capture", s.capturePayment)
-	registerRoute("POST /v1/payments/{payment_id}/void", s.voidPayment)
-	registerRoute("POST /v1/payments/{payment_id}/refund", s.refundPayment)
+	versioned := http.NewServeMux()
+	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, handler http.HandlerFunc) {
+		_, route, _ := strings.Cut(pattern, " ")
+		versioned.Handle(pattern, s.recordHTTPRequest("/v1"+route, s.limitRequestBody(s.recoverPanic(s.requireScope(scope, handler)))))
+	}
+	registerVersionedRoute("GET /payments", serviceauth.ScopePaymentsRead, s.searchPayments)
+	registerVersionedRoute("GET /payments/{id}", serviceauth.ScopePaymentsRead, s.getPayment)
+	registerVersionedRoute("POST /payments", serviceauth.ScopePaymentsWrite, s.authorizePayment)
+	registerVersionedRoute("POST /payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, s.retryAuthorization)
+	registerVersionedRoute("POST /payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, s.capturePayment)
+	registerVersionedRoute("POST /payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, s.voidPayment)
+	registerVersionedRoute("POST /payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, s.refundPayment)
+	mux.Handle("/v1/", s.requireAuthentication(http.StripPrefix("/v1", versioned)))
 
 	return s.logRequest(mux)
 }

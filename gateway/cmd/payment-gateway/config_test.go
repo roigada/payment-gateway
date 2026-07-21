@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,6 +13,7 @@ const (
 	validDatabaseURL       = "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable"
 	validMockBankBaseURL   = "http://localhost:9090"
 	validFingerprintSecret = "secret"
+	validCredentialKey     = "01234567890123456789012345678901"
 )
 
 func validConfig() config {
@@ -20,6 +22,9 @@ func validConfig() config {
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
+		Auth: AuthConfig{HMACKey: []byte(validCredentialKey), Credentials: []serviceauth.Credential{
+			{Digest: serviceauth.Digest([]byte(validCredentialKey), "test-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
+		}},
 		MockBank: MockBankConfig{BaseURL: validMockBankBaseURL, Timeout: defaultMockBankTimeout, InitialAttemptTimeout: defaultMockBankInitialAttemptTimeout, RetryDelay: defaultMockBankRetryDelay, RetryAttemptTimeout: defaultMockBankRetryAttemptTimeout, ConnectTimeout: defaultMockBankConnectTimeout, TLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, ResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, IdleConnectionTimeout: defaultMockBankIdleConnectionTimeout},
 	}
 }
@@ -35,6 +40,7 @@ func TestConfigValidate(t *testing.T) {
 		{"pool size", func(c *config) { c.Database.MaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
 		{"pool relationship", func(c *config) { c.Database.MaxIdleConnections = c.Database.MaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
 		{"payment secret", func(c *config) { c.Payment.FingerprintSecret = "" }, "FINGERPRINT_SECRET is required"},
+		{"service credentials", func(c *config) { c.Auth.Credentials = nil }, "service credential configuration is invalid"},
 		{"mock bank initial attempt", func(c *config) { c.MockBank.InitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank timeout", func(c *config) { c.MockBank.Timeout = 0 }, "MOCK_BANK_TIMEOUT must be a positive duration"},
 		{"mock bank timeout budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
@@ -62,9 +68,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigUsesDefaults(t *testing.T) {
-	t.Setenv("DATABASE_URL", validDatabaseURL)
-	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL)
-	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
+	setRequiredConfigEnv(t)
 	cfg, err := loadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
@@ -82,6 +86,7 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 }
 
 func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
+	setRequiredConfigEnv(t)
 	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "20")
 	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "8")
 	t.Setenv("DATABASE_CONNECTION_MAX_LIFETIME", "45m")
@@ -119,10 +124,29 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 		{"IDEMPOTENCY_REPLAY_WINDOW", "forever"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			setRequiredConfigEnv(t)
 			t.Setenv(tt.name, tt.value)
 			cfg, err := loadConfig()
 			require.Error(t, err)
 			assert.Equal(t, config{}, cfg)
 		})
 	}
+}
+
+func setRequiredConfigEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", validDatabaseURL)
+	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL)
+	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
+	t.Setenv("SERVICE_CREDENTIAL_HMAC_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE")
+	t.Setenv("ORDER_SERVICE_CREDENTIALS", serviceauth.Digest([]byte(validCredentialKey), "test-credential")+"=payments:read+payments:write")
+}
+
+func TestParseServiceCredentials(t *testing.T) {
+	credentials, err := parseServiceCredentials("first=payments:read,second=payments:read+payments:write")
+	require.NoError(t, err)
+	assert.Equal(t, []serviceauth.Credential{{Digest: "first", Scopes: []serviceauth.Scope{"payments:read"}}, {Digest: "second", Scopes: []serviceauth.Scope{"payments:read", "payments:write"}}}, credentials)
+
+	_, err = parseServiceCredentials("missing-separator")
+	require.Error(t, err)
 }

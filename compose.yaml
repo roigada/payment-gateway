@@ -83,7 +83,11 @@ services:
         condition: service_healthy
     environment:
       ADDR: :8080
-      FINGERPRINT_SECRET: local-development-secret
+      # The gateway validates these at startup. Empty interpolation keeps
+      # `docker compose logs` and `down` usable when local secrets are absent.
+      FINGERPRINT_SECRET: ${FINGERPRINT_SECRET:-}
+      SERVICE_CREDENTIAL_HMAC_KEY: ${SERVICE_CREDENTIAL_HMAC_KEY:-}
+      ORDER_SERVICE_CREDENTIALS: ${ORDER_SERVICE_CREDENTIALS:-}
       DATABASE_URL: postgres://payment_gateway:payment_gateway@postgres:5432/payment_gateway?sslmode=disable
       DATABASE_MAX_OPEN_CONNECTIONS: 10
       DATABASE_MAX_IDLE_CONNECTIONS: 5

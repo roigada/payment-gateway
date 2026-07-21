@@ -15,6 +15,8 @@ servers:
     description: Local root demo stack
 tags:
   - name: Payments
+security:
+  - BearerAuth: []
 paths:
   /v1/payments:
     post:
@@ -70,6 +72,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
         "413":
@@ -89,7 +95,7 @@ paths:
         - Payments
       operationId: searchPayments
       summary: Search Payments
-      description: Search Payments by external Order ID or Customer ID, optionally filtered by Payment Status.
+      description: Search Payments by external Order ID or Customer ID, optionally filtered by Payment Status. Requires the `payments:read` scope.
       parameters:
         - name: order_id
           in: query
@@ -115,6 +121,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentsEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
         "504":
@@ -125,6 +135,7 @@ paths:
         - Payments
       operationId: fetchPayment
       summary: Fetch a Payment
+      description: Requires the `payments:read` scope.
       parameters:
         - $ref: "#/components/parameters/PaymentID"
       responses:
@@ -134,6 +145,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/PaymentNotFound"
         "422":
@@ -166,6 +181,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
         "413":
@@ -204,6 +223,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
         "413":
@@ -240,6 +263,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
         "413":
@@ -276,6 +303,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/InvalidJsonBody"
         "413":
@@ -291,6 +322,12 @@ paths:
         "504":
           $ref: "#/components/responses/PaymentCommandTimeout"
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque Service Credential
+      description: Opaque Order Service credential. Payment reads require `payments:read`; Payment commands require `payments:write`.
   parameters:
     PaymentID:
       name: payment_id
@@ -320,6 +357,32 @@ components:
       description: The request body must be empty. Do not send `{}` or JSON `null`.
       content: {}
   responses:
+    Unauthorized:
+      description: Missing, malformed, or invalid Bearer Service Credential.
+      headers:
+        WWW-Authenticate:
+          required: true
+          schema:
+            type: string
+            example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: unauthorized
+              message: Unauthorized
+    Forbidden:
+      description: Authenticated Service Principal lacks the required Payment Scope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              code: forbidden
+              message: Forbidden
     InvalidJsonBody:
       description: Request JSON is malformed, invalid for the endpoint, too large, has unknown fields, has multiple values, or a no-input command received a non-empty body.
       content:
@@ -648,6 +711,8 @@ components:
                 - payment_status_conflict
                 - payment_not_found
                 - bank_state_conflict
+                - unauthorized
+                - forbidden
                 - bank_unavailable
                 - bank_timeout
                 - payment_timeout
