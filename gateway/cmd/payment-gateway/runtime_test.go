@@ -344,7 +344,7 @@ func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchP
 func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
 	t.Helper()
 
-	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, testRuntimeHandlerOptions())
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, testRuntimeHandlerOptions(t))
 	require.NoError(t, err)
 	return handler
 }
@@ -353,13 +353,12 @@ func discardRuntimeLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func testRuntimeHandlerOptions() httpapi.HandlerOptions {
+func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
+	t.Helper()
 	cfg := validConfig()
 	options := cfg.httpHandler().Options
 	authenticator, err := cfg.Auth.authenticator()
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 	options.Authenticator = authenticator
 	return options
 }
