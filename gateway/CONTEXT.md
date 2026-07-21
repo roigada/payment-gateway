@@ -64,6 +64,22 @@ _Avoid_: Invalid status conflict, transition error
 The identity of the order that a **Payment** belongs to. The payment gateway treats it as an external reference owned by the order service.
 _Avoid_: Order, purchase ID
 
+**Order Service**:
+The external service that owns Orders and is the gateway's authenticated caller.
+_Avoid_: User, customer, merchant
+
+**Service Principal**:
+The authenticated identity of an external service calling the payment gateway.
+_Avoid_: User, account, tenant
+
+**Service Credential**:
+An opaque secret that proves a **Service Principal** is the Order Service when calling the payment gateway.
+_Avoid_: User token, session, password
+
+**Payment Scope**:
+A permission granted to a **Service Principal** to read or change Payments.
+_Avoid_: Role, customer authorization, bank permission
+
 **Customer ID**:
 The identity of the customer whose mock bank account funds a **Payment**. The payment gateway treats it as an external reference.
 _Avoid_: User ID, account ID

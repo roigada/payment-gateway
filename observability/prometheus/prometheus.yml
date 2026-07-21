@@ -10,4 +10,4 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - payment-gateway:8080
+          - payment-gateway:9091

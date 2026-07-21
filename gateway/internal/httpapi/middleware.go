@@ -1,10 +1,38 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 )
+
+type principalContextKey struct{}
+
+func (s *Handler) requireAuthentication(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := s.options.Authenticator.Authenticate(r)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
+	})
+}
+
+func (s *Handler) requireScope(scope serviceauth.Scope, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := r.Context().Value(principalContextKey{}).(serviceauth.Principal)
+		if !ok || !principal.HasScope(scope) {
+			writeError(w, http.StatusForbidden, "forbidden", http.StatusText(http.StatusForbidden))
+			return
+		}
+		next(w, r)
+	}
+}
 
 func (s *Handler) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

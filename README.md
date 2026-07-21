@@ -12,7 +12,7 @@ From a clean checkout with Docker available, follow this path in order. It takes
    make demo
    ```
 
-   This starts Postgres, applies gateway migrations, starts the bundled Mock Bank, runs the gateway on `http://localhost:8080`, and provisions Prometheus and Grafana.
+   This generates an ignored, throwaway local Service Credential in `.env`, then starts Postgres, applies gateway migrations, starts the bundled Mock Bank, runs the gateway on `http://localhost:8080`, and provisions Prometheus and Grafana. The raw credential stays only in that ignored local file.
 
 2. In another terminal, verify the public happy path:
 
@@ -20,13 +20,13 @@ From a clean checkout with Docker available, follow this path in order. It takes
    make demo-smoke
    ```
 
-   The smoke check waits for readiness, authorizes a Payment through the Mock Bank, captures it, fetches it, and verifies the final `captured` status.
+   The smoke check waits for readiness, proves an unauthenticated Payment request is rejected, authorizes a Payment through the Mock Bank, captures it, fetches it, and verifies the final `captured` status. It also confirms the public gateway does not serve `/metrics` while Prometheus scrapes the private operational listener.
 
-3. Explore the API yourself with the runnable [`demo/payment-gateway.http`](demo/payment-gateway.http) collection. It includes health, readiness, metrics, authorization, an Idempotency Replay, capture, fetch, search, and a declined payment. The formal endpoint and schema reference is the gateway [OpenAPI contract](gateway/docs/api/openapi.yaml).
+3. Explore the API yourself with the runnable [`demo/payment-gateway.http`](demo/payment-gateway.http) collection. It includes health, readiness, authenticated authorization, an Idempotency Replay, capture, fetch, search, and a declined payment. The formal endpoint and schema reference is the gateway [OpenAPI contract](gateway/docs/api/openapi.yaml).
 
 4. Inspect the traffic in [Grafana](http://localhost:3000) (`admin` / `payment-gateway`). The provisioned Gateway Overview dashboard refreshes every five seconds; run the smoke command again if it has no traffic yet.
 
-5. Inspect the same gateway-owned signals in [Prometheus](http://localhost:9090): check the scrape target, then query the HTTP, payment-operation, Mock Bank dependency, and Postgres pool metrics. Prometheus intentionally scrapes the gateway’s `/metrics`, not the bundled Mock Bank.
+5. Inspect the same gateway-owned signals in [Prometheus](http://localhost:9090): check the scrape target, then query the HTTP, payment-operation, Mock Bank dependency, and Postgres pool metrics. Prometheus intentionally scrapes the gateway’s private `/metrics` listener, not the bundled Mock Bank.
 
 6. Go deeper through the [gateway README](gateway/README.md), [architecture decisions](gateway/docs/adr/), [domain language](gateway/CONTEXT.md), and [alert runbook](gateway/docs/runbooks/gateway-alerts.md).
 
@@ -53,7 +53,7 @@ Useful endpoints after `make demo`:
 ```text
 Gateway health:       http://localhost:8080/healthz
 Gateway readiness:    http://localhost:8080/readyz
-Gateway metrics:      http://localhost:8080/metrics
+Gateway metrics:      private to Compose; scrape through Prometheus (not localhost:8080/metrics)
 Gateway API contract: gateway/docs/api/openapi.yaml
 Grafana:              http://localhost:3000
 Prometheus:           http://localhost:9090
@@ -75,6 +75,8 @@ make demo-reset
 ```
 
 Set `MOCK_BANK_BASE_URL=http://127.0.0.1:8787` when running `make demo-smoke` if you also want the smoke check to assert Mock Bank health.
+
+`make demo` and `make demo-smoke` generate `.env` on first use with a fresh local fingerprint secret, Service Credential verification key, configured digest, and raw Order Service credential. `.env` is ignored and must never be committed or copied into examples. Delete `.env` before the next `make demo` to rotate this throwaway credential. In a deployed environment, keep raw credentials only in the Order Service secret store, overlap active credential digests during planned rotation, and revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; local Compose is the explicit HTTP-only exception.
 
 ## Development checks
 
