@@ -32,6 +32,8 @@ type PaymentService struct {
 	claimStuckAfter   time.Duration
 }
 
+const DefaultIdempotencyClaimStuckAfter = 5 * time.Minute
+
 func NewPaymentService(
 	store PaymentStore,
 	paymentIDs PaymentIDGenerator,

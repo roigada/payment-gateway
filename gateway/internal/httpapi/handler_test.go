@@ -218,6 +218,17 @@ func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testin
 	assert.Equal(t, []string{"read", "write", "read"}, api.metrics.rateLimitRejections)
 }
 
+func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
+
+	require.Equal(t, http.StatusOK, api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil).Code)
+	require.Equal(t, http.StatusTooManyRequests, api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil).Code)
+
+	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/healthz", "", nil).Code)
+	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/readyz", "", nil).Code)
+}
+
 func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCredentialRotationQuota(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{

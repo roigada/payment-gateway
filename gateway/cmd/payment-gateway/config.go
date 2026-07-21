@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/postgres"
 	"github.com/roigada/payment-gateway/internal/serviceauth"
@@ -20,7 +21,7 @@ const (
 	defaultDatabaseConnectionMaxLifetime                = 30 * time.Minute
 	defaultDatabaseConnectionMaxIdleTime                = 5 * time.Minute
 	defaultDatabaseStartupTimeout                       = 5 * time.Second
-	defaultIdempotencyClaimStuckAfter                   = 5 * time.Minute
+	defaultIdempotencyClaimStuckAfter                   = app.DefaultIdempotencyClaimStuckAfter
 	defaultIdempotencyReplayWindow                      = 24 * time.Hour
 	defaultIdempotencyReplayCleanupInterval             = time.Hour
 	defaultLogLevel                                     = "info"
