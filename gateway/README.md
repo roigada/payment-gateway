@@ -52,7 +52,7 @@ LOG_LEVEL                          optional JSON log level: debug, info, warn, o
 PAYMENT_COMMAND_TIMEOUT            optional synchronous Payment command deadline, defaults to 10s
 PAYMENT_READ_TIMEOUT               optional Payment read deadline, defaults to 3s
 MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT  optional initial Mock Bank attempt deadline, defaults to 2s
-MOCK_BANK_RETRY_DELAY              optional cancellable delay before one authorization retry, defaults to 250ms
+MOCK_BANK_RETRY_DELAY              optional cancellable delay before one Mock Bank retry, defaults to 250ms
 MOCK_BANK_RETRY_ATTEMPT_TIMEOUT    optional second Mock Bank attempt deadline, defaults to 5s
 MOCK_BANK_TIMEOUT                  optional non-retried Mock Bank call deadline, defaults to 7s
 MOCK_BANK_CONNECT_TIMEOUT          optional Mock Bank connect timeout, defaults to 2s
@@ -109,7 +109,7 @@ export ADDR=':8080'
 
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
-Payment reads have a fixed three-second request deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
+Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
 
 Completed payment commands have a 24-hour Idempotency Replay Window by default. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
