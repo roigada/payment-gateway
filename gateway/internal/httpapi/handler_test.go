@@ -16,6 +16,7 @@ import (
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +45,88 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 		}
 	}`, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "bank")
+}
+
+func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
+	for _, tt := range []struct {
+		name, authorization string
+		status              int
+		code                string
+		invoked             bool
+	}{
+		{"missing", "", http.StatusUnauthorized, "unauthorized", false},
+		{"malformed", "Basic read-credential", http.StatusUnauthorized, "unauthorized", false},
+		{"invalid", "Bearer invalid-credential", http.StatusUnauthorized, "unauthorized", false},
+		{"insufficient scope", "Bearer read-only-for-write", http.StatusUnauthorized, "unauthorized", false},
+		{"valid read credential", "Bearer read-credential", http.StatusOK, "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			req := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+			rec := httptest.NewRecorder()
+			api.handler.ServeHTTP(rec, req)
+
+			require.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+			if tt.status == http.StatusUnauthorized {
+				assert.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"))
+			}
+			if tt.code != "" {
+				assertErrorResponse(t, rec, tt.code, http.StatusText(tt.status))
+			}
+			assert.Equal(t, tt.invoked, api.payments.searchPaymentsQuery != (app.SearchPaymentsQuery{}))
+		})
+	}
+}
+
+func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t *testing.T) {
+	api := newPaymentAPITest(t)
+	key := []byte("01234567890123456789012345678901")
+	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{{Digest: serviceauth.Digest(key, "write-only-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsWrite}}})
+	require.NoError(t, err)
+	options := testHandlerOptions()
+	options.Authenticator = authenticator
+	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, http.NotFoundHandler(), options)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+	req.Header.Set("Authorization", "Bearer write-only-credential")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Empty(t, rec.Header().Get("WWW-Authenticate"))
+	assertErrorResponse(t, rec, "forbidden", http.StatusText(http.StatusForbidden))
+	assert.Equal(t, app.SearchPaymentsQuery{}, api.payments.searchPaymentsQuery)
+
+	lookup := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+	lookup.Header.Set("Authorization", "Bearer write-only-credential")
+	lookupRec := httptest.NewRecorder()
+	handler.ServeHTTP(lookupRec, lookup)
+	require.Equal(t, http.StatusForbidden, lookupRec.Code)
+	assertErrorResponse(t, lookupRec, "forbidden", http.StatusText(http.StatusForbidden))
+	assert.Equal(t, app.GetPaymentQuery{}, api.payments.getPaymentQuery)
+}
+
+func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing.T) {
+	for _, authorization := range []string{"", "Basic read-credential", "Bearer invalid-credential"} {
+		t.Run(authorization, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			req := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+			if authorization != "" {
+				req.Header.Set("Authorization", authorization)
+			}
+			rec := httptest.NewRecorder()
+			api.handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"))
+			assertErrorResponse(t, rec, "unauthorized", http.StatusText(http.StatusUnauthorized))
+			assert.Equal(t, app.GetPaymentQuery{}, api.payments.getPaymentQuery)
+		})
+	}
 }
 
 func TestNewHandlerRequiresDependencies(t *testing.T) {
@@ -111,11 +194,14 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 		<-ctx.Done()
 		return app.PaymentCommandResult{}, ctx.Err()
 	}}
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	options := testHandlerOptions()
+	options.PaymentCommandTimeout = time.Millisecond
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
+	req.Header.Set("Authorization", "Bearer write-credential")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
@@ -127,11 +213,14 @@ func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 		<-ctx.Done()
 		return app.PaymentCommandResult{}, app.NewPaymentBankTimeoutError(ctx.Err())
 	}}
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	options := testHandlerOptions()
+	options.PaymentCommandTimeout = time.Millisecond
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
+	req.Header.Set("Authorization", "Bearer write-credential")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -144,11 +233,14 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		return app.PaymentCommandResult{}, nil
 	}}
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Millisecond, PaymentReadTimeout: time.Second, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	options := testHandlerOptions()
+	options.PaymentCommandTimeout = time.Millisecond
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
+	req.Header.Set("Authorization", "Bearer write-credential")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -195,6 +287,7 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 			api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
 			req := tt.request()
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer write-credential")
 			rec := httptest.NewRecorder()
 
 			api.handler.ServeHTTP(rec, req)
@@ -261,10 +354,14 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 		<-ctx.Done()
 		return app.PaymentResult{}, ctx.Err()
 	}}
-	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), httpapi.HandlerOptions{PaymentCommandTimeout: time.Second, PaymentReadTimeout: time.Millisecond, ReadinessTimeout: time.Second, MaxRequestBodyBytes: 64 * 1024})
+	options := testHandlerOptions()
+	options.PaymentReadTimeout = time.Millisecond
+	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, http.NotFoundHandler(), options)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil))
+	req := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+	req.Header.Set("Authorization", "Bearer read-credential")
+	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
 	assertErrorResponse(t, rec, "request_timeout", "payment read timed out")
 }
@@ -887,6 +984,13 @@ func (api *paymentAPITest) request(t *testing.T, method, path, body string, head
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
+	if req.Header.Get("Authorization") == "" {
+		if method == http.MethodGet {
+			req.Header.Set("Authorization", "Bearer read-credential")
+		} else {
+			req.Header.Set("Authorization", "Bearer write-credential")
+		}
+	}
 	rec := httptest.NewRecorder()
 
 	api.handler.ServeHTTP(rec, req)
@@ -927,7 +1031,20 @@ func testHandlerOptions() httpapi.HandlerOptions {
 		PaymentReadTimeout:    time.Second,
 		ReadinessTimeout:      time.Second,
 		MaxRequestBodyBytes:   64 * 1024,
+		Authenticator:         testAuthenticator(),
 	}
+}
+
+func testAuthenticator() *serviceauth.Authenticator {
+	key := []byte("01234567890123456789012345678901")
+	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{
+		{Digest: serviceauth.Digest(key, "read-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead}},
+		{Digest: serviceauth.Digest(key, "write-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return authenticator
 }
 
 type recordingHTTPMetrics struct {

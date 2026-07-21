@@ -70,6 +70,8 @@ IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL optional completed replay cleanup interval, 
 SHUTDOWN_TIMEOUT                  optional graceful shutdown deadline, defaults to 30s
 MOCK_BANK_BASE_URL                required Mock Bank base URL
 FINGERPRINT_SECRET                 required HMAC secret for request and authorization card fingerprints
+SERVICE_CREDENTIAL_HMAC_KEY         required base64url-encoded HMAC key (at least 32 bytes) for Service Credential verification
+ORDER_SERVICE_CREDENTIALS           required active credentials as digest=scope+scope entries, separated by commas
 ADDR                              optional HTTP listen address, defaults to :8080
 ```
 
@@ -104,12 +106,26 @@ export HTTP_WRITE_TIMEOUT='15s'
 export HTTP_IDLE_TIMEOUT='60s'
 export HTTP_MAX_REQUEST_BODY_BYTES='65536'
 export FINGERPRINT_SECRET='local-development-secret'
+export SERVICE_CREDENTIAL_HMAC_KEY='replace-with-a-base64url-encoded-32-byte-key'
+export ORDER_SERVICE_CREDENTIALS='replace-with-a-configured-credential-digest=payments:read+payments:write'
 export ADDR=':8080'
 ```
 
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
 Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
+
+## Service credentials
+
+Every `/v1/` route requires an opaque `Authorization: Bearer <credential>` header. Payment search and lookup require `payments:read`; Payment commands require `payments:write`. Missing, malformed, or invalid credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`; valid credentials without the route's scope return `403 Forbidden`.
+
+Generate a high-entropy credential and its configuration digest with a locally supplied HMAC key:
+
+```sh
+go run ./cmd/service-credential -hmac-key "$SERVICE_CREDENTIAL_HMAC_KEY"
+```
+
+Store the printed raw credential only in the Order Service secret store. Put its printed `digest=scopes` entry in `ORDER_SERVICE_CREDENTIALS`; comma-separate entries to keep overlapping active credentials during rotation. The gateway never needs the raw credential. Rotate or revoke a credential through normal configuration rollout. Terminate TLS before the gateway outside trusted local development.
 
 Completed payment commands have a 24-hour Idempotency Replay Window by default. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
@@ -256,6 +272,7 @@ The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/o
 
 ```sh
 curl -i http://localhost:8080/v1/payments \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: authorize-order-1001' \
   -d '{
@@ -312,6 +329,7 @@ Authorization retry is only for Payments whose authorization outcome is `pending
 
 ```sh
 curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: retry-auth-order-1001' \
   -d '{
@@ -330,16 +348,19 @@ Capture, Void, and Refund take no request body. Each operation is full-amount on
 
 ```sh
 curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: capture-order-1001'
 ```
 
 ```sh
 curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: void-order-1001'
 ```
 
 ```sh
 curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: refund-order-1001'
 ```
 
@@ -364,11 +385,13 @@ Captured response:
 ### Fetch and Search Payments
 
 ```sh
-curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000
+curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 ```
 
 ```sh
-curl -i 'http://localhost:8080/v1/payments?order_id=order-1001&customer_id=customer-501&status=authorized'
+curl -i 'http://localhost:8080/v1/payments?order_id=order-1001&customer_id=customer-501&status=authorized' \
+  -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 ```
 
 Search responses use a `payments` envelope:

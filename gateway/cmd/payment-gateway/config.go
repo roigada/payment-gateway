@@ -1,14 +1,17 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/postgres"
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 )
 
 const (
@@ -47,6 +50,7 @@ type config struct {
 	Database DatabaseConfig
 	HTTP     HTTPConfig
 	Payment  PaymentConfig
+	Auth     AuthConfig
 	MockBank MockBankConfig
 }
 
@@ -82,6 +86,11 @@ type PaymentConfig struct {
 	ReadTimeout                time.Duration
 }
 
+type AuthConfig struct {
+	HMACKey     []byte
+	Credentials []serviceauth.Credential
+}
+
 type MockBankConfig struct {
 	BaseURL               string
 	Timeout               time.Duration
@@ -98,6 +107,7 @@ type httpHandlerConfig struct {
 	Payment  PaymentConfig
 	MockBank MockBankConfig
 	Options  httpapi.HandlerOptions
+	Auth     AuthConfig
 }
 
 func (cfg config) httpHandler() httpHandlerConfig {
@@ -110,7 +120,12 @@ func (cfg config) httpHandler() httpHandlerConfig {
 			ReadinessTimeout:      readinessCheckTimeout,
 			MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
 		},
+		Auth: cfg.Auth,
 	}
+}
+
+func (cfg AuthConfig) authenticator() (*serviceauth.Authenticator, error) {
+	return serviceauth.NewAuthenticator(cfg.HMACKey, cfg.Credentials)
 }
 
 func (cfg DatabaseConfig) postgresOptions() postgres.Options {
@@ -124,6 +139,14 @@ func (cfg DatabaseConfig) postgresOptions() postgres.Options {
 }
 
 func loadConfig() (config, error) {
+	serviceCredentialHMACKey, err := envBase64("SERVICE_CREDENTIAL_HMAC_KEY")
+	if err != nil {
+		return config{}, err
+	}
+	serviceCredentials, err := parseServiceCredentials(os.Getenv("ORDER_SERVICE_CREDENTIALS"))
+	if err != nil {
+		return config{}, err
+	}
 	databaseMaxOpenConnections, err := envInt("DATABASE_MAX_OPEN_CONNECTIONS", defaultDatabaseMaxOpenConnections)
 	if err != nil {
 		return config{}, err
@@ -226,6 +249,7 @@ func loadConfig() (config, error) {
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
+		Auth:     AuthConfig{HMACKey: serviceCredentialHMACKey, Credentials: serviceCredentials},
 		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, InitialAttemptTimeout: mockBankInitialAttemptTimeout, RetryDelay: mockBankRetryDelay, RetryAttemptTimeout: mockBankRetryAttemptTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
 	}
 	return cfg, nil
@@ -252,6 +276,9 @@ func (cfg config) validate() error {
 	}
 	if cfg.Payment.FingerprintSecret == "" {
 		return fmt.Errorf("FINGERPRINT_SECRET is required")
+	}
+	if _, err := cfg.Auth.authenticator(); err != nil {
+		return fmt.Errorf("service credential configuration is invalid: %w", err)
 	}
 	if cfg.Payment.IdempotencyClaimStuckAfter <= 0 {
 		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration")
@@ -333,6 +360,41 @@ func (cfg config) validate() error {
 	}
 
 	return nil
+}
+
+func envBase64(name string) ([]byte, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return nil, fmt.Errorf("%s is required", name)
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be base64url-encoded", name)
+	}
+	return decoded, nil
+}
+
+// parseServiceCredentials accepts comma-separated digest=scope+scope entries.
+// Digests are base64url HMAC-SHA-256 values; scopes are payments:read or payments:write.
+func parseServiceCredentials(value string) ([]serviceauth.Credential, error) {
+	if value == "" {
+		return nil, fmt.Errorf("ORDER_SERVICE_CREDENTIALS is required")
+	}
+	entries := strings.Split(value, ",")
+	credentials := make([]serviceauth.Credential, 0, len(entries))
+	for _, entry := range entries {
+		digest, scopes, ok := strings.Cut(entry, "=")
+		if !ok || digest == "" || scopes == "" {
+			return nil, fmt.Errorf("ORDER_SERVICE_CREDENTIALS must contain digest=scope+scope entries")
+		}
+		scopeValues := strings.Split(scopes, "+")
+		credentialScopes := make([]serviceauth.Scope, len(scopeValues))
+		for i, scope := range scopeValues {
+			credentialScopes[i] = serviceauth.Scope(scope)
+		}
+		credentials = append(credentials, serviceauth.Credential{Digest: digest, Scopes: credentialScopes})
+	}
+	return credentials, nil
 }
 
 func envInt(name string, fallback int) (int, error) {

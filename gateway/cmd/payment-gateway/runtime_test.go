@@ -291,7 +291,14 @@ func discardRuntimeLogger() *slog.Logger {
 }
 
 func testRuntimeHandlerOptions() httpapi.HandlerOptions {
-	return validConfig().httpHandler().Options
+	cfg := validConfig()
+	options := cfg.httpHandler().Options
+	authenticator, err := cfg.Auth.authenticator()
+	if err != nil {
+		panic(err)
+	}
+	options.Authenticator = authenticator
+	return options
 }
 func newTestListener(t *testing.T) net.Listener {
 	t.Helper()
