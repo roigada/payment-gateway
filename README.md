@@ -88,7 +88,7 @@ make demo-tls
 
 Caddy is then the only public gateway edge. It redirects `http://localhost:8080` to `https://localhost:8443` with `308`, and proxies the public API, `/healthz`, and `/readyz`. The gateway application listener has no host-published port in this mode; its private metrics listener remains reachable only to Prometheus on the Compose network. Caddy returns `404` for `/metrics` and never proxies it.
 
-Caddy creates its development CA and certificates in Docker-managed named volumes (`caddy-data` and `caddy-config`). Nothing is committed and the demo does not install trust into the host system. Run this in a second terminal to validate the certificate chain, redirect, public endpoints, absent gateway host port, and private Prometheus scrape without disabling certificate verification:
+Caddy creates its development CA and certificates in Docker-managed named volumes (`caddy-data` and `caddy-config`). Nothing is committed and the demo does not install trust into the host system. This is reviewer-demo certificate handling only: in a non-local deployment, the platform/edge owner is responsible for certificate issuance, renewal, trust, and network enforcement while the gateway remains private behind that edge. Run this in a second terminal to validate the certificate chain, redirect, public endpoints, absent gateway host port, and private Prometheus scrape without disabling certificate verification:
 
 ```sh
 make demo-tls-smoke
