@@ -46,6 +46,7 @@ type readinessChecker interface {
 
 type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
+	RecordRateLimitRejection(routeClass string)
 }
 
 func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, options HandlerOptions) (*Handler, error) {

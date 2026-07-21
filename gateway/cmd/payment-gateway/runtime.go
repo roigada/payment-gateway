@@ -79,6 +79,10 @@ func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	rateLimitMetrics, err := observability.NewRateLimitMetrics(metricsRegistry)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	mockBankMetrics, err := observability.NewMockBankMetrics(metricsRegistry)
 	if err != nil {
 		return nil, nil, nil, err
@@ -129,11 +133,16 @@ func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, cfg.Options)
+	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetricsWithRateLimitRejections{HTTPMetrics: httpMetrics, RateLimitMetrics: rateLimitMetrics}, cfg.Options)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return handler, metricsHandler, cleanupMetrics, nil
+}
+
+type httpMetricsWithRateLimitRejections struct {
+	*observability.HTTPMetrics
+	*observability.RateLimitMetrics
 }
 
 func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {

@@ -44,6 +44,7 @@ func (s *Handler) limitRate(routeClass RouteClass, next http.Handler) http.Handl
 		}
 		allowed, retryAfter := s.options.RateLimiter.Reserve(principal.ID(), routeClass)
 		if !allowed {
+			s.metrics.RecordRateLimitRejection(string(routeClass))
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 			return
