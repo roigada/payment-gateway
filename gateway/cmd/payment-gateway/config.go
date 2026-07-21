@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ const (
 	paymentCommandCompletionReserve               = time.Second
 	defaultHTTPReadHeaderTimeout                  = 5 * time.Second
 	defaultHTTPAddr                               = ":8080"
+	defaultMetricsAddr                            = ":9091"
 	defaultHTTPReadTimeout                        = 15 * time.Second
 	defaultHTTPWriteTimeout                       = 15 * time.Second
 	defaultHTTPIdleTimeout                        = 60 * time.Second
@@ -49,6 +51,7 @@ type config struct {
 	Runtime  RuntimeConfig
 	Database DatabaseConfig
 	HTTP     HTTPConfig
+	Metrics  MetricsConfig
 	Payment  PaymentConfig
 	Auth     AuthConfig
 	MockBank MockBankConfig
@@ -77,6 +80,10 @@ type HTTPConfig struct {
 	WriteTimeout        time.Duration
 	IdleTimeout         time.Duration
 	MaxRequestBodyBytes int64
+}
+
+type MetricsConfig struct {
+	Addr string
 }
 
 type PaymentConfig struct {
@@ -248,6 +255,7 @@ func loadConfig() (config, error) {
 		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayWindow: idempotencyReplayWindow, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout, MaxRequestBodyBytes: httpMaxRequestBodyBytes},
+		Metrics:  MetricsConfig{Addr: envString("METRICS_ADDR", defaultMetricsAddr)},
 		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, CommandTimeout: paymentCommandTimeout, ReadTimeout: paymentReadTimeout},
 		Auth:     AuthConfig{HMACKey: serviceCredentialHMACKey, Credentials: serviceCredentials},
 		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, InitialAttemptTimeout: mockBankInitialAttemptTimeout, RetryDelay: mockBankRetryDelay, RetryAttemptTimeout: mockBankRetryAttemptTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
@@ -256,6 +264,15 @@ func loadConfig() (config, error) {
 }
 
 func (cfg config) validate() error {
+	if err := validateListenerAddr("ADDR", cfg.HTTP.Addr); err != nil {
+		return err
+	}
+	if err := validateListenerAddr("METRICS_ADDR", cfg.Metrics.Addr); err != nil {
+		return err
+	}
+	if cfg.HTTP.Addr == cfg.Metrics.Addr {
+		return fmt.Errorf("METRICS_ADDR must differ from ADDR")
+	}
 	if cfg.Database.URL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
@@ -359,6 +376,21 @@ func (cfg config) validate() error {
 		return fmt.Errorf("MOCK_BANK_IDLE_CONNECTION_TIMEOUT must be a positive duration")
 	}
 
+	return nil
+}
+
+func validateListenerAddr(name, addr string) error {
+	if addr == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("%s must be a host:port address", name)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("%s must use a port between 1 and 65535", name)
+	}
 	return nil
 }
 

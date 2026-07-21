@@ -21,6 +21,7 @@ func validConfig() config {
 		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout, IdempotencyReplayWindow: defaultIdempotencyReplayWindow, IdempotencyReplayCleanupInterval: defaultIdempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
 		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes},
+		Metrics:  MetricsConfig{Addr: defaultMetricsAddr},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
 		Auth: AuthConfig{HMACKey: []byte(validCredentialKey), Credentials: []serviceauth.Credential{
 			{Digest: serviceauth.Digest([]byte(validCredentialKey), "test-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
@@ -36,6 +37,11 @@ func TestConfigValidate(t *testing.T) {
 		wantErr string
 	}{
 		{"valid", func(*config) {}, ""},
+		{"public listener address", func(c *config) { c.HTTP.Addr = "invalid" }, "ADDR must be a host:port address"},
+		{"metrics listener address", func(c *config) { c.Metrics.Addr = "" }, "METRICS_ADDR is required"},
+		{"metrics listener empty port", func(c *config) { c.Metrics.Addr = "localhost:" }, "METRICS_ADDR must be a host:port address"},
+		{"metrics listener port range", func(c *config) { c.Metrics.Addr = ":65536" }, "METRICS_ADDR must use a port between 1 and 65535"},
+		{"shared listener address", func(c *config) { c.Metrics.Addr = c.HTTP.Addr }, "METRICS_ADDR must differ from ADDR"},
 		{"database URL", func(c *config) { c.Database.URL = "" }, "DATABASE_URL is required"},
 		{"pool size", func(c *config) { c.Database.MaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
 		{"pool relationship", func(c *config) { c.Database.MaxIdleConnections = c.Database.MaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
@@ -72,6 +78,7 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	cfg, err := loadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
+	assert.Equal(t, defaultMetricsAddr, cfg.Metrics.Addr)
 	assert.Equal(t, validDatabaseURL, cfg.Database.URL)
 	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
@@ -95,6 +102,7 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	t.Setenv("MOCK_BANK_RETRY_DELAY", "500ms")
 	t.Setenv("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT", "6s")
 	t.Setenv("HTTP_MAX_REQUEST_BODY_BYTES", "32768")
+	t.Setenv("METRICS_ADDR", "127.0.0.1:9191")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("IDEMPOTENCY_REPLAY_WINDOW", "48h")
 	t.Setenv("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL", "30m")
@@ -108,6 +116,7 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, 500*time.Millisecond, cfg.MockBank.RetryDelay)
 	assert.Equal(t, 6*time.Second, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, int64(32768), cfg.HTTP.MaxRequestBodyBytes)
+	assert.Equal(t, "127.0.0.1:9191", cfg.Metrics.Addr)
 	assert.Equal(t, "debug", cfg.Runtime.LogLevel)
 	assert.Equal(t, 48*time.Hour, cfg.Runtime.IdempotencyReplayWindow)
 	assert.Equal(t, 30*time.Minute, cfg.Runtime.IdempotencyReplayCleanupInterval)

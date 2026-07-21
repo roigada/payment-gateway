@@ -83,6 +83,7 @@ services:
         condition: service_healthy
     environment:
       ADDR: :8080
+      METRICS_ADDR: :9091
       # The gateway validates these at startup. Empty interpolation keeps
       # `docker compose logs` and `down` usable when local secrets are absent.
       FINGERPRINT_SECRET: ${FINGERPRINT_SECRET:-}

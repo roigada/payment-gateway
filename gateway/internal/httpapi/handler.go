@@ -47,7 +47,7 @@ type httpMetrics interface {
 	RecordHTTPRequest(method string, route string, status int, duration time.Duration)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, metricsHandler http.Handler, options HandlerOptions) (*Handler, error) {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, options HandlerOptions) (*Handler, error) {
 	if payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
@@ -60,9 +60,6 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 	if metrics == nil {
 		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
 	}
-	if metricsHandler == nil {
-		return nil, errors.New("httpapi handler: metrics handler is required")
-	}
 	if options.Authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
@@ -74,7 +71,7 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 		readiness: readiness,
 		options:   options,
 	}
-	handler.handler = handler.routes(metricsHandler)
+	handler.handler = handler.routes()
 	return handler, nil
 }
 
@@ -82,7 +79,7 @@ func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
+func (s *Handler) routes() http.Handler {
 	mux := http.NewServeMux()
 	registerRoute := func(pattern string, handler http.HandlerFunc) {
 		_, route, ok := strings.Cut(pattern, " ")
@@ -94,7 +91,6 @@ func (s *Handler) routes(metricsHandler http.Handler) http.Handler {
 
 	registerRoute("GET /healthz", s.healthz)
 	registerRoute("GET /readyz", s.readyz)
-	mux.Handle("GET /metrics", s.limitRequestBody(metricsHandler))
 	versioned := http.NewServeMux()
 	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, handler http.HandlerFunc) {
 		_, route, _ := strings.Cut(pattern, " ")

@@ -1,4 +1,5 @@
 @gateway = http://localhost:8080
+@metrics = http://localhost:9091
 @bank = http://localhost:8787
 @orderServiceCredential = {{$dotenv ORDER_SERVICE_CREDENTIAL}}
 
@@ -9,7 +10,7 @@ GET {{gateway}}/healthz
 GET {{gateway}}/readyz
 
 ### Gateway metrics
-GET {{gateway}}/metrics
+GET {{metrics}}/metrics
 
 ### Mock Bank docs
 GET {{bank}}/docs
