@@ -47,6 +47,83 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+func TestPaymentCommandsRequireWriteScope(t *testing.T) {
+	const paymentID = "pay_550e8400-e29b-41d4-a716-446655440000"
+
+	for _, tt := range []struct {
+		name       string
+		path       string
+		body       string
+		headers    map[string]string
+		status     int
+		wasInvoked func(*paymentApplicationFake) bool
+	}{
+		{
+			name:       "authorize",
+			path:       "/v1/payments",
+			body:       validAuthorizeBody(),
+			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "authorize-key"},
+			status:     http.StatusCreated,
+			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.authorizePaymentCalls == 1 },
+		},
+		{
+			name:       "authorization retry",
+			path:       "/v1/payments/" + paymentID + "/authorization-retries",
+			body:       validRetryAuthorizationBody(),
+			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "retry-key"},
+			status:     http.StatusOK,
+			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.retryAuthorizationCalls == 1 },
+		},
+		{
+			name:       "capture",
+			path:       "/v1/payments/" + paymentID + "/capture",
+			headers:    map[string]string{"Idempotency-Key": "capture-key"},
+			status:     http.StatusOK,
+			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.capturePaymentCalls == 1 },
+		},
+		{
+			name:       "void",
+			path:       "/v1/payments/" + paymentID + "/void",
+			headers:    map[string]string{"Idempotency-Key": "void-key"},
+			status:     http.StatusOK,
+			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.voidPaymentCalls == 1 },
+		},
+		{
+			name:       "refund",
+			path:       "/v1/payments/" + paymentID + "/refund",
+			headers:    map[string]string{"Idempotency-Key": "refund-key"},
+			status:     http.StatusOK,
+			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.refundPaymentCalls == 1 },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("read-only credential is forbidden before the application", func(t *testing.T) {
+				api := newPaymentAPITest(t)
+				headers := make(map[string]string, len(tt.headers)+1)
+				for key, value := range tt.headers {
+					headers[key] = value
+				}
+				headers["Authorization"] = "Bearer read-credential"
+
+				rec := api.request(t, http.MethodPost, tt.path, tt.body, headers)
+
+				require.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
+				assert.Empty(t, rec.Header().Get("WWW-Authenticate"))
+				assertErrorResponse(t, rec, "forbidden", http.StatusText(http.StatusForbidden))
+				assert.False(t, tt.wasInvoked(api.payments))
+			})
+
+			t.Run("write credential invokes the application", func(t *testing.T) {
+				api := newPaymentAPITest(t)
+				rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
+
+				require.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
+				assert.True(t, tt.wasInvoked(api.payments))
+			})
+		})
+	}
+}
+
 func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	for _, tt := range []struct {
 		name, authorization string
@@ -1074,22 +1151,27 @@ func (r recordedHTTPRequest) withoutDuration() recordedHTTPRequest {
 
 type paymentApplicationFake struct {
 	authorizePaymentFunc      func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error)
+	authorizePaymentCalls     int
 	authorizePaymentCommand   app.AuthorizePaymentCommand
 	authorizePaymentResult    app.PaymentResult
 	authorizePaymentErr       error
 	authorizePaymentPanic     any
 	retryAuthorizationCommand app.RetryAuthorizationCommand
+	retryAuthorizationCalls   int
 	retryAuthorizationResult  app.PaymentResult
 	retryAuthorizationErr     error
 	retryAuthorizationPanic   any
 	capturePaymentCommand     app.CapturePaymentCommand
+	capturePaymentCalls       int
 	capturePaymentResult      app.PaymentResult
 	capturePaymentErr         error
 	capturePaymentPanic       any
 	voidPaymentCommand        app.VoidPaymentCommand
+	voidPaymentCalls          int
 	voidPaymentResult         app.PaymentResult
 	voidPaymentErr            error
 	refundPaymentCommand      app.RefundPaymentCommand
+	refundPaymentCalls        int
 	refundPaymentResult       app.PaymentResult
 	refundPaymentErr          error
 	getPaymentQuery           app.GetPaymentQuery
@@ -1112,6 +1194,7 @@ func (f *readinessCheckerFake) CheckReady(context.Context) error {
 }
 
 func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+	f.authorizePaymentCalls++
 	if f.authorizePaymentFunc != nil {
 		return f.authorizePaymentFunc(ctx, command)
 	}
@@ -1123,6 +1206,7 @@ func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command a
 }
 
 func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
+	f.retryAuthorizationCalls++
 	if f.retryAuthorizationPanic != nil {
 		panic(f.retryAuthorizationPanic)
 	}
@@ -1131,6 +1215,7 @@ func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command a
 }
 
 func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
+	f.capturePaymentCalls++
 	if f.capturePaymentPanic != nil {
 		panic(f.capturePaymentPanic)
 	}
@@ -1139,11 +1224,13 @@ func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.C
 }
 
 func (f *paymentApplicationFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
+	f.voidPaymentCalls++
 	f.voidPaymentCommand = command
 	return app.PaymentCommandResult{Payment: f.voidPaymentResult, HTTPStatus: http.StatusOK}, f.voidPaymentErr
 }
 
 func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
+	f.refundPaymentCalls++
 	f.refundPaymentCommand = command
 	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
 }

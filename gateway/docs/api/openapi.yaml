@@ -25,7 +25,8 @@ paths:
       operationId: authorizePayment
       summary: Create and authorize a Payment
       description: |
-        Creates a Payment and asks the Mock Bank to authorize the full Amount.
+        Requires the `payments:write` scope. Creates a Payment and asks the
+        Mock Bank to authorize the full Amount.
         The response Payment Status can be `authorized`, `expired`,
         `declined`, or `pending`. `pending` means the Mock Bank accepted the
         authorization request but did not produce a definitive approval or
@@ -162,9 +163,10 @@ paths:
       operationId: retryAuthorization
       summary: Retry a Pending Payment authorization
       description: |
-        Retries authorization for a Payment whose current Payment Status is
-        `pending`. The Authorization Retry must use the same card number and
-        expiry as the original Payment authorization request.
+        Requires the `payments:write` scope. Retries authorization for a
+        Payment whose current Payment Status is `pending`. The Authorization
+        Retry must use the same card number and expiry as the original Payment
+        authorization request.
       parameters:
         - $ref: "#/components/parameters/PaymentID"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -208,9 +210,10 @@ paths:
       operationId: capturePayment
       summary: Capture a Payment
       description: |
-        Captures the full Amount for an `authorized` Payment. This command has
-        no input fields; callers must send an empty request body. A non-empty
-        request body is rejected as `invalid_json_body`.
+        Requires the `payments:write` scope. Captures the full Amount for an
+        `authorized` Payment. This command has no input fields; callers must
+        send an empty request body. A non-empty request body is rejected as
+        `invalid_json_body`.
       parameters:
         - $ref: "#/components/parameters/PaymentID"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -248,9 +251,10 @@ paths:
       operationId: voidPayment
       summary: Void a Payment
       description: |
-        Cancels the full authorization for an `authorized` Payment before it is
-        captured. This command has no input fields; callers must send an empty
-        request body. A non-empty request body is rejected as `invalid_json_body`.
+        Requires the `payments:write` scope. Cancels the full authorization for
+        an `authorized` Payment before it is captured. This command has no
+        input fields; callers must send an empty request body. A non-empty
+        request body is rejected as `invalid_json_body`.
       parameters:
         - $ref: "#/components/parameters/PaymentID"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -288,9 +292,10 @@ paths:
       operationId: refundPayment
       summary: Refund a Payment
       description: |
-        Returns the full Amount for a `captured` Payment. This command has no
-        input fields; callers must send an empty request body. A non-empty
-        request body is rejected as `invalid_json_body`.
+        Requires the `payments:write` scope. Returns the full Amount for a
+        `captured` Payment. This command has no input fields; callers must send
+        an empty request body. A non-empty request body is rejected as
+        `invalid_json_body`.
       parameters:
         - $ref: "#/components/parameters/PaymentID"
         - $ref: "#/components/parameters/IdempotencyKey"
