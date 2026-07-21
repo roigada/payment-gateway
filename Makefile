@@ -1,6 +1,7 @@
 .PHONY: demo demo-down demo-reset demo-smoke image-smoke observability-check test validate-openapi
 
 demo:
+	./scripts/ensure-demo-credentials.sh
 	docker compose up --build
 
 demo-down:
@@ -10,10 +11,12 @@ demo-reset:
 	docker compose down -v
 
 demo-smoke:
-	./demo/smoke.sh
+	./scripts/ensure-demo-credentials.sh
+	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./demo/smoke.sh
 
 image-smoke:
-	./scripts/image-smoke.sh
+	./scripts/ensure-demo-credentials.sh
+	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./scripts/image-smoke.sh
 
 observability-check:
 	docker compose run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml

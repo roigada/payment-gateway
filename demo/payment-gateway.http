@@ -1,5 +1,4 @@
 @gateway = http://localhost:8080
-@metrics = http://localhost:9091
 @bank = http://localhost:8787
 @orderServiceCredential = {{$dotenv ORDER_SERVICE_CREDENTIAL}}
 
@@ -9,8 +8,8 @@ GET {{gateway}}/healthz
 ### Gateway readiness
 GET {{gateway}}/readyz
 
-### Gateway metrics
-GET {{metrics}}/metrics
+### Gateway metrics (private operational listener; inspect through Prometheus)
+GET http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22payment-gateway%22%7D
 
 ### Mock Bank docs
 GET {{bank}}/docs

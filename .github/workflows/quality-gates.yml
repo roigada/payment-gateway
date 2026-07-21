@@ -46,17 +46,12 @@ jobs:
   demo-smoke:
     name: Demo smoke
     runs-on: ubuntu-latest
-    env:
-      FINGERPRINT_SECRET: ci-fingerprint-secret
-      SERVICE_CREDENTIAL_HMAC_KEY: MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE
-      ORDER_SERVICE_CREDENTIALS: 7Lis9G_8qdKJcbc3tZKT6UbRO_a03dO5xpFzgvaxNGk=payments:read+payments:write
-      ORDER_SERVICE_CREDENTIAL: ci-order-service-credential-8f2d9c6a
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Start root demo stack
-        run: docker compose up -d --build postgres migrate mock-bank-postgres mock-bank payment-gateway
+        run: ./scripts/ensure-demo-credentials.sh && docker compose up -d --build postgres migrate mock-bank-postgres mock-bank payment-gateway prometheus
 
       - name: Verify gateway migrations completed
         run: test "$(docker inspect --format='{{.State.ExitCode}}' "$(docker compose ps -a -q migrate)")" = "0"
@@ -83,11 +78,12 @@ jobs:
         env:
           BASE_URL: http://localhost:8080
           MOCK_BANK_BASE_URL: http://127.0.0.1:8787
+          PROMETHEUS_BASE_URL: http://127.0.0.1:9090
           READY_TIMEOUT_SECONDS: "180"
 
       - name: Show compose logs on failure
         if: failure()
-        run: docker compose logs --no-color postgres migrate mock-bank-postgres mock-bank payment-gateway
+        run: docker compose logs --no-color postgres migrate mock-bank-postgres mock-bank payment-gateway prometheus
 
       - name: Stop root demo stack
         if: always()
@@ -96,11 +92,6 @@ jobs:
   production-image-smoke:
     name: Production image smoke
     runs-on: ubuntu-latest
-    env:
-      FINGERPRINT_SECRET: ci-fingerprint-secret
-      SERVICE_CREDENTIAL_HMAC_KEY: MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE
-      ORDER_SERVICE_CREDENTIALS: 7Lis9G_8qdKJcbc3tZKT6UbRO_a03dO5xpFzgvaxNGk=payments:read+payments:write
-      ORDER_SERVICE_CREDENTIAL: ci-order-service-credential-8f2d9c6a
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

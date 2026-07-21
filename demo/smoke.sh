@@ -3,6 +3,7 @@ set -eu
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 MOCK_BANK_BASE_URL="${MOCK_BANK_BASE_URL:-}"
+PROMETHEUS_BASE_URL="${PROMETHEUS_BASE_URL-http://localhost:9090}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-180}"
 ORDER_SERVICE_CREDENTIAL="${ORDER_SERVICE_CREDENTIAL:?ORDER_SERVICE_CREDENTIAL is required}"
 
@@ -55,6 +56,25 @@ expect_status() {
   fi
 }
 
+expect_prometheus_target() {
+  log "waiting for Prometheus to scrape the private gateway metrics listener"
+  deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
+  while :; do
+    response="$(curl -sS --get "$PROMETHEUS_BASE_URL/api/v1/query" --data-urlencode 'query=up{job="payment-gateway"}' 2>/dev/null || true)"
+    if printf '%s' "$response" | grep -q '"value":\[[^]]*,"1"\]'; then
+      return
+    fi
+
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log "last Prometheus response:"
+      printf '%s\n' "$response"
+      fail "Prometheus did not scrape the private gateway metrics listener within ${READY_TIMEOUT_SECONDS}s"
+    fi
+
+    sleep 1
+  done
+}
+
 extract_payment_id() {
   sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$1" | head -n 1
 }
@@ -88,6 +108,18 @@ if [ -n "$MOCK_BANK_BASE_URL" ]; then
     cat "$mock_bank_body" 2>/dev/null || true
     fail "Mock Bank health returned HTTP ${status:-unreachable}"
   fi
+fi
+
+unauthenticated_response="$tmpdir/unauthenticated-response.json"
+request GET /v1/payments/demo-smoke-payment - "$unauthenticated_response"
+expect_status 401 "$unauthenticated_response" "unauthenticated Payment request"
+
+public_metrics_response="$tmpdir/public-metrics-response.txt"
+request GET /metrics - "$public_metrics_response"
+expect_status 404 "$public_metrics_response" "public gateway metrics request"
+
+if [ -n "$PROMETHEUS_BASE_URL" ]; then
+  expect_prometheus_target
 fi
 
 authorize_body="$tmpdir/authorize.json"
