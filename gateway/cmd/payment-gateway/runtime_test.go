@@ -360,6 +360,9 @@ func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	authenticator, err := cfg.Auth.authenticator()
 	require.NoError(t, err)
 	options.Authenticator = authenticator
+	limiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.HTTP.RateLimit)
+	require.NoError(t, err)
+	options.RateLimiter = limiter
 	return options
 }
 func newTestListener(t *testing.T) net.Listener {

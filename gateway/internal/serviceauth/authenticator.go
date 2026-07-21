@@ -26,7 +26,10 @@ type Credential struct {
 	Scopes []Scope
 }
 
-type Principal struct{ scopes map[Scope]struct{} }
+type Principal struct {
+	id     string
+	scopes map[Scope]struct{}
+}
 
 type Authenticator struct {
 	key         []byte
@@ -113,8 +116,13 @@ func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
 	if matched < 0 {
 		return Principal{}, false
 	}
-	return Principal{scopes: a.credentials[matched].scopes}, true
+	// All configured credentials authenticate the same Order Service. Keeping its
+	// stable identity separate from the rotating credential makes downstream
+	// policies, such as rate limits, apply consistently during credential rotation.
+	return Principal{id: OrderServicePrincipal, scopes: a.credentials[matched].scopes}, true
 }
+
+func (p Principal) ID() string { return p.id }
 
 func (p Principal) HasScope(scope Scope) bool {
 	_, ok := p.scopes[scope]

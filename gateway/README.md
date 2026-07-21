@@ -64,6 +64,10 @@ HTTP_READ_TIMEOUT                  optional HTTP read timeout, defaults to 15s
 HTTP_WRITE_TIMEOUT                 optional HTTP write timeout, defaults to 15s
 HTTP_IDLE_TIMEOUT                  optional HTTP idle timeout, defaults to 60s
 HTTP_MAX_REQUEST_BODY_BYTES        optional request body limit, defaults to 65536
+PAYMENT_READ_RATE_LIMIT_REQUESTS_PER_SECOND  optional read quota refill rate, defaults to 30
+PAYMENT_READ_RATE_LIMIT_BURST                optional read quota burst, defaults to 60
+PAYMENT_WRITE_RATE_LIMIT_REQUESTS_PER_SECOND optional write quota refill rate, defaults to 5
+PAYMENT_WRITE_RATE_LIMIT_BURST               optional write quota burst, defaults to 10
 IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
 IDEMPOTENCY_REPLAY_WINDOW          optional Idempotency Replay Window, defaults to 24h
 IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL optional completed replay cleanup interval, defaults to 1h

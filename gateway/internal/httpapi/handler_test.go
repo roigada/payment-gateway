@@ -187,6 +187,105 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	assert.Equal(t, app.GetPaymentQuery{}, api.payments.getPaymentQuery)
 }
 
+func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 3, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
+
+	read := func() *httptest.ResponseRecorder {
+		return api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil)
+	}
+	write := func(body string) *httptest.ResponseRecorder {
+		return api.request(t, http.MethodPost, "/v1/payments", body, map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replay-key"})
+	}
+
+	require.Equal(t, http.StatusOK, read().Code)
+	firstRejection := read()
+	require.Equal(t, http.StatusTooManyRequests, firstRejection.Code)
+	assert.Equal(t, "1", firstRejection.Header().Get("Retry-After"))
+	assertErrorResponse(t, firstRejection, "rate_limited", "rate limit exceeded")
+
+	// Write capacity is independent of the exhausted read bucket.
+	assert.NotEqual(t, http.StatusTooManyRequests, write(validAuthorizeBody()).Code)
+	rejectedBeforeBodyParsing := write("not json")
+	require.Equal(t, http.StatusTooManyRequests, rejectedBeforeBodyParsing.Code)
+	assert.Equal(t, "1", rejectedBeforeBodyParsing.Header().Get("Retry-After"))
+	assert.Equal(t, 1, api.payments.authorizePaymentCalls)
+
+	clock.now = clock.now.Add(333 * time.Millisecond)
+	require.Equal(t, http.StatusTooManyRequests, read().Code)
+	clock.now = clock.now.Add(time.Millisecond)
+	assert.Equal(t, http.StatusOK, read().Code)
+}
+
+func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCredentialRotationQuota(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{
+		{Digest: serviceauth.Digest(key, "old-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
+		{Digest: serviceauth.Digest(key, "new-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
+		{Digest: serviceauth.Digest(key, "write-only-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsWrite}},
+	})
+	require.NoError(t, err)
+	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, authenticator)
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	unauthenticated.Header.Set("Content-Type", "application/json")
+	unauthenticated.Header.Set("Idempotency-Key", "unauthenticated")
+	unauthenticatedRec := httptest.NewRecorder()
+	api.handler.ServeHTTP(unauthenticatedRec, unauthenticated)
+	require.Equal(t, http.StatusUnauthorized, unauthenticatedRec.Code)
+
+	forbidden := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+	forbidden.Header.Set("Authorization", "Bearer write-only-credential")
+	forbiddenRec := httptest.NewRecorder()
+	api.handler.ServeHTTP(forbiddenRec, forbidden)
+	require.Equal(t, http.StatusForbidden, forbiddenRec.Code)
+
+	oldCredential := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer old-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
+	assert.NotEqual(t, http.StatusTooManyRequests, oldCredential.Code)
+	rotatedCredential := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
+	require.Equal(t, http.StatusTooManyRequests, rotatedCredential.Code)
+
+	// The rejected replay did not consume a future token and can safely retry.
+	clock.now = clock.now.Add(time.Second)
+	assert.NotEqual(t, http.StatusTooManyRequests, api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"}).Code)
+}
+
+func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
+	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		return app.PaymentCommandResult{Payment: newPayment("pay_550e8400-e29b-41d4-a716-446655440000"), HTTPStatus: http.StatusOK}, nil
+	}
+	headers := map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replayed-command"}
+
+	firstReplay := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers)
+	require.Equal(t, http.StatusOK, firstReplay.Code)
+	secondReplay := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers)
+	require.Equal(t, http.StatusTooManyRequests, secondReplay.Code)
+
+	clock.now = clock.now.Add(time.Second)
+	assert.Equal(t, http.StatusOK, api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers).Code)
+}
+
+func TestRateLimiterSeparatesPrincipalsAndAllowsTheFullBurst(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	limiter, err := httpapi.NewRateLimiter(clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 2, WriteRequestsPerSecond: 1, WriteBurst: 1})
+	require.NoError(t, err)
+
+	for range 2 {
+		allowed, _ := limiter.Reserve("first-principal", httpapi.RouteClassRead)
+		assert.True(t, allowed)
+	}
+	allowed, _ := limiter.Reserve("first-principal", httpapi.RouteClassRead)
+	assert.False(t, allowed)
+
+	allowed, _ = limiter.Reserve("second-principal", httpapi.RouteClassRead)
+	assert.True(t, allowed, "a distinct Service Principal has an independent read bucket")
+	allowed, _ = limiter.Reserve("first-principal", httpapi.RouteClassWrite)
+	assert.True(t, allowed, "read and write buckets are independent")
+}
+
 func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing.T) {
 	for _, authorization := range []string{"", "Basic read-credential", "Bearer invalid-credential"} {
 		t.Run(authorization, func(t *testing.T) {
@@ -1094,13 +1193,35 @@ func discardLogger() *slog.Logger {
 
 func testHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	t.Helper()
+	limiter, err := httpapi.NewRateLimiter(&testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, httpapi.RateLimitConfig{ReadRequestsPerSecond: 30, ReadBurst: 60, WriteRequestsPerSecond: 5, WriteBurst: 10})
+	require.NoError(t, err)
 	return httpapi.HandlerOptions{
 		PaymentCommandTimeout: time.Second,
 		PaymentReadTimeout:    time.Second,
 		ReadinessTimeout:      time.Second,
 		MaxRequestBodyBytes:   64 * 1024,
 		Authenticator:         testAuthenticator(t),
+		RateLimiter:           limiter,
 	}
+}
+
+type testClock struct{ now time.Time }
+
+func (c *testClock) Now() time.Time { return c.now }
+
+func newRateLimitedPaymentAPITest(t *testing.T, clock *testClock, config httpapi.RateLimitConfig, authenticator *serviceauth.Authenticator) *paymentAPITest {
+	t.Helper()
+	limiter, err := httpapi.NewRateLimiter(clock, config)
+	require.NoError(t, err)
+	options := testHandlerOptions(t)
+	options.Authenticator = authenticator
+	options.RateLimiter = limiter
+	payments := &paymentApplicationFake{}
+	readiness := &readinessCheckerFake{}
+	metrics := &recordingHTTPMetrics{}
+	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, options)
+	require.NoError(t, err)
+	return &paymentAPITest{payments: payments, readiness: readiness, handler: handler, metrics: metrics}
 }
 
 func testAuthenticator(t *testing.T) *serviceauth.Authenticator {

@@ -125,6 +125,10 @@ func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	metricsHandler := newMetricsHandler(promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}))
 	cfg.Options.Authenticator = authenticator
+	cfg.Options.RateLimiter, err = httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetrics, cfg.Options)
 	if err != nil {
 		return nil, nil, nil, err
