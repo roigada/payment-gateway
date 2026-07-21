@@ -5,6 +5,8 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Clock interface {
@@ -36,17 +38,12 @@ type RateLimiter struct {
 	clock   Clock
 	config  RateLimitConfig
 	mu      sync.Mutex
-	buckets map[rateLimitKey]tokenBucket
+	buckets map[rateLimitKey]*rate.Limiter
 }
 
 type rateLimitKey struct {
 	principalID string
 	routeClass  RouteClass
-}
-
-type tokenBucket struct {
-	tokens  float64
-	updated time.Time
 }
 
 func NewRateLimiter(clock Clock, config RateLimitConfig) (*RateLimiter, error) {
@@ -56,39 +53,35 @@ func NewRateLimiter(clock Clock, config RateLimitConfig) (*RateLimiter, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	return &RateLimiter{clock: clock, config: config, buckets: make(map[rateLimitKey]tokenBucket)}, nil
+	return &RateLimiter{clock: clock, config: config, buckets: make(map[rateLimitKey]*rate.Limiter)}, nil
 }
 
 // Reserve returns whether the request acquired a token and, if not, the
 // whole-second delay until the next token can be acquired.
 func (l *RateLimiter) Reserve(principalID string, routeClass RouteClass) (bool, int) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	rate, burst := l.limitFor(routeClass)
-	now := l.clock.Now()
 	key := rateLimitKey{principalID: principalID, routeClass: routeClass}
-	bucket, exists := l.buckets[key]
+	limiter, exists := l.buckets[key]
 	if !exists {
-		bucket = tokenBucket{tokens: float64(burst), updated: now}
-	} else if elapsed := now.Sub(bucket.updated); elapsed > 0 {
-		bucket.tokens = math.Min(float64(burst), bucket.tokens+elapsed.Seconds()*float64(rate))
-		bucket.updated = now
+		requestsPerSecond, burst := l.limitFor(routeClass)
+		limiter = rate.NewLimiter(rate.Limit(requestsPerSecond), burst)
+		l.buckets[key] = limiter
 	}
+	l.mu.Unlock()
 
-	if bucket.tokens >= 1 {
-		bucket.tokens--
-		l.buckets[key] = bucket
+	now := l.clock.Now()
+	if limiter.AllowN(now, 1) {
 		return true, 0
 	}
 
-	delay := int(math.Ceil((1 - bucket.tokens) / float64(rate)))
+	reservation := limiter.ReserveN(now, 1)
+	delay := int(math.Ceil(reservation.DelayFrom(now).Seconds()))
 	if delay < 1 {
 		delay = 1
 	}
-	// A rejection must not alter stored capacity: callers can retry exactly when
-	// Retry-After says a token will be available.
-	l.buckets[key] = bucket
+	// Calculating Retry-After must not reserve future capacity: callers can retry
+	// exactly when the header says a token will be available.
+	reservation.CancelAt(now)
 	return false, delay
 }
 
