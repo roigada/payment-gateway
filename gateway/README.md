@@ -64,10 +64,10 @@ HTTP_READ_TIMEOUT                  optional HTTP read timeout, defaults to 15s
 HTTP_WRITE_TIMEOUT                 optional HTTP write timeout, defaults to 15s
 HTTP_IDLE_TIMEOUT                  optional HTTP idle timeout, defaults to 60s
 HTTP_MAX_REQUEST_BODY_BYTES        optional request body limit, defaults to 65536
-PAYMENT_READ_RATE_LIMIT_REQUESTS_PER_SECOND  optional read quota refill rate, defaults to 30
-PAYMENT_READ_RATE_LIMIT_BURST                optional read quota burst, defaults to 60
-PAYMENT_WRITE_RATE_LIMIT_REQUESTS_PER_SECOND optional write quota refill rate, defaults to 5
-PAYMENT_WRITE_RATE_LIMIT_BURST               optional write quota burst, defaults to 10
+RATE_LIMIT_READ_REQUESTS_PER_SECOND  optional read quota refill rate, defaults to 30
+RATE_LIMIT_READ_BURST                optional read quota burst, defaults to 60
+RATE_LIMIT_WRITE_REQUESTS_PER_SECOND optional write quota refill rate, defaults to 5
+RATE_LIMIT_WRITE_BURST               optional write quota burst, defaults to 10
 IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
 IDEMPOTENCY_REPLAY_WINDOW          optional Idempotency Replay Window, defaults to 24h
 IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL optional completed replay cleanup interval, defaults to 1h
@@ -232,7 +232,7 @@ payment_gateway_rate_limit_rejections_total{route_class}
 
 `route_class` is deliberately limited to `read` and `write`. This metric never labels a Service Principal or Service Credential, Payment ID, Idempotency Key, raw URI, or another sensitive or unbounded request value. Rejected requests still appear in HTTP RED as `429` responses. Use the **Rate-limit rejections by route class** panel on the Gateway Overview dashboard to inspect the signal; no alert is intentionally configured until production traffic establishes a useful threshold.
 
-The four `PAYMENT_*_RATE_LIMIT_*` environment variables above configure process-local token buckets for the authenticated Service Principal. A rejected request returns `429 Too Many Requests`, the normal `rate_limited` error envelope, and a whole-second `Retry-After` value; retry only after that delay. This policy supports one gateway process only: multiple replicas would give each process a separate quota. Before scaling out, move the principal-aware limiter to shared state while keeping this public API behavior. An edge limiter can provide coarse volumetric protection, but cannot replace the principal-aware limiter unless it authenticates the same Service Principal safely.
+The four `RATE_LIMIT_*` environment variables above configure process-local token buckets for the authenticated Service Principal. A rejected request returns `429 Too Many Requests`, the normal `rate_limited` error envelope, and a whole-second `Retry-After` value; retry only after that delay. This policy supports one gateway process only: multiple replicas would give each process a separate quota. Before scaling out, move the principal-aware limiter to shared state while keeping this public API behavior. An edge limiter can provide coarse volumetric protection, but cannot replace the principal-aware limiter unless it authenticates the same Service Principal safely.
 
 payment operation outcome RED:
 

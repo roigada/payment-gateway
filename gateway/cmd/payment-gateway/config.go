@@ -236,19 +236,19 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	readRateLimitRequestsPerSecond, err := envInt("PAYMENT_READ_RATE_LIMIT_REQUESTS_PER_SECOND", defaultPaymentReadRateLimitRequestsPerSecond)
+	readRateLimitRequestsPerSecond, err := envInt("RATE_LIMIT_READ_REQUESTS_PER_SECOND", defaultPaymentReadRateLimitRequestsPerSecond)
 	if err != nil {
 		return config{}, err
 	}
-	readRateLimitBurst, err := envInt("PAYMENT_READ_RATE_LIMIT_BURST", defaultPaymentReadRateLimitBurst)
+	readRateLimitBurst, err := envInt("RATE_LIMIT_READ_BURST", defaultPaymentReadRateLimitBurst)
 	if err != nil {
 		return config{}, err
 	}
-	writeRateLimitRequestsPerSecond, err := envInt("PAYMENT_WRITE_RATE_LIMIT_REQUESTS_PER_SECOND", defaultPaymentWriteRateLimitRequestsPerSecond)
+	writeRateLimitRequestsPerSecond, err := envInt("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND", defaultPaymentWriteRateLimitRequestsPerSecond)
 	if err != nil {
 		return config{}, err
 	}
-	writeRateLimitBurst, err := envInt("PAYMENT_WRITE_RATE_LIMIT_BURST", defaultPaymentWriteRateLimitBurst)
+	writeRateLimitBurst, err := envInt("RATE_LIMIT_WRITE_BURST", defaultPaymentWriteRateLimitBurst)
 	if err != nil {
 		return config{}, err
 	}
@@ -386,16 +386,16 @@ func (cfg config) validate() error {
 		return fmt.Errorf("HTTP_MAX_REQUEST_BODY_BYTES must be a positive integer")
 	}
 	if cfg.HTTP.RateLimit.ReadRequestsPerSecond <= 0 {
-		return fmt.Errorf("PAYMENT_READ_RATE_LIMIT_REQUESTS_PER_SECOND must be a positive integer")
+		return fmt.Errorf("RATE_LIMIT_READ_REQUESTS_PER_SECOND must be a positive integer")
 	}
 	if cfg.HTTP.RateLimit.ReadBurst <= 0 {
-		return fmt.Errorf("PAYMENT_READ_RATE_LIMIT_BURST must be a positive integer")
+		return fmt.Errorf("RATE_LIMIT_READ_BURST must be a positive integer")
 	}
 	if cfg.HTTP.RateLimit.WriteRequestsPerSecond <= 0 {
-		return fmt.Errorf("PAYMENT_WRITE_RATE_LIMIT_REQUESTS_PER_SECOND must be a positive integer")
+		return fmt.Errorf("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND must be a positive integer")
 	}
 	if cfg.HTTP.RateLimit.WriteBurst <= 0 {
-		return fmt.Errorf("PAYMENT_WRITE_RATE_LIMIT_BURST must be a positive integer")
+		return fmt.Errorf("RATE_LIMIT_WRITE_BURST must be a positive integer")
 	}
 	if cfg.MockBank.ConnectTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_CONNECT_TIMEOUT must be a positive duration")
