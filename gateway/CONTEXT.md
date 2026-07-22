@@ -76,6 +76,14 @@ _Avoid_: User, account, tenant
 An opaque secret that proves a **Service Principal** is the Order Service when calling the payment gateway.
 _Avoid_: User token, session, password
 
+**Metrics Listener**:
+The gateway HTTP listener dedicated solely to the private Prometheus `/metrics` endpoint, distinct from the public API listener.
+_Avoid_: Operational listener, public metrics endpoint
+
+**Readiness**:
+The gateway's ability to serve traffic: Postgres must be reachable and the gateway must not be draining for graceful shutdown. `/readyz` reports Readiness, while `/healthz` reports process health only.
+_Avoid_: Health, liveness, database migration status
+
 **Payment Scope**:
 A permission granted to a **Service Principal** to read or change Payments.
 _Avoid_: Role, customer authorization, bank permission
