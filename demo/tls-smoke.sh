@@ -71,6 +71,12 @@ test "$status" = "404" || {
   fail "HTTPS /not-proxied returned $status, expected 404"
 }
 
+dd if=/dev/zero of="$tmpdir/oversized-request" bs=1 count=65537 2>/dev/null
+status="$(curl --cacert "$ca_bundle" -sS -o "$tmpdir/oversized-request-response" -w '%{http_code}' -X POST --data-binary "@$tmpdir/oversized-request" https://localhost:8443/v1/payments/authorize)"
+test "$status" = "413" || {
+  fail "HTTPS oversized request returned $status, expected 413"
+}
+
 redirect="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:8080/healthz)"
 test "$redirect" = "308 https://localhost:8443/healthz" || {
   fail "HTTP /healthz redirect was '$redirect', expected '308 https://localhost:8443/healthz'"
