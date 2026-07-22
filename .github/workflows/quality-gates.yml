@@ -99,6 +99,30 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  demo-tls-smoke:
+    name: TLS demo smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Start opt-in TLS demo stack
+        run: ./scripts/ensure-demo-credentials.sh && docker compose -f compose.yaml -f compose.tls-demo.yaml up -d --build
+
+      - name: Run TLS edge smoke path
+        run: make demo-tls-smoke
+        env:
+          PROMETHEUS_BASE_URL: http://127.0.0.1:9090
+          READY_TIMEOUT_SECONDS: "180"
+
+      - name: Show TLS demo logs on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.tls-demo.yaml logs --no-color postgres migrate mock-bank-postgres mock-bank payment-gateway caddy prometheus
+
+      - name: Stop opt-in TLS demo stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.tls-demo.yaml down --volumes
+
   production-image-smoke:
     name: Production image smoke
     runs-on: ubuntu-latest
