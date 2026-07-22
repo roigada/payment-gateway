@@ -1,4 +1,4 @@
-.PHONY: demo demo-down demo-reset demo-smoke demo-tls demo-tls-down demo-tls-reset demo-tls-smoke image-smoke observability-check test validate-openapi
+.PHONY: demo demo-down demo-reset demo-smoke demo-tls demo-tls-down demo-tls-reset demo-tls-smoke image-smoke observability-check test validate-openapi vet
 
 TLS_COMPOSE = docker compose -f compose.yaml -f compose.tls-demo.yaml
 
@@ -40,6 +40,9 @@ observability-check:
 
 test:
 	cd gateway && go test ./...
+
+vet:
+	cd gateway && go vet ./...
 
 validate-openapi:
 	cd gateway && go run ./cmd/openapi-validator

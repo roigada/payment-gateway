@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Payment Gateway walkthrough preview</title>
+  <desc id="description">A preview card for a 90-second backend walkthrough featuring safe retries, observability, and runnable evidence.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#071b33" />
+      <stop offset="1" stop-color="#0b4b5e" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#background)" rx="28" />
+  <rect x="74" y="80" width="1052" height="470" fill="#0d263e" stroke="#2dc4b8" stroke-width="2" rx="20" />
+  <text x="130" y="172" fill="#8ee7df" font-family="Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="3">PAYMENT GATEWAY DEMO</text>
+  <text x="130" y="254" fill="#ffffff" font-family="Arial, sans-serif" font-size="58" font-weight="700">Safe retries around</text>
+  <text x="130" y="322" fill="#ffffff" font-family="Arial, sans-serif" font-size="58" font-weight="700">external bank operations</text>
+  <text x="130" y="390" fill="#c5d7e7" font-family="Arial, sans-serif" font-size="29">90-second backend walkthrough</text>
+  <text x="130" y="438" fill="#c5d7e7" font-family="Arial, sans-serif" font-size="25">Smoke path  •  Idempotency Replay  •  Grafana  •  Recovery</text>
+  <circle cx="1010" cy="315" r="68" fill="#2dc4b8" />
+  <path d="M990 275 L990 355 L1055 315 Z" fill="#07253b" />
+</svg>

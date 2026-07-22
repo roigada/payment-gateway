@@ -27,6 +27,40 @@ jobs:
       - name: Run gateway test suite
         run: go test ./...
 
+  gateway-vet:
+    name: Gateway vet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+
+      - name: Run Go vet
+        run: go vet ./...
+
+  gateway-vulnerability-check:
+    name: Gateway vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          work-dir: gateway
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+          go-package: ./...
+
   openapi-validation:
     name: OpenAPI validation
     runs-on: ubuntu-latest

@@ -1,6 +1,46 @@
 # Payment Gateway Demo
 
+[![Quality Gates](https://github.com/roigada/payment-gateway/actions/workflows/quality-gates.yml/badge.svg)](https://github.com/roigada/payment-gateway/actions/workflows/quality-gates.yml)
+![Go version](https://img.shields.io/badge/Go-1.26.1-00ADD8?logo=go&logoColor=white)
+
 This repository is a portfolio demo of a payment gateway between an e-commerce Order Service and a Mock Bank. The **gateway service in [`gateway/`](gateway/) is authored project work**: it owns Payment records, retry safety, recovery, and the translation between public Payment IDs and bank references. [`mock-bank/`](mock-bank/) is **bundled third-party demo dependency infrastructure**, included so the complete system can run locally; see its [provenance](mock-bank/PROVENANCE.md).
+
+## What this demonstrates
+
+- **Crash-safe idempotency across an external side effect:** the gateway persists a caller's Idempotency Key and its own Bank Operation Key before asking the Mock Bank to act, so a retry can recover one operation rather than create a duplicate bank side effect.
+- **Production-shaped backend boundaries:** an authenticated service-to-service HTTP API, Postgres persistence, private metrics, an opt-in TLS edge demo, and documented operational signals make the reliability story inspectable.
+- **Runnable evidence:** the local Docker demo, OpenAPI contract, HTTP collection, tests, CI smoke paths, and non-root production image let a reviewer verify the claims instead of taking them on trust.
+
+## Recovery in one request
+
+```mermaid
+sequenceDiagram
+    participant OS as Order Service
+    participant Edge as TLS edge
+    participant GW as Gateway
+    participant DB as Postgres
+    participant Bank as Mock Bank
+
+    OS->>Edge: Authorize Payment + Idempotency Key
+    Edge->>GW: Authenticated request
+    GW->>DB: Persist Idempotency Claim + Bank Operation Key
+    GW->>Bank: Authorize with Bank Operation Key
+    Bank-->>GW: Definitive authorization result
+    Note over GW,DB: Completion is interrupted before the response is persisted
+    OS->>Edge: Retry same request + Idempotency Key
+    Edge->>GW: Authenticated retry
+    GW->>DB: Recover the stuck Idempotency Claim
+    GW->>Bank: Resume with the same Bank Operation Key
+    Bank-->>GW: Original operation result
+    GW->>DB: Persist Payment transition + replay response atomically
+    GW-->>OS: Recovered authorization result
+```
+
+## Short walkthrough
+
+![Preview of the planned Payment Gateway YouTube walkthrough](docs/portfolio/youtube-walkthrough-poster.svg)
+
+The planned 60–90 second unlisted YouTube walkthrough will show a smoke success, an Idempotency Replay, the Grafana dashboard, and the recovery documentation. Its [safe recording script](docs/portfolio/youtube-walkthrough-script.md) deliberately excludes credentials, headers, environment files, and card details. Link the published video from this section before creating the portfolio release.
 
 ## Reviewer path (5–10 minutes)
 
