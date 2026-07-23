@@ -63,6 +63,44 @@ func TestPaymentCommandExecutorPreservesClaimForCompletionFailure(t *testing.T) 
 	assert.Equal(t, []string{"claim", "behavior", "complete"}, store.events)
 }
 
+func TestPaymentCommandExecutorCompletesDefinitiveErrorWithoutReleasingClaim(t *testing.T) {
+	request, payment := executorTestClaim(t)
+	store := &executorStore{claim: NewClaimedPaymentCommand(request, payment)}
+	expired := PaymentCommandResult{
+		Payment:    PaymentResult{ID: string(payment.ID()), Status: string(domain.PaymentStatusExpired)},
+		HTTPStatus: 409,
+	}
+
+	_, err := newExecutorForTest(store, nil).execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		store.events = append(store.events, "behavior")
+		return PaymentCommandResult{}, newCompletedPaymentCommandError(expired, NewPaymentAuthorizationExpiredError(nil))
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired))
+	assert.Equal(t, []string{"claim", "behavior", "complete"}, store.events)
+	assert.Equal(t, expired, store.completedResult)
+}
+
+func TestPaymentCommandExecutorPreservesClaimWhenDefinitiveErrorCompletionFails(t *testing.T) {
+	request, payment := executorTestClaim(t)
+	store := &executorStore{
+		claim:       NewClaimedPaymentCommand(request, payment),
+		completeErr: errors.New("completion failed"),
+	}
+
+	_, err := newExecutorForTest(store, nil).execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		return PaymentCommandResult{}, newCompletedPaymentCommandError(
+			PaymentCommandResult{Payment: PaymentResult{Status: string(domain.PaymentStatusExpired)}, HTTPStatus: 409},
+			NewPaymentAuthorizationExpiredError(nil),
+		)
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Equal(t, []string{"claim", "complete"}, store.events)
+}
+
 func TestPaymentCommandExecutorUsesRecoveredPaymentAndRecordsRecoveryAroundCompletion(t *testing.T) {
 	request, preparedPayment := executorTestClaim(t)
 	recoveredPayment, err := domain.NewPendingPayment(
@@ -113,10 +151,11 @@ func executorTestClaim(t *testing.T) (PaymentCommandClaimRequest, *domain.Paymen
 
 type executorStore struct {
 	PaymentStore
-	claim       PaymentCommandClaim
-	claimErr    error
-	completeErr error
-	events      []string
+	claim           PaymentCommandClaim
+	claimErr        error
+	completeErr     error
+	completedResult PaymentCommandResult
+	events          []string
 }
 
 func (s *executorStore) ClaimPaymentCommand(context.Context, PaymentCommandClaimRequest) (PaymentCommandClaim, error) {
@@ -124,8 +163,9 @@ func (s *executorStore) ClaimPaymentCommand(context.Context, PaymentCommandClaim
 	return s.claim, s.claimErr
 }
 
-func (s *executorStore) CompletePaymentCommand(context.Context, PaymentCommandClaim, PaymentCommandResult, time.Time) error {
+func (s *executorStore) CompletePaymentCommand(_ context.Context, _ PaymentCommandClaim, result PaymentCommandResult, _ time.Time) error {
 	s.events = append(s.events, "complete")
+	s.completedResult = result
 	return s.completeErr
 }
 
