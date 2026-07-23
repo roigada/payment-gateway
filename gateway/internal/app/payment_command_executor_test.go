@@ -1,0 +1,202 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/roigada/payment-gateway/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPaymentCommandExecutorReturnsReplayWithoutInvokingBehavior(t *testing.T) {
+	replay := PaymentCommandResult{Payment: PaymentResult{ID: "pay_550e8400-e29b-41d4-a716-446655440099"}, HTTPStatus: 201}
+	request := executorClaimRequest(t)
+	store := &executorStore{
+		claim: NewReplayedPaymentCommand(request, replay),
+	}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+	behaviorCalled := false
+
+	execution, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		behaviorCalled = true
+		return PaymentCommandResult{}, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, replay, execution.result)
+	assert.True(t, execution.replayed)
+	assert.False(t, behaviorCalled)
+	assert.Zero(t, store.completeCalls)
+	assert.Zero(t, store.releaseCalls)
+}
+
+func TestPaymentCommandExecutorUsesRecoveredPaymentAndRecordsRecoveryAroundCompletion(t *testing.T) {
+	request := executorClaimRequest(t)
+	recoveredPayment := executorPayment(t, "pay_550e8400-e29b-41d4-a716-446655440098", "bok_recovered")
+	events := []string{}
+	store := &executorStore{
+		claim: NewRecoveredPaymentCommand(request, recoveredPayment),
+		onComplete: func() {
+			events = append(events, "completed")
+		},
+	}
+	metrics := &executorMetrics{onRecovery: func(result string) {
+		events = append(events, result)
+	}}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	execution, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) (PaymentCommandResult, error) {
+		assert.Same(t, recoveredPayment, payment)
+		assert.Equal(t, "bok_recovered", payment.AuthorizationBankOperationKey())
+		events = append(events, "behavior")
+		return PaymentCommandResult{Payment: PaymentResult{ID: string(payment.ID())}, HTTPStatus: 201}, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "pay_550e8400-e29b-41d4-a716-446655440098", execution.result.Payment.ID)
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted, "behavior", "completed", IdempotencyRecoveryRecovered}, events)
+}
+
+func TestPaymentCommandExecutorReleasesBehaviorFailure(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{claim: NewClaimedPaymentCommand(request, request.Payment())}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+	behaviorErr := NewPaymentBankUnavailableError(errors.New("bank unavailable"))
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		return PaymentCommandResult{}, behaviorErr
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorBankUnavailable))
+	assert.Equal(t, 1, store.releaseCalls)
+	assert.Zero(t, store.completeCalls)
+}
+
+func TestPaymentCommandExecutorPreservesClaimWhenCompletionFails(t *testing.T) {
+	request := executorClaimRequest(t)
+	completionErr := NewInternalPaymentError(errors.New("completion failed"))
+	store := &executorStore{
+		claim:       NewRecoveredPaymentCommand(request, request.Payment()),
+		completeErr: completionErr,
+	}
+	metrics := &executorMetrics{}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		return PaymentCommandResult{HTTPStatus: 201}, nil
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Equal(t, 1, store.completeCalls)
+	assert.Zero(t, store.releaseCalls)
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted}, metrics.recoveryResults)
+}
+
+func TestPaymentCommandExecutorRecordsRecoveryClaimFailureInOrder(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{
+		claimErr: NewIdempotencyRecoveryError(
+			IdempotencyRecoveryConflict,
+			NewPaymentIdempotencyConflictError(nil),
+		),
+	}
+	metrics := &executorMetrics{}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		t.Fatal("behavior must not run after claim failure")
+		return PaymentCommandResult{}, nil
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorIdempotencyConflict))
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted, IdempotencyRecoveryConflict}, metrics.recoveryResults)
+	assert.Zero(t, store.completeCalls)
+	assert.Zero(t, store.releaseCalls)
+}
+
+func newTestPaymentCommandExecutor(store PaymentStore, metrics PaymentOperationMetrics) paymentCommandExecutor {
+	return paymentCommandExecutor{
+		store:   store,
+		metrics: metrics,
+		clock:   executorClock{now: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)},
+	}
+}
+
+func executorClaimRequest(t *testing.T) PaymentCommandClaimRequest {
+	t.Helper()
+	now := time.Date(2026, 7, 23, 11, 0, 0, 0, time.UTC)
+	return NewAuthorizationStartClaim("public-key", "fingerprint", executorPayment(t, "pay_550e8400-e29b-41d4-a716-446655440097", "bok_new"), now, 5*time.Minute)
+}
+
+func executorPayment(t *testing.T, id domain.PaymentID, operationKey string) *domain.Payment {
+	t.Helper()
+	payment, err := domain.NewPendingPayment(id, "order-1", "customer-1", 1299, operationKey, "card-fingerprint", time.Date(2026, 7, 23, 11, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	return payment
+}
+
+type executorStore struct {
+	claim         PaymentCommandClaim
+	claimErr      error
+	completeErr   error
+	completeCalls int
+	releaseCalls  int
+	onComplete    func()
+}
+
+func (s *executorStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {
+	panic("unexpected FindByID call")
+}
+
+func (s *executorStore) Search(context.Context, SearchPaymentsQuery, time.Time) ([]*domain.Payment, error) {
+	panic("unexpected Search call")
+}
+
+func (s *executorStore) ClaimPaymentCommand(context.Context, PaymentCommandClaimRequest) (PaymentCommandClaim, error) {
+	return s.claim, s.claimErr
+}
+
+func (s *executorStore) CompletePaymentCommand(context.Context, PaymentCommandClaim, PaymentCommandResult, time.Time) error {
+	s.completeCalls++
+	if s.onComplete != nil {
+		s.onComplete()
+	}
+	return s.completeErr
+}
+
+func (s *executorStore) ReleasePaymentCommand(context.Context, PaymentCommandClaim) error {
+	s.releaseCalls++
+	return nil
+}
+
+func (s *executorStore) CleanupCompletedIdempotencyRecords(context.Context, time.Time) (int, error) {
+	panic("unexpected CleanupCompletedIdempotencyRecords call")
+}
+
+type executorMetrics struct {
+	recoveryResults []string
+	onRecovery      func(string)
+}
+
+func (*executorMetrics) RecordPaymentOperation(string, string, time.Duration) {}
+
+func (m *executorMetrics) RecordIdempotencyRecovery(_ string, result string) {
+	m.recoveryResults = append(m.recoveryResults, result)
+	if m.onRecovery != nil {
+		m.onRecovery(result)
+	}
+}
+
+type executorClock struct {
+	now time.Time
+}
+
+func (c executorClock) Now() time.Time {
+	return c.now
+}
