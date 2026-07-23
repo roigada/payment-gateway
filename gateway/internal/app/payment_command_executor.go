@@ -38,6 +38,9 @@ func (e paymentCommandExecutor) execute(
 
 	result, err := behavior(ctx, claim.Payment())
 	if err != nil {
+		if request.CompletesAuthorizationExpiration() && HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
+			return e.completeAuthorizationExpiration(ctx, claim)
+		}
 		_ = e.store.ReleasePaymentCommand(ctx, claim)
 		return paymentCommandExecution{}, ensurePaymentError(err)
 	}
@@ -48,6 +51,25 @@ func (e paymentCommandExecutor) execute(
 	e.recordRecoveryCompleted(claim)
 
 	return paymentCommandExecution{result: result}, nil
+}
+
+func (e paymentCommandExecutor) completeAuthorizationExpiration(
+	ctx context.Context,
+	claim PaymentCommandClaim,
+) (paymentCommandExecution, error) {
+	if err := claim.Payment().MarkExpired(e.clock.Now()); err != nil {
+		_ = e.store.ReleasePaymentCommand(ctx, claim)
+		return paymentCommandExecution{}, ensurePaymentError(err)
+	}
+	result := PaymentCommandResult{
+		Payment:    newPaymentResult(claim.Payment()),
+		HTTPStatus: 409,
+	}
+	if err := e.store.CompletePaymentCommand(ctx, claim, result, e.clock.Now()); err != nil {
+		return paymentCommandExecution{}, ensurePaymentError(err)
+	}
+	e.recordRecoveryCompleted(claim)
+	return paymentCommandExecution{}, NewPaymentAuthorizationExpiredError(nil)
 }
 
 func (e paymentCommandExecutor) recordRecoveryAttempt(claim PaymentCommandClaim) {
