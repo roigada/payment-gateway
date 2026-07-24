@@ -933,6 +933,62 @@ func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testin
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
+func TestPaymentCommandBoundariesWrapRawStoreErrorsAsPaymentErrors(t *testing.T) {
+	storeErr := errors.New("driver connection failed")
+	service := newPaymentService(&failingClaimPaymentStore{err: storeErr}, &bankFake{}, time.Now())
+
+	tests := []struct {
+		name    string
+		execute func() error
+	}{
+		{
+			name: "authorize",
+			execute: func() error {
+				_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+				return err
+			},
+		},
+		{
+			name: "authorization retry",
+			execute: func() error {
+				_, err := service.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
+				return err
+			},
+		},
+		{
+			name: "capture",
+			execute: func() error {
+				_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "public-capture-key-1"))
+				return err
+			},
+		},
+		{
+			name: "void",
+			execute: func() error {
+				_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "public-void-key-1"))
+				return err
+			},
+		},
+		{
+			name: "refund",
+			execute: func() error {
+				_, err := service.RefundPayment(context.Background(), mustRefundPaymentCommand(t, "pay_550e8400-e29b-41d4-a716-446655440000", "public-refund-key-1"))
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.execute()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, storeErr)
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+		})
+	}
+}
+
 func TestGetPaymentReturnsPublicResult(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -2296,8 +2352,17 @@ type failingFindPaymentStore struct {
 	err error
 }
 
+type failingClaimPaymentStore struct {
+	app.PaymentStore
+	err error
+}
+
 func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {
 	return nil, s.err
+}
+
+func (s *failingClaimPaymentStore) ClaimPaymentCommand(context.Context, app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+	return app.PaymentCommandClaim{}, s.err
 }
 
 func (s *alwaysInProgressPaymentStore) ClaimPaymentCommand(context.Context, app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
