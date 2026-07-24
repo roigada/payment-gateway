@@ -49,7 +49,7 @@ func TestPaymentCommandExecutorUsesRecoveredPaymentAndRecordsRecoveryAroundCompl
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
 	execution, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
-		assert.Same(t, recoveredPayment, payment)
+		require.Same(t, recoveredPayment, payment)
 		assert.Equal(t, "bok_recovered", payment.AuthorizationBankOperationKey())
 		events = append(events, "behavior")
 		return completedPaymentCommand(PaymentCommandResult{Payment: PaymentResult{ID: string(payment.ID())}, HTTPStatus: 201})
@@ -72,6 +72,32 @@ func TestPaymentCommandExecutorReleasesBehaviorFailure(t *testing.T) {
 
 	require.Error(t, err)
 	assert.True(t, HasPaymentErrorKind(err, PaymentErrorBankUnavailable))
+	assert.Equal(t, 1, store.releaseCalls)
+	assert.Zero(t, store.completeCalls)
+}
+
+func TestPaymentCommandExecutorPreservesPrimaryFailureWhenClaimReleaseFails(t *testing.T) {
+	request := executorClaimRequest(t)
+	primaryErr := NewPaymentBankUnavailableError(errors.New("bank unavailable"))
+	events := []string{}
+	store := &executorStore{
+		claim:      NewClaimedPaymentCommand(request, request.Payment()),
+		releaseErr: NewInternalPaymentError(errors.New("release failed")),
+		onRelease: func() {
+			events = append(events, "released")
+		},
+	}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+		events = append(events, "behavior")
+		return releasablePaymentCommandFailure(primaryErr)
+	})
+
+	require.Error(t, err)
+	assert.Same(t, primaryErr, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorBankUnavailable))
+	assert.Equal(t, []string{"behavior", "released"}, events)
 	assert.Equal(t, 1, store.releaseCalls)
 	assert.Zero(t, store.completeCalls)
 }
@@ -181,6 +207,29 @@ func TestPaymentCommandExecutorPreservesClaimWhenCompletionFails(t *testing.T) {
 	assert.Equal(t, []string{IdempotencyRecoveryAttempted}, metrics.recoveryResults)
 }
 
+func TestPaymentCommandExecutorRecordsUnrecoverableClaimFailureInOrder(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{
+		claimErr: NewIdempotencyRecoveryError(
+			IdempotencyRecoveryUnrecoverable,
+			NewInternalPaymentError(errors.New("recovery facts are incomplete")),
+		),
+	}
+	metrics := &executorMetrics{}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+		t.Fatal("behavior must not run after unrecoverable claim failure")
+		return completedPaymentCommand(PaymentCommandResult{})
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted, IdempotencyRecoveryUnrecoverable}, metrics.recoveryResults)
+	assert.Zero(t, store.completeCalls)
+	assert.Zero(t, store.releaseCalls)
+}
+
 func TestPaymentCommandExecutorRecordsRecoveryClaimFailureInOrder(t *testing.T) {
 	request := executorClaimRequest(t)
 	store := &executorStore{
@@ -246,9 +295,11 @@ type executorStore struct {
 	claim           PaymentCommandClaim
 	claimErr        error
 	completeErr     error
+	releaseErr      error
 	completeCalls   int
 	releaseCalls    int
 	onComplete      func()
+	onRelease       func()
 	completedResult PaymentCommandResult
 }
 
@@ -275,7 +326,10 @@ func (s *executorStore) CompletePaymentCommand(_ context.Context, _ PaymentComma
 
 func (s *executorStore) ReleasePaymentCommand(context.Context, PaymentCommandClaim) error {
 	s.releaseCalls++
-	return nil
+	if s.onRelease != nil {
+		s.onRelease()
+	}
+	return s.releaseErr
 }
 
 func (s *executorStore) CleanupCompletedIdempotencyRecords(context.Context, time.Time) (int, error) {
