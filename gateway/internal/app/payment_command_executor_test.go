@@ -76,6 +76,50 @@ func TestPaymentCommandExecutorReleasesBehaviorFailure(t *testing.T) {
 	assert.Zero(t, store.completeCalls)
 }
 
+func TestPaymentCommandExecutorCompletesAuthorizationExpirationBeforeReturningError(t *testing.T) {
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	payment := executorAuthorizedPayment(t, now)
+	request := NewCaptureClaim("public-key", "fingerprint", payment.ID(), "bok_capture", now, 5*time.Minute)
+	store := &executorStore{claim: NewRecoveredPaymentCommand(request, payment)}
+	metrics := &executorMetrics{}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(errors.New("bank reports expired"))
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired))
+	assert.Equal(t, domain.PaymentStatusExpired, payment.Status())
+	assert.Equal(t, 1, store.completeCalls)
+	assert.Equal(t, 409, store.completedResult.HTTPStatus)
+	assert.Equal(t, string(domain.PaymentStatusExpired), store.completedResult.Payment.Status)
+	assert.Zero(t, store.releaseCalls)
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted, IdempotencyRecoveryRecovered}, metrics.recoveryResults)
+}
+
+func TestPaymentCommandExecutorPreservesExpiredClaimWhenCompletionFails(t *testing.T) {
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	payment := executorAuthorizedPayment(t, now)
+	request := NewVoidClaim("public-key", "fingerprint", payment.ID(), "bok_void", now, 5*time.Minute)
+	store := &executorStore{
+		claim:       NewRecoveredPaymentCommand(request, payment),
+		completeErr: NewInternalPaymentError(errors.New("completion failed")),
+	}
+	metrics := &executorMetrics{}
+	executor := newTestPaymentCommandExecutor(store, metrics)
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) (PaymentCommandResult, error) {
+		return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(nil)
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Equal(t, 1, store.completeCalls)
+	assert.Zero(t, store.releaseCalls)
+	assert.Equal(t, []string{IdempotencyRecoveryAttempted}, metrics.recoveryResults)
+}
+
 func TestPaymentCommandExecutorPreservesClaimWhenCompletionFails(t *testing.T) {
 	request := executorClaimRequest(t)
 	completionErr := NewInternalPaymentError(errors.New("completion failed"))
@@ -141,13 +185,31 @@ func executorPayment(t *testing.T, id domain.PaymentID, operationKey string) *do
 	return payment
 }
 
+func executorAuthorizedPayment(t *testing.T, now time.Time) *domain.Payment {
+	t.Helper()
+	payment, err := domain.NewAuthorizedPayment(
+		"pay_550e8400-e29b-41d4-a716-446655440096",
+		"order-1",
+		"customer-1",
+		1299,
+		"auth_550e8400-e29b-41d4-a716-446655440096",
+		now.Add(time.Hour),
+		"bok_authorize",
+		"card-fingerprint",
+		now.Add(-time.Hour),
+	)
+	require.NoError(t, err)
+	return payment
+}
+
 type executorStore struct {
-	claim         PaymentCommandClaim
-	claimErr      error
-	completeErr   error
-	completeCalls int
-	releaseCalls  int
-	onComplete    func()
+	claim           PaymentCommandClaim
+	claimErr        error
+	completeErr     error
+	completeCalls   int
+	releaseCalls    int
+	onComplete      func()
+	completedResult PaymentCommandResult
 }
 
 func (s *executorStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {
@@ -162,8 +224,9 @@ func (s *executorStore) ClaimPaymentCommand(context.Context, PaymentCommandClaim
 	return s.claim, s.claimErr
 }
 
-func (s *executorStore) CompletePaymentCommand(context.Context, PaymentCommandClaim, PaymentCommandResult, time.Time) error {
+func (s *executorStore) CompletePaymentCommand(_ context.Context, _ PaymentCommandClaim, result PaymentCommandResult, _ time.Time) error {
 	s.completeCalls++
+	s.completedResult = result
 	if s.onComplete != nil {
 		s.onComplete()
 	}
