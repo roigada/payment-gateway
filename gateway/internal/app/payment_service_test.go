@@ -1399,6 +1399,24 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 	assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
 }
 
+func TestCapturePaymentPreservesClaimWhenTransitionFailsAfterDefinitiveBankResult(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	bank := &bankFake{}
+	service := newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC))
+	command := mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1")
+
+	_, err := service.CapturePayment(context.Background(), command)
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+
+	_, err = service.CapturePayment(context.Background(), command)
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress))
+	assert.Equal(t, 1, bank.captureCalls)
+}
+
 func TestNewCapturePaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Now())

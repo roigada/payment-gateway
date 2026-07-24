@@ -136,18 +136,17 @@ type PaymentStore interface {
 }
 
 type PaymentCommandClaimRequest struct {
-	operation                       string
-	key                             string
-	requestFingerprint              string
-	payment                         *domain.Payment
-	paymentID                       domain.PaymentID
-	expectedStatus                  domain.PaymentStatus
-	bankOperationKeyKind            BankOperationKeyKind
-	bankOperationKey                string
-	authorizationCardFingerprint    string
-	completeAuthorizationExpiration bool
-	now                             time.Time
-	claimStuckAfter                 time.Duration
+	operation                    string
+	key                          string
+	requestFingerprint           string
+	payment                      *domain.Payment
+	paymentID                    domain.PaymentID
+	expectedStatus               domain.PaymentStatus
+	bankOperationKeyKind         BankOperationKeyKind
+	bankOperationKey             string
+	authorizationCardFingerprint string
+	now                          time.Time
+	claimStuckAfter              time.Duration
 }
 
 func NewAuthorizationStartClaim(key string, requestFingerprint string, payment *domain.Payment, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
@@ -177,31 +176,29 @@ func NewAuthorizationRetryClaim(key string, requestFingerprint string, paymentID
 
 func NewCaptureClaim(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
 	return PaymentCommandClaimRequest{
-		operation:                       CapturePaymentOperation,
-		key:                             key,
-		requestFingerprint:              requestFingerprint,
-		paymentID:                       paymentID,
-		expectedStatus:                  domain.PaymentStatusAuthorized,
-		bankOperationKeyKind:            BankOperationKeyCapture,
-		bankOperationKey:                bankOperationKey,
-		completeAuthorizationExpiration: true,
-		now:                             now,
-		claimStuckAfter:                 claimStuckAfter,
+		operation:            CapturePaymentOperation,
+		key:                  key,
+		requestFingerprint:   requestFingerprint,
+		paymentID:            paymentID,
+		expectedStatus:       domain.PaymentStatusAuthorized,
+		bankOperationKeyKind: BankOperationKeyCapture,
+		bankOperationKey:     bankOperationKey,
+		now:                  now,
+		claimStuckAfter:      claimStuckAfter,
 	}
 }
 
 func NewVoidClaim(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
 	return PaymentCommandClaimRequest{
-		operation:                       VoidPaymentOperation,
-		key:                             key,
-		requestFingerprint:              requestFingerprint,
-		paymentID:                       paymentID,
-		expectedStatus:                  domain.PaymentStatusAuthorized,
-		bankOperationKeyKind:            BankOperationKeyVoid,
-		bankOperationKey:                bankOperationKey,
-		completeAuthorizationExpiration: true,
-		now:                             now,
-		claimStuckAfter:                 claimStuckAfter,
+		operation:            VoidPaymentOperation,
+		key:                  key,
+		requestFingerprint:   requestFingerprint,
+		paymentID:            paymentID,
+		expectedStatus:       domain.PaymentStatusAuthorized,
+		bankOperationKeyKind: BankOperationKeyVoid,
+		bankOperationKey:     bankOperationKey,
+		now:                  now,
+		claimStuckAfter:      claimStuckAfter,
 	}
 }
 
@@ -231,9 +228,6 @@ func (r PaymentCommandClaimRequest) BankOperationKeyKind() BankOperationKeyKind 
 func (r PaymentCommandClaimRequest) BankOperationKey() string { return r.bankOperationKey }
 func (r PaymentCommandClaimRequest) AuthorizationCardFingerprint() string {
 	return r.authorizationCardFingerprint
-}
-func (r PaymentCommandClaimRequest) CompletesAuthorizationExpiration() bool {
-	return r.completeAuthorizationExpiration
 }
 func (r PaymentCommandClaimRequest) Now() time.Time { return r.now }
 func (r PaymentCommandClaimRequest) ClaimStuckAfter() time.Duration {
@@ -433,7 +427,7 @@ func (s *PaymentService) executeAuthorization(
 	card cardDetails,
 	httpStatus int,
 ) (paymentCommandExecution, error) {
-	return s.commandExecutor.execute(ctx, claimRequest, func(ctx context.Context, payment *domain.Payment) (PaymentCommandResult, error) {
+	return s.commandExecutor.execute(ctx, claimRequest, func(ctx context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
 		bankResult, err := s.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
 			OperationKey:    payment.AuthorizationBankOperationKey(),
 			OrderID:         payment.OrderID(),
@@ -446,15 +440,15 @@ func (s *PaymentService) executeAuthorization(
 			CardExpiryYear:  card.expiryYear,
 		})
 		if err != nil {
-			return PaymentCommandResult{}, err
+			return releasablePaymentCommandFailure(err)
 		}
 		if err := applyAuthorizationOutcome(payment, bankResult, s.clock.Now()); err != nil {
-			return PaymentCommandResult{}, err
+			return definitivePaymentCommandFailure(err)
 		}
-		return PaymentCommandResult{
+		return completedPaymentCommand(PaymentCommandResult{
 			Payment:    newPaymentResult(payment),
 			HTTPStatus: httpStatus,
-		}, nil
+		})
 	})
 }
 
@@ -471,7 +465,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewCaptureClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) (PaymentCommandResult, error) {
+		func(ctx context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
 			bankOperationKey := payment.CaptureBankOperationKey()
 			bankResult, err := s.bank.CapturePayment(ctx, BankCaptureRequest{
 				OperationKey:        bankOperationKey,
@@ -480,12 +474,12 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				Currency:            payment.Currency(),
 			})
 			if err != nil {
-				return PaymentCommandResult{}, err
+				return s.captureOrVoidBankFailure(payment, err)
 			}
 			if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
-				return PaymentCommandResult{}, err
+				return definitivePaymentCommandFailure(err)
 			}
-			return PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil
+			return completedPaymentCommand(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200})
 		},
 	)
 	if execution.replayed {
@@ -513,19 +507,19 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewVoidClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) (PaymentCommandResult, error) {
+		func(ctx context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
 			bankOperationKey := payment.VoidBankOperationKey()
 			bankResult, err := s.bank.VoidPayment(ctx, BankVoidRequest{
 				OperationKey:        bankOperationKey,
 				BankAuthorizationID: payment.BankAuthorizationID(),
 			})
 			if err != nil {
-				return PaymentCommandResult{}, err
+				return s.captureOrVoidBankFailure(payment, err)
 			}
 			if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
-				return PaymentCommandResult{}, err
+				return definitivePaymentCommandFailure(err)
 			}
-			return PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil
+			return completedPaymentCommand(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200})
 		},
 	)
 	if execution.replayed {
@@ -553,7 +547,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewRefundClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) (PaymentCommandResult, error) {
+		func(ctx context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
 			bankOperationKey := payment.RefundBankOperationKey()
 			bankResult, err := s.bank.RefundPayment(ctx, BankRefundRequest{
 				OperationKey:  bankOperationKey,
@@ -562,12 +556,12 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 				Currency:      payment.Currency(),
 			})
 			if err != nil {
-				return PaymentCommandResult{}, err
+				return releasablePaymentCommandFailure(err)
 			}
 			if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, s.clock.Now()); err != nil {
-				return PaymentCommandResult{}, err
+				return definitivePaymentCommandFailure(err)
 			}
-			return PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil
+			return completedPaymentCommand(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200})
 		},
 	)
 	if execution.replayed {
@@ -577,6 +571,19 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentCommandResult{}, err
 	}
 	return execution.result, nil
+}
+
+func (s *PaymentService) captureOrVoidBankFailure(payment *domain.Payment, err error) paymentCommandBehaviorOutcome {
+	if !HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
+		return releasablePaymentCommandFailure(err)
+	}
+	if markErr := payment.MarkExpired(s.clock.Now()); markErr != nil {
+		return definitivePaymentCommandFailure(markErr)
+	}
+	return definitivePaymentCommandCompletion(
+		PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 409},
+		err,
+	)
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
