@@ -385,7 +385,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		outcomeOverride = paymentOperationOutcomeReplayed
 	}
 	if err != nil {
-		return PaymentCommandResult{}, err
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	return execution.result, nil
 }
@@ -416,7 +416,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		outcomeOverride = paymentOperationOutcomeReplayed
 	}
 	if err != nil {
-		return PaymentCommandResult{}, err
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	return execution.result, nil
 }
@@ -489,7 +489,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		if HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 			outcomeOverride = string(domain.PaymentStatusExpired)
 		}
-		return PaymentCommandResult{}, err
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	return execution.result, nil
 }
@@ -529,7 +529,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		if HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 			outcomeOverride = string(domain.PaymentStatusExpired)
 		}
-		return PaymentCommandResult{}, err
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	return execution.result, nil
 }
@@ -568,7 +568,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		outcomeOverride = paymentOperationOutcomeReplayed
 	}
 	if err != nil {
-		return PaymentCommandResult{}, err
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 	return execution.result, nil
 }
