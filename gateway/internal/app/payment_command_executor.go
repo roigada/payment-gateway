@@ -18,7 +18,45 @@ type paymentCommandExecution struct {
 	replayed bool
 }
 
-type paymentCommandBehavior func(context.Context, *domain.Payment) (PaymentCommandResult, error)
+type paymentCommandBehaviorOutcomeKind int
+
+const (
+	paymentCommandSuccessfulCompletion paymentCommandBehaviorOutcomeKind = iota
+	paymentCommandReleasableFailure
+	paymentCommandDefinitiveExceptionalCompletion
+	paymentCommandDefinitiveFailure
+)
+
+type paymentCommandBehaviorOutcome struct {
+	kind   paymentCommandBehaviorOutcomeKind
+	result PaymentCommandResult
+	err    error
+}
+
+func completedPaymentCommand(result PaymentCommandResult) paymentCommandBehaviorOutcome {
+	return paymentCommandBehaviorOutcome{
+		kind:   paymentCommandSuccessfulCompletion,
+		result: result,
+	}
+}
+
+func releasablePaymentCommandFailure(err error) paymentCommandBehaviorOutcome {
+	return paymentCommandBehaviorOutcome{kind: paymentCommandReleasableFailure, err: err}
+}
+
+func definitivePaymentCommandFailure(err error) paymentCommandBehaviorOutcome {
+	return paymentCommandBehaviorOutcome{kind: paymentCommandDefinitiveFailure, err: err}
+}
+
+func definitivePaymentCommandCompletion(result PaymentCommandResult, err error) paymentCommandBehaviorOutcome {
+	return paymentCommandBehaviorOutcome{
+		kind:   paymentCommandDefinitiveExceptionalCompletion,
+		result: result,
+		err:    err,
+	}
+}
+
+type paymentCommandBehavior func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome
 
 func (e paymentCommandExecutor) execute(
 	ctx context.Context,
@@ -36,40 +74,24 @@ func (e paymentCommandExecutor) execute(
 		return paymentCommandExecution{result: replayed, replayed: true}, nil
 	}
 
-	result, err := behavior(ctx, claim.Payment())
-	if err != nil {
-		if request.CompletesAuthorizationExpiration() && HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
-			return e.completeAuthorizationExpiration(ctx, claim)
+	outcome := behavior(ctx, claim.Payment())
+	if outcome.kind == paymentCommandReleasableFailure {
+		_ = e.store.ReleasePaymentCommand(ctx, claim)
+		return paymentCommandExecution{}, ensurePaymentError(outcome.err)
+	}
+
+	if outcome.kind == paymentCommandSuccessfulCompletion || outcome.kind == paymentCommandDefinitiveExceptionalCompletion {
+		if err := e.store.CompletePaymentCommand(ctx, claim, outcome.result, e.clock.Now()); err != nil {
+			return paymentCommandExecution{}, ensurePaymentError(err)
 		}
-		_ = e.store.ReleasePaymentCommand(ctx, claim)
-		return paymentCommandExecution{}, ensurePaymentError(err)
+		e.recordRecoveryCompleted(claim)
 	}
 
-	if err := e.store.CompletePaymentCommand(ctx, claim, result, e.clock.Now()); err != nil {
-		return paymentCommandExecution{}, ensurePaymentError(err)
+	if outcome.kind == paymentCommandDefinitiveExceptionalCompletion || outcome.kind == paymentCommandDefinitiveFailure {
+		return paymentCommandExecution{}, ensurePaymentError(outcome.err)
 	}
-	e.recordRecoveryCompleted(claim)
 
-	return paymentCommandExecution{result: result}, nil
-}
-
-func (e paymentCommandExecutor) completeAuthorizationExpiration(
-	ctx context.Context,
-	claim PaymentCommandClaim,
-) (paymentCommandExecution, error) {
-	if err := claim.Payment().MarkExpired(e.clock.Now()); err != nil {
-		_ = e.store.ReleasePaymentCommand(ctx, claim)
-		return paymentCommandExecution{}, ensurePaymentError(err)
-	}
-	result := PaymentCommandResult{
-		Payment:    newPaymentResult(claim.Payment()),
-		HTTPStatus: 409,
-	}
-	if err := e.store.CompletePaymentCommand(ctx, claim, result, e.clock.Now()); err != nil {
-		return paymentCommandExecution{}, ensurePaymentError(err)
-	}
-	e.recordRecoveryCompleted(claim)
-	return paymentCommandExecution{}, NewPaymentAuthorizationExpiredError(nil)
+	return paymentCommandExecution{result: outcome.result}, nil
 }
 
 func (e paymentCommandExecutor) recordRecoveryAttempt(claim PaymentCommandClaim) {
