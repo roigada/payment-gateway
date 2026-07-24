@@ -219,7 +219,7 @@ func TestPaymentCommandExecutorRecordsUnrecoverableClaimFailureInOrder(t *testin
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
 	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		t.Fatal("behavior must not run after unrecoverable claim failure")
+		require.FailNow(t, "behavior must not run after unrecoverable claim failure")
 		return completedPaymentCommand(PaymentCommandResult{})
 	})
 
@@ -242,7 +242,7 @@ func TestPaymentCommandExecutorRecordsRecoveryClaimFailureInOrder(t *testing.T) 
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
 	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		t.Fatal("behavior must not run after claim failure")
+		require.FailNow(t, "behavior must not run after claim failure")
 		return completedPaymentCommand(PaymentCommandResult{})
 	})
 
