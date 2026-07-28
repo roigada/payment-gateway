@@ -132,6 +132,36 @@ func TestPaymentCommandExecutorRejectsMissingClaimDisposition(t *testing.T) {
 	assert.Zero(t, store.completeCalls)
 }
 
+func TestPaymentCommandExecutorRejectsClaimReleaseWithoutError(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{claim: NewClaimedPaymentCommand(request, request.Payment())}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return releaseClaim(nil)
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Zero(t, store.releaseCalls)
+	assert.Zero(t, store.completeCalls)
+}
+
+func TestPaymentCommandExecutorRejectsClaimPreservationWithoutError(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{claim: NewClaimedPaymentCommand(request, request.Payment())}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return preserveClaim(nil)
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Zero(t, store.releaseCalls)
+	assert.Zero(t, store.completeCalls)
+}
+
 func TestPaymentCommandExecutorPreservesDefinitiveFailureWithoutReplaySnapshot(t *testing.T) {
 	request := executorClaimRequest(t)
 	store := &executorStore{claim: NewRecoveredPaymentCommand(request, request.Payment())}

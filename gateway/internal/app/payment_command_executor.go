@@ -79,9 +79,15 @@ func (e paymentCommandExecutor) execute(
 		}
 		return paymentCommandExecution{result: disposition.result}, nil
 	case releaseClaimDisposition:
+		if disposition.err == nil {
+			return paymentCommandExecution{}, NewInternalPaymentError(errors.New("release claim disposition requires an error"))
+		}
 		_ = e.store.ReleasePaymentCommand(ctx, claim)
 		return paymentCommandExecution{}, ensurePaymentError(disposition.err)
 	case preserveClaimDisposition:
+		if disposition.err == nil {
+			return paymentCommandExecution{}, NewInternalPaymentError(errors.New("preserve claim disposition requires an error"))
+		}
 		return paymentCommandExecution{}, ensurePaymentError(disposition.err)
 	default:
 		return paymentCommandExecution{}, NewInternalPaymentError(errors.New("payment command behavior returned an invalid claim disposition"))

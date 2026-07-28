@@ -474,7 +474,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				Currency:            payment.Currency(),
 			})
 			if err != nil {
-				return s.captureOrVoidBankFailure(payment, err)
+				return s.captureOrVoidClaimDisposition(payment, err)
 			}
 			if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
 				return preserveClaim(err)
@@ -514,7 +514,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 				BankAuthorizationID: payment.BankAuthorizationID(),
 			})
 			if err != nil {
-				return s.captureOrVoidBankFailure(payment, err)
+				return s.captureOrVoidClaimDisposition(payment, err)
 			}
 			if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
 				return preserveClaim(err)
@@ -573,7 +573,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	return execution.result, nil
 }
 
-func (s *PaymentService) captureOrVoidBankFailure(payment *domain.Payment, err error) claimDisposition {
+func (s *PaymentService) captureOrVoidClaimDisposition(payment *domain.Payment, err error) claimDisposition {
 	if !HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 		return releaseClaim(err)
 	}
