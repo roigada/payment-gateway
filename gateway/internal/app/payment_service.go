@@ -21,15 +21,28 @@ const (
 )
 
 type PaymentService struct {
-	store             PaymentStore
+	queryStore        paymentQueryStore
 	paymentIDs        PaymentIDGenerator
 	bankOperationKeys BankOperationKeyGenerator
 	bank              BankClient
-	operationMetrics  PaymentOperationMetrics
+	operationMetrics  paymentOperationRecorder
 	clock             Clock
 	fingerprintSecret string
 	claimStuckAfter   time.Duration
-	commandExecutor   paymentCommandExecutor
+	commandExecutor   paymentCommandRunner
+}
+
+type paymentQueryStore interface {
+	FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error)
+	Search(ctx context.Context, query SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error)
+}
+
+type paymentOperationRecorder interface {
+	RecordPaymentOperation(operation string, outcome string, duration time.Duration)
+}
+
+type paymentCommandRunner interface {
+	execute(ctx context.Context, request PaymentCommandClaimRequest, behavior paymentCommandBehavior) (paymentCommandExecution, error)
 }
 
 func NewPaymentService(
@@ -69,7 +82,7 @@ func NewPaymentService(
 	}
 
 	service := &PaymentService{
-		store:             store,
+		queryStore:        store,
 		paymentIDs:        paymentIDs,
 		bankOperationKeys: bankOperationKeys,
 		bank:              bank,
@@ -427,29 +440,13 @@ func (s *PaymentService) executeAuthorization(
 	card cardDetails,
 	httpStatus int,
 ) (paymentCommandExecution, error) {
-	return s.commandExecutor.execute(ctx, claimRequest, func(ctx context.Context, payment *domain.Payment) claimDisposition {
-		bankResult, err := s.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
-			OperationKey:    payment.AuthorizationBankOperationKey(),
-			OrderID:         payment.OrderID(),
-			CustomerID:      payment.CustomerID(),
-			AmountCents:     payment.AmountCents(),
-			Currency:        payment.Currency(),
-			CardNumber:      card.number,
-			CardCVV:         card.cvv,
-			CardExpiryMonth: card.expiryMonth,
-			CardExpiryYear:  card.expiryYear,
-		})
-		if err != nil {
-			return releaseClaim(err)
-		}
-		if err := applyAuthorizationOutcome(payment, bankResult, s.clock.Now()); err != nil {
-			return preserveClaim(err)
-		}
-		return completeClaim(PaymentCommandResult{
-			Payment:    newPaymentResult(payment),
-			HTTPStatus: httpStatus,
-		}, nil)
-	})
+	behavior := authorizationBehavior{
+		bank:       s.bank,
+		clock:      s.clock,
+		card:       card,
+		httpStatus: httpStatus,
+	}
+	return s.commandExecutor.execute(ctx, claimRequest, behavior.execute)
 }
 
 func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaymentCommand) (result PaymentCommandResult, err error) {
@@ -465,22 +462,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewCaptureClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) claimDisposition {
-			bankOperationKey := payment.CaptureBankOperationKey()
-			bankResult, err := s.bank.CapturePayment(ctx, BankCaptureRequest{
-				OperationKey:        bankOperationKey,
-				BankAuthorizationID: payment.BankAuthorizationID(),
-				AmountCents:         payment.AmountCents(),
-				Currency:            payment.Currency(),
-			})
-			if err != nil {
-				return s.captureOrVoidClaimDisposition(payment, err)
-			}
-			if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
-				return preserveClaim(err)
-			}
-			return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
-		},
+		capturePaymentBehavior{bank: s.bank, clock: s.clock}.execute,
 	)
 	if execution.replayed {
 		outcomeOverride = paymentOperationOutcomeReplayed
@@ -507,20 +489,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewVoidClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) claimDisposition {
-			bankOperationKey := payment.VoidBankOperationKey()
-			bankResult, err := s.bank.VoidPayment(ctx, BankVoidRequest{
-				OperationKey:        bankOperationKey,
-				BankAuthorizationID: payment.BankAuthorizationID(),
-			})
-			if err != nil {
-				return s.captureOrVoidClaimDisposition(payment, err)
-			}
-			if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
-				return preserveClaim(err)
-			}
-			return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
-		},
+		voidPaymentBehavior{bank: s.bank, clock: s.clock}.execute,
 	)
 	if execution.replayed {
 		outcomeOverride = paymentOperationOutcomeReplayed
@@ -547,22 +516,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	execution, err := s.commandExecutor.execute(
 		ctx,
 		NewRefundClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter),
-		func(ctx context.Context, payment *domain.Payment) claimDisposition {
-			bankOperationKey := payment.RefundBankOperationKey()
-			bankResult, err := s.bank.RefundPayment(ctx, BankRefundRequest{
-				OperationKey:  bankOperationKey,
-				BankCaptureID: payment.BankCaptureID(),
-				AmountCents:   payment.AmountCents(),
-				Currency:      payment.Currency(),
-			})
-			if err != nil {
-				return releaseClaim(err)
-			}
-			if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, s.clock.Now()); err != nil {
-				return preserveClaim(err)
-			}
-			return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
-		},
+		refundPaymentBehavior{bank: s.bank, clock: s.clock}.execute,
 	)
 	if execution.replayed {
 		outcomeOverride = paymentOperationOutcomeReplayed
@@ -573,11 +527,106 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	return execution.result, nil
 }
 
-func (s *PaymentService) captureOrVoidClaimDisposition(payment *domain.Payment, err error) claimDisposition {
+type authorizationBehavior struct {
+	bank       BankClient
+	clock      Clock
+	card       cardDetails
+	httpStatus int
+}
+
+func (b authorizationBehavior) execute(ctx context.Context, payment *domain.Payment) claimDisposition {
+	bankResult, err := b.bank.AuthorizePayment(ctx, BankAuthorizationRequest{
+		OperationKey:    payment.AuthorizationBankOperationKey(),
+		OrderID:         payment.OrderID(),
+		CustomerID:      payment.CustomerID(),
+		AmountCents:     payment.AmountCents(),
+		Currency:        payment.Currency(),
+		CardNumber:      b.card.number,
+		CardCVV:         b.card.cvv,
+		CardExpiryMonth: b.card.expiryMonth,
+		CardExpiryYear:  b.card.expiryYear,
+	})
+	if err != nil {
+		return releaseClaim(err)
+	}
+	if err := applyAuthorizationOutcome(payment, bankResult, b.clock.Now()); err != nil {
+		return preserveClaim(err)
+	}
+	return completeClaim(PaymentCommandResult{
+		Payment:    newPaymentResult(payment),
+		HTTPStatus: b.httpStatus,
+	}, nil)
+}
+
+type capturePaymentBehavior struct {
+	bank  BankClient
+	clock Clock
+}
+
+func (b capturePaymentBehavior) execute(ctx context.Context, payment *domain.Payment) claimDisposition {
+	bankOperationKey := payment.CaptureBankOperationKey()
+	bankResult, err := b.bank.CapturePayment(ctx, BankCaptureRequest{
+		OperationKey:        bankOperationKey,
+		BankAuthorizationID: payment.BankAuthorizationID(),
+		AmountCents:         payment.AmountCents(),
+		Currency:            payment.Currency(),
+	})
+	if err != nil {
+		return captureOrVoidClaimDisposition(payment, err, b.clock)
+	}
+	if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, b.clock.Now()); err != nil {
+		return preserveClaim(err)
+	}
+	return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
+}
+
+type voidPaymentBehavior struct {
+	bank  BankClient
+	clock Clock
+}
+
+func (b voidPaymentBehavior) execute(ctx context.Context, payment *domain.Payment) claimDisposition {
+	bankOperationKey := payment.VoidBankOperationKey()
+	bankResult, err := b.bank.VoidPayment(ctx, BankVoidRequest{
+		OperationKey:        bankOperationKey,
+		BankAuthorizationID: payment.BankAuthorizationID(),
+	})
+	if err != nil {
+		return captureOrVoidClaimDisposition(payment, err, b.clock)
+	}
+	if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, b.clock.Now()); err != nil {
+		return preserveClaim(err)
+	}
+	return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
+}
+
+type refundPaymentBehavior struct {
+	bank  BankClient
+	clock Clock
+}
+
+func (b refundPaymentBehavior) execute(ctx context.Context, payment *domain.Payment) claimDisposition {
+	bankOperationKey := payment.RefundBankOperationKey()
+	bankResult, err := b.bank.RefundPayment(ctx, BankRefundRequest{
+		OperationKey:  bankOperationKey,
+		BankCaptureID: payment.BankCaptureID(),
+		AmountCents:   payment.AmountCents(),
+		Currency:      payment.Currency(),
+	})
+	if err != nil {
+		return releaseClaim(err)
+	}
+	if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, b.clock.Now()); err != nil {
+		return preserveClaim(err)
+	}
+	return completeClaim(PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 200}, nil)
+}
+
+func captureOrVoidClaimDisposition(payment *domain.Payment, err error, clock Clock) claimDisposition {
 	if !HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
 		return releaseClaim(err)
 	}
-	if markErr := payment.MarkExpired(s.clock.Now()); markErr != nil {
+	if markErr := payment.MarkExpired(clock.Now()); markErr != nil {
 		return preserveClaim(markErr)
 	}
 	return completeClaim(
@@ -587,7 +636,7 @@ func (s *PaymentService) captureOrVoidClaimDisposition(payment *domain.Payment, 
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
-	payment, err := s.store.FindByID(ctx, query.paymentID, s.clock.Now())
+	payment, err := s.queryStore.FindByID(ctx, query.paymentID, s.clock.Now())
 	if err != nil {
 		return PaymentResult{}, ensurePaymentError(err)
 	}
@@ -595,7 +644,7 @@ func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) 
 }
 
 func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
-	payments, err := s.store.Search(ctx, query, s.clock.Now())
+	payments, err := s.queryStore.Search(ctx, query, s.clock.Now())
 	if err != nil {
 		return nil, ensurePaymentError(err)
 	}

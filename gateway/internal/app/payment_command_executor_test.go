@@ -298,7 +298,7 @@ func TestPaymentCommandExecutorRecordsRecoveryClaimFailureInOrder(t *testing.T) 
 	assert.Zero(t, store.releaseCalls)
 }
 
-func newTestPaymentCommandExecutor(store PaymentStore, metrics PaymentOperationMetrics) paymentCommandExecutor {
+func newTestPaymentCommandExecutor(store paymentCommandStore, metrics idempotencyRecoveryRecorder) paymentCommandExecutor {
 	return paymentCommandExecutor{
 		store:   store,
 		metrics: metrics,
@@ -348,14 +348,6 @@ type executorStore struct {
 	completedResult PaymentCommandResult
 }
 
-func (s *executorStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {
-	panic("unexpected FindByID call")
-}
-
-func (s *executorStore) Search(context.Context, SearchPaymentsQuery, time.Time) ([]*domain.Payment, error) {
-	panic("unexpected Search call")
-}
-
 func (s *executorStore) ClaimPaymentCommand(context.Context, PaymentCommandClaimRequest) (PaymentCommandClaim, error) {
 	return s.claim, s.claimErr
 }
@@ -377,16 +369,10 @@ func (s *executorStore) ReleasePaymentCommand(context.Context, PaymentCommandCla
 	return s.releaseErr
 }
 
-func (s *executorStore) CleanupCompletedIdempotencyRecords(context.Context, time.Time) (int, error) {
-	panic("unexpected CleanupCompletedIdempotencyRecords call")
-}
-
 type executorMetrics struct {
 	recoveryResults []string
 	onRecovery      func(string)
 }
-
-func (*executorMetrics) RecordPaymentOperation(string, string, time.Duration) {}
 
 func (m *executorMetrics) RecordIdempotencyRecovery(_ string, result string) {
 	m.recoveryResults = append(m.recoveryResults, result)

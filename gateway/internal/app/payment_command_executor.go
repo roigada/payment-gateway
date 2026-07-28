@@ -3,14 +3,25 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 type paymentCommandExecutor struct {
-	store   PaymentStore
-	metrics PaymentOperationMetrics
+	store   paymentCommandStore
+	metrics idempotencyRecoveryRecorder
 	clock   Clock
+}
+
+type paymentCommandStore interface {
+	ClaimPaymentCommand(ctx context.Context, request PaymentCommandClaimRequest) (PaymentCommandClaim, error)
+	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult, completedAt time.Time) error
+	ReleasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) error
+}
+
+type idempotencyRecoveryRecorder interface {
+	RecordIdempotencyRecovery(operation string, result string)
 }
 
 type paymentCommandExecution struct {
