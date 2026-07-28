@@ -20,9 +20,9 @@ func TestPaymentCommandExecutorReturnsReplayWithoutInvokingBehavior(t *testing.T
 	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
 	behaviorCalled := false
 
-	execution, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+	execution, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
 		behaviorCalled = true
-		return completedPaymentCommand(PaymentCommandResult{})
+		return completeClaim(PaymentCommandResult{}, nil)
 	})
 
 	require.NoError(t, err)
@@ -48,11 +48,11 @@ func TestPaymentCommandExecutorUsesRecoveredPaymentAndRecordsRecoveryAroundCompl
 	}}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	execution, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
+	execution, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) claimDisposition {
 		require.Same(t, recoveredPayment, payment)
 		assert.Equal(t, "bok_recovered", payment.AuthorizationBankOperationKey())
 		events = append(events, "behavior")
-		return completedPaymentCommand(PaymentCommandResult{Payment: PaymentResult{ID: string(payment.ID())}, HTTPStatus: 201})
+		return completeClaim(PaymentCommandResult{Payment: PaymentResult{ID: string(payment.ID())}, HTTPStatus: 201}, nil)
 	})
 
 	require.NoError(t, err)
@@ -66,8 +66,8 @@ func TestPaymentCommandExecutorReleasesBehaviorFailure(t *testing.T) {
 	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
 	behaviorErr := NewPaymentBankUnavailableError(errors.New("bank unavailable"))
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		return releasablePaymentCommandFailure(behaviorErr)
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return releaseClaim(behaviorErr)
 	})
 
 	require.Error(t, err)
@@ -89,9 +89,9 @@ func TestPaymentCommandExecutorPreservesPrimaryFailureWhenClaimReleaseFails(t *t
 	}
 	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
 		events = append(events, "behavior")
-		return releasablePaymentCommandFailure(primaryErr)
+		return releaseClaim(primaryErr)
 	})
 
 	require.Error(t, err)
@@ -107,13 +107,28 @@ func TestPaymentCommandExecutorDoesNotInferClaimHandlingFromPaymentErrorKind(t *
 	store := &executorStore{claim: NewClaimedPaymentCommand(request, request.Payment())}
 	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		return releasablePaymentCommandFailure(NewPaymentAuthorizationExpiredError(nil))
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return releaseClaim(NewPaymentAuthorizationExpiredError(nil))
 	})
 
 	require.Error(t, err)
 	assert.True(t, HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired))
 	assert.Equal(t, 1, store.releaseCalls)
+	assert.Zero(t, store.completeCalls)
+}
+
+func TestPaymentCommandExecutorRejectsMissingClaimDisposition(t *testing.T) {
+	request := executorClaimRequest(t)
+	store := &executorStore{claim: NewClaimedPaymentCommand(request, request.Payment())}
+	executor := newTestPaymentCommandExecutor(store, &executorMetrics{})
+
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return claimDisposition{}
+	})
+
+	require.Error(t, err)
+	assert.True(t, HasPaymentErrorKind(err, PaymentErrorInternal))
+	assert.Zero(t, store.releaseCalls)
 	assert.Zero(t, store.completeCalls)
 }
 
@@ -123,8 +138,8 @@ func TestPaymentCommandExecutorPreservesDefinitiveFailureWithoutReplaySnapshot(t
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		return definitivePaymentCommandFailure(errors.New("payment transition failed"))
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return preserveClaim(errors.New("payment transition failed"))
 	})
 
 	require.Error(t, err)
@@ -142,9 +157,9 @@ func TestPaymentCommandExecutorCompletesAuthorizationExpirationBeforeReturningEr
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
+	_, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) claimDisposition {
 		require.NoError(t, payment.MarkExpired(now))
-		return definitivePaymentCommandCompletion(
+		return completeClaim(
 			PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 409},
 			NewPaymentAuthorizationExpiredError(errors.New("bank reports expired")),
 		)
@@ -171,9 +186,9 @@ func TestPaymentCommandExecutorPreservesExpiredClaimWhenCompletionFails(t *testi
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) paymentCommandBehaviorOutcome {
+	_, err := executor.execute(context.Background(), request, func(_ context.Context, payment *domain.Payment) claimDisposition {
 		require.NoError(t, payment.MarkExpired(now))
-		return definitivePaymentCommandCompletion(
+		return completeClaim(
 			PaymentCommandResult{Payment: newPaymentResult(payment), HTTPStatus: 409},
 			NewPaymentAuthorizationExpiredError(nil),
 		)
@@ -196,8 +211,8 @@ func TestPaymentCommandExecutorPreservesClaimWhenCompletionFails(t *testing.T) {
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
-		return completedPaymentCommand(PaymentCommandResult{HTTPStatus: 201})
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
+		return completeClaim(PaymentCommandResult{HTTPStatus: 201}, nil)
 	})
 
 	require.Error(t, err)
@@ -218,9 +233,9 @@ func TestPaymentCommandExecutorRecordsUnrecoverableClaimFailureInOrder(t *testin
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
 		require.FailNow(t, "behavior must not run after unrecoverable claim failure")
-		return completedPaymentCommand(PaymentCommandResult{})
+		return completeClaim(PaymentCommandResult{}, nil)
 	})
 
 	require.Error(t, err)
@@ -241,9 +256,9 @@ func TestPaymentCommandExecutorRecordsRecoveryClaimFailureInOrder(t *testing.T) 
 	metrics := &executorMetrics{}
 	executor := newTestPaymentCommandExecutor(store, metrics)
 
-	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome {
+	_, err := executor.execute(context.Background(), request, func(context.Context, *domain.Payment) claimDisposition {
 		require.FailNow(t, "behavior must not run after claim failure")
-		return completedPaymentCommand(PaymentCommandResult{})
+		return completeClaim(PaymentCommandResult{}, nil)
 	})
 
 	require.Error(t, err)

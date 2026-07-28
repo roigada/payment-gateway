@@ -18,45 +18,38 @@ type paymentCommandExecution struct {
 	replayed bool
 }
 
-type paymentCommandBehaviorOutcomeKind int
+type claimDispositionKind int
 
 const (
-	paymentCommandSuccessfulCompletion paymentCommandBehaviorOutcomeKind = iota
-	paymentCommandReleasableFailure
-	paymentCommandDefinitiveExceptionalCompletion
-	paymentCommandDefinitiveFailure
+	_ claimDispositionKind = iota
+	completeClaimDisposition
+	releaseClaimDisposition
+	preserveClaimDisposition
 )
 
-type paymentCommandBehaviorOutcome struct {
-	kind   paymentCommandBehaviorOutcomeKind
+type claimDisposition struct {
+	kind   claimDispositionKind
 	result PaymentCommandResult
 	err    error
 }
 
-func completedPaymentCommand(result PaymentCommandResult) paymentCommandBehaviorOutcome {
-	return paymentCommandBehaviorOutcome{
-		kind:   paymentCommandSuccessfulCompletion,
-		result: result,
-	}
-}
-
-func releasablePaymentCommandFailure(err error) paymentCommandBehaviorOutcome {
-	return paymentCommandBehaviorOutcome{kind: paymentCommandReleasableFailure, err: err}
-}
-
-func definitivePaymentCommandFailure(err error) paymentCommandBehaviorOutcome {
-	return paymentCommandBehaviorOutcome{kind: paymentCommandDefinitiveFailure, err: err}
-}
-
-func definitivePaymentCommandCompletion(result PaymentCommandResult, err error) paymentCommandBehaviorOutcome {
-	return paymentCommandBehaviorOutcome{
-		kind:   paymentCommandDefinitiveExceptionalCompletion,
+func completeClaim(result PaymentCommandResult, err error) claimDisposition {
+	return claimDisposition{
+		kind:   completeClaimDisposition,
 		result: result,
 		err:    err,
 	}
 }
 
-type paymentCommandBehavior func(context.Context, *domain.Payment) paymentCommandBehaviorOutcome
+func releaseClaim(err error) claimDisposition {
+	return claimDisposition{kind: releaseClaimDisposition, err: err}
+}
+
+func preserveClaim(err error) claimDisposition {
+	return claimDisposition{kind: preserveClaimDisposition, err: err}
+}
+
+type paymentCommandBehavior func(context.Context, *domain.Payment) claimDisposition
 
 func (e paymentCommandExecutor) execute(
 	ctx context.Context,
@@ -74,24 +67,25 @@ func (e paymentCommandExecutor) execute(
 		return paymentCommandExecution{result: replayed, replayed: true}, nil
 	}
 
-	outcome := behavior(ctx, claim.Payment())
-	if outcome.kind == paymentCommandReleasableFailure {
-		_ = e.store.ReleasePaymentCommand(ctx, claim)
-		return paymentCommandExecution{}, ensurePaymentError(outcome.err)
-	}
-
-	if outcome.kind == paymentCommandSuccessfulCompletion || outcome.kind == paymentCommandDefinitiveExceptionalCompletion {
-		if err := e.store.CompletePaymentCommand(ctx, claim, outcome.result, e.clock.Now()); err != nil {
+	disposition := behavior(ctx, claim.Payment())
+	switch disposition.kind {
+	case completeClaimDisposition:
+		if err := e.store.CompletePaymentCommand(ctx, claim, disposition.result, e.clock.Now()); err != nil {
 			return paymentCommandExecution{}, ensurePaymentError(err)
 		}
 		e.recordRecoveryCompleted(claim)
+		if disposition.err != nil {
+			return paymentCommandExecution{}, ensurePaymentError(disposition.err)
+		}
+		return paymentCommandExecution{result: disposition.result}, nil
+	case releaseClaimDisposition:
+		_ = e.store.ReleasePaymentCommand(ctx, claim)
+		return paymentCommandExecution{}, ensurePaymentError(disposition.err)
+	case preserveClaimDisposition:
+		return paymentCommandExecution{}, ensurePaymentError(disposition.err)
+	default:
+		return paymentCommandExecution{}, NewInternalPaymentError(errors.New("payment command behavior returned an invalid claim disposition"))
 	}
-
-	if outcome.kind == paymentCommandDefinitiveExceptionalCompletion || outcome.kind == paymentCommandDefinitiveFailure {
-		return paymentCommandExecution{}, ensurePaymentError(outcome.err)
-	}
-
-	return paymentCommandExecution{result: outcome.result}, nil
 }
 
 func (e paymentCommandExecutor) recordRecoveryAttempt(claim PaymentCommandClaim) {
