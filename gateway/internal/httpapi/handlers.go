@@ -76,12 +76,13 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var result app.PaymentCommandResult
-	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		result, err = s.payments.AuthorizePayment(ctx, command)
-		return err
-	}) {
+	result, err := s.payments.AuthorizePayment(r.Context(), command)
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -132,12 +133,13 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var result app.PaymentCommandResult
-	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		result, err = s.payments.RetryAuthorization(ctx, command)
-		return err
-	}) {
+	result, err := s.payments.RetryAuthorization(r.Context(), command)
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -167,12 +169,13 @@ func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var result app.PaymentCommandResult
-	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		result, err = s.payments.CapturePayment(ctx, command)
-		return err
-	}) {
+	result, err := s.payments.CapturePayment(r.Context(), command)
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -202,12 +205,13 @@ func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var result app.PaymentCommandResult
-	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		result, err = s.payments.VoidPayment(ctx, command)
-		return err
-	}) {
+	result, err := s.payments.VoidPayment(r.Context(), command)
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -237,12 +241,13 @@ func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var result app.PaymentCommandResult
-	if !s.withCommandDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		result, err = s.payments.RefundPayment(ctx, command)
-		return err
-	}) {
+	result, err := s.payments.RefundPayment(r.Context(), command)
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -255,12 +260,15 @@ func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var payment app.PaymentResult
-	if !s.withReadDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		payment, err = s.payments.GetPayment(ctx, query)
-		return err
-	}) {
+	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	defer cancel()
+	payment, err := s.payments.GetPayment(ctx, query)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment read timed out")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 
@@ -283,12 +291,15 @@ func (s *Handler) searchPayments(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	var payments []app.PaymentResult
-	if !s.withReadDeadline(w, r, func(ctx context.Context) error {
-		var err error
-		payments, err = s.payments.SearchPayments(ctx, searchQuery)
-		return err
-	}) {
+	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	defer cancel()
+	payments, err := s.payments.SearchPayments(ctx, searchQuery)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment read timed out")
+		return
+	}
+	if err != nil {
+		writePaymentServiceError(w, r, err)
 		return
 	}
 

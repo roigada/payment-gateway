@@ -1010,6 +1010,12 @@ func TestPostPaymentsRecoversPanic(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, "close", rec.Header().Get("Connection"))
 	assertErrorResponse(t, rec, "internal_server_error", "Internal Server Error")
+	require.Len(t, api.metrics.requests, 1)
+	assert.Equal(t, recordedHTTPRequest{
+		method: http.MethodPost,
+		route:  "/api/v1/payments",
+		status: http.StatusInternalServerError,
+	}, api.metrics.requests[0].withoutDuration())
 }
 
 func TestHealthzReturnsNoContent(t *testing.T) {

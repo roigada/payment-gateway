@@ -120,6 +120,27 @@ func TestLogRequestWritesErrorForServerErrors(t *testing.T) {
 	assert.Equal(t, float64(http.StatusInternalServerError), entry["status"])
 }
 
+func TestFallbackPanicRecoveryLetsRequestLoggingObserveTheFailure(t *testing.T) {
+	var logs bytes.Buffer
+	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	handler := server.logRequest(server.recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("authentication exploded")
+	})))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/payments", nil))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	entries := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte{'\n'})
+	require.Len(t, entries, 2)
+	panicEntry := decodeLogEntry(t, entries[0])
+	requestEntry := decodeLogEntry(t, entries[1])
+	assert.Equal(t, "http panic recovered", panicEntry["msg"])
+	assert.Equal(t, "http request", requestEntry["msg"])
+	assert.Equal(t, "ERROR", requestEntry["level"])
+	assert.Equal(t, float64(http.StatusInternalServerError), requestEntry["status"])
+}
+
 func TestResponseRecorderKeepsFirstFinalStatus(t *testing.T) {
 	rec := &responseRecorder{ResponseWriter: httptest.NewRecorder()}
 
