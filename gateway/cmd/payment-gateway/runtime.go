@@ -35,7 +35,7 @@ func run(cfg config, logger *slog.Logger) error {
 
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	paymentStore := postgres.NewPaymentStore(db)
-	handler, metricsHandler, cleanupMetrics, err := buildHTTPHandler(db, paymentStore, readiness, logger, cfg.httpHandler())
+	httpRuntime, err := buildHTTPRuntime(db, paymentStore, readiness, logger, cfg.httpHandler())
 	if err != nil {
 		return err
 	}
@@ -43,7 +43,7 @@ func run(cfg config, logger *slog.Logger) error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		defer close(cleanupDone)
-		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
+		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, httpRuntime.cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
 	}()
 	defer func() {
 		cancelCleanup()
@@ -66,78 +66,111 @@ func run(cfg config, logger *slog.Logger) error {
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(handler, cfg.HTTP)}, {listener: metricsListener, server: newHTTPServer(metricsHandler, cfg.HTTP)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger, cancelCleanup)
+	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.HTTP)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger, cancelCleanup)
 }
 
-func buildHTTPHandler(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (http.Handler, http.Handler, *observability.IdempotencyReplayCleanupMetrics, error) {
+type httpRuntime struct {
+	handler        http.Handler
+	metricsHandler http.Handler
+	cleanupMetrics *observability.IdempotencyReplayCleanupMetrics
+}
+
+func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (httpRuntime, error) {
 	authenticator, err := cfg.Auth.authenticator()
 	if err != nil {
-		return nil, nil, nil, err
+		return httpRuntime{}, err
 	}
-	metricsRegistry := observability.NewRegistry()
-	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	metricsRuntime, err := buildMetricsRuntime(db, paymentStore)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	rateLimitMetrics, err := observability.NewRateLimitMetrics(metricsRegistry)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	mockBankMetrics, err := observability.NewMockBankMetrics(metricsRegistry)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	paymentOperationMetrics, err := observability.NewPaymentOperationMetrics(metricsRegistry)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cleanupMetrics, err := observability.NewIdempotencyReplayCleanupMetrics(metricsRegistry)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	postgresPoolCollector, err := observability.NewPostgresPoolCollector(db)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := metricsRegistry.Register(postgresPoolCollector); err != nil {
-		return nil, nil, nil, err
-	}
-	pendingPaymentCollector, err := observability.NewPendingPaymentCollector(paymentStore)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := metricsRegistry.Register(pendingPaymentCollector); err != nil {
-		return nil, nil, nil, err
+		return httpRuntime{}, err
 	}
 
-	transport := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: cfg.MockBank.ConnectTimeout}).DialContext,
-		TLSHandshakeTimeout:   cfg.MockBank.TLSHandshakeTimeout,
-		ResponseHeaderTimeout: cfg.MockBank.ResponseHeaderTimeout,
-		IdleConnTimeout:       cfg.MockBank.IdleConnectionTimeout,
-	}
-	mockBank, err := mockbank.NewClient(cfg.MockBank.BaseURL, &http.Client{Transport: transport}, mockBankMetrics, mockbank.ClientConfig{
-		Timeout:               cfg.MockBank.Timeout,
-		InitialAttemptTimeout: cfg.MockBank.InitialAttemptTimeout,
-		RetryDelay:            cfg.MockBank.RetryDelay,
-		RetryAttemptTimeout:   cfg.MockBank.RetryAttemptTimeout,
-	})
+	mockBank, err := newMockBankClient(cfg.MockBank, metricsRuntime.mockBankMetrics)
 	if err != nil {
-		return nil, nil, nil, err
+		return httpRuntime{}, err
 	}
 
-	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
-	metricsHandler := newMetricsHandler(promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}))
+	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metricsRuntime.paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	cfg.Options.Authenticator = authenticator
 	cfg.Options.RateLimiter, err = httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
 	if err != nil {
-		return nil, nil, nil, err
+		return httpRuntime{}, err
 	}
-	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetricsWithRateLimitRejections{HTTPMetrics: httpMetrics, RateLimitMetrics: rateLimitMetrics}, cfg.Options)
+	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetricsWithRateLimitRejections{HTTPMetrics: metricsRuntime.httpMetrics, RateLimitMetrics: metricsRuntime.rateLimitMetrics}, cfg.Options)
 	if err != nil {
-		return nil, nil, nil, err
+		return httpRuntime{}, err
 	}
-	return handler, metricsHandler, cleanupMetrics, nil
+	return httpRuntime{handler: handler, metricsHandler: metricsRuntime.handler, cleanupMetrics: metricsRuntime.cleanupMetrics}, nil
+}
+
+type metricsRuntime struct {
+	handler                 http.Handler
+	httpMetrics             *observability.HTTPMetrics
+	rateLimitMetrics        *observability.RateLimitMetrics
+	mockBankMetrics         *observability.MockBankMetrics
+	paymentOperationMetrics *observability.PaymentOperationMetrics
+	cleanupMetrics          *observability.IdempotencyReplayCleanupMetrics
+}
+
+func buildMetricsRuntime(db *sql.DB, paymentStore *postgres.PaymentStore) (metricsRuntime, error) {
+	registry := observability.NewRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(registry)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	rateLimitMetrics, err := observability.NewRateLimitMetrics(registry)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	mockBankMetrics, err := observability.NewMockBankMetrics(registry)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	paymentOperationMetrics, err := observability.NewPaymentOperationMetrics(registry)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	cleanupMetrics, err := observability.NewIdempotencyReplayCleanupMetrics(registry)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	postgresPoolCollector, err := observability.NewPostgresPoolCollector(db)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	if err := registry.Register(postgresPoolCollector); err != nil {
+		return metricsRuntime{}, err
+	}
+	pendingPaymentCollector, err := observability.NewPendingPaymentCollector(paymentStore)
+	if err != nil {
+		return metricsRuntime{}, err
+	}
+	if err := registry.Register(pendingPaymentCollector); err != nil {
+		return metricsRuntime{}, err
+	}
+	return metricsRuntime{
+		handler:                 newMetricsHandler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{})),
+		httpMetrics:             httpMetrics,
+		rateLimitMetrics:        rateLimitMetrics,
+		mockBankMetrics:         mockBankMetrics,
+		paymentOperationMetrics: paymentOperationMetrics,
+		cleanupMetrics:          cleanupMetrics,
+	}, nil
+}
+
+func newMockBankClient(cfg MockBankConfig, metrics *observability.MockBankMetrics) (*mockbank.Client, error) {
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: cfg.ConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
+		IdleConnTimeout:       cfg.IdleConnectionTimeout,
+	}
+	return mockbank.NewClient(cfg.BaseURL, &http.Client{Transport: transport}, metrics, mockbank.ClientConfig{
+		Timeout:               cfg.Timeout,
+		InitialAttemptTimeout: cfg.InitialAttemptTimeout,
+		RetryDelay:            cfg.RetryDelay,
+		RetryAttemptTimeout:   cfg.RetryAttemptTimeout,
+	})
 }
 
 type httpMetricsWithRateLimitRejections struct {
