@@ -13,12 +13,23 @@ import (
 )
 
 type Handler struct {
-	handler   http.Handler
-	logger    *slog.Logger
-	metrics   httpMetrics
-	payments  paymentApplication
-	readiness readinessChecker
-	options   HandlerOptions
+	handler       http.Handler
+	logger        *slog.Logger
+	metrics       httpMetrics
+	payments      paymentApplication
+	readiness     readinessChecker
+	authenticator *serviceauth.Authenticator
+	rateLimiter   *RateLimiter
+	options       HandlerOptions
+}
+
+type HandlerDependencies struct {
+	Payments      paymentApplication
+	Readiness     readinessChecker
+	Logger        *slog.Logger
+	Metrics       httpMetrics
+	Authenticator *serviceauth.Authenticator
+	RateLimiter   *RateLimiter
 }
 
 type HandlerOptions struct {
@@ -26,8 +37,6 @@ type HandlerOptions struct {
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
-	Authenticator         *serviceauth.Authenticator
-	RateLimiter           *RateLimiter
 }
 
 type paymentApplication interface {
@@ -49,32 +58,34 @@ type httpMetrics interface {
 	RecordRateLimitRejection(routeClass string)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, options HandlerOptions) (*Handler, error) {
-	if payments == nil {
+func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Handler, error) {
+	if dependencies.Payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
-	if readiness == nil {
+	if dependencies.Readiness == nil {
 		return nil, errors.New("httpapi handler: readiness checker is required")
 	}
-	if logger == nil {
+	if dependencies.Logger == nil {
 		return nil, errors.New("httpapi handler: logger is required")
 	}
-	if metrics == nil {
+	if dependencies.Metrics == nil {
 		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
 	}
-	if options.Authenticator == nil {
+	if dependencies.Authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	if options.RateLimiter == nil {
+	if dependencies.RateLimiter == nil {
 		return nil, errors.New("httpapi handler: rate limiter is required")
 	}
 
 	handler := &Handler{
-		logger:    logger,
-		metrics:   metrics,
-		payments:  payments,
-		readiness: readiness,
-		options:   options,
+		logger:        dependencies.Logger,
+		metrics:       dependencies.Metrics,
+		payments:      dependencies.Payments,
+		readiness:     dependencies.Readiness,
+		authenticator: dependencies.Authenticator,
+		rateLimiter:   dependencies.RateLimiter,
+		options:       options,
 	}
 	handler.handler = handler.routes()
 	return handler, nil
@@ -91,7 +102,7 @@ func (s *Handler) routes() http.Handler {
 		if !ok {
 			panic("httpapi: route pattern must include a method")
 		}
-		mux.Handle(pattern, s.recordHTTPRequest(route, s.limitRequestBody(s.recoverPanic(handler))))
+		mux.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(s.limitRequestBody(handler))))
 	}
 
 	registerRoute("GET /healthz", s.healthz)
@@ -99,18 +110,18 @@ func (s *Handler) routes() http.Handler {
 	versioned := http.NewServeMux()
 	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, routeClass RouteClass, handler http.HandlerFunc) {
 		_, route, _ := strings.Cut(pattern, " ")
-		versioned.Handle(pattern, s.recordHTTPRequest("/v1"+route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
+		versioned.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
 	}
-	registerVersionedRoute("GET /payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
-	registerVersionedRoute("GET /payments/{id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
-	registerVersionedRoute("POST /payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
-	registerVersionedRoute("POST /payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.voidPayment)
-	registerVersionedRoute("POST /payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.refundPayment)
-	mux.Handle("/v1/", s.requireAuthentication(http.StripPrefix("/v1", versioned)))
+	registerVersionedRoute("GET /api/v1/payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
+	registerVersionedRoute("GET /api/v1/payments/{payment_id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
+	registerVersionedRoute("POST /api/v1/payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.voidPayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.refundPayment)
+	mux.Handle("/api/v1/", s.requireAuthentication(versioned))
 
-	return s.logRequest(mux)
+	return s.logRequest(s.recoverPanic(mux))
 }
 
 func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {
@@ -128,42 +139,7 @@ func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Handler) withCommandDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
-	ctx := r.Context()
-	if err := call(ctx); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
-			return false
-		}
-		writePaymentServiceError(w, r, err)
-		return false
-	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		writeError(w, http.StatusGatewayTimeout, errorCodePaymentTimeout, "payment command timed out; retry with the same idempotency key")
-		return false
-	}
-	return true
-}
-
 func (s *Handler) commandRequest(r *http.Request) (*http.Request, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentCommandTimeout)
 	return r.WithContext(ctx), cancel
-}
-
-func (s *Handler) withReadDeadline(w http.ResponseWriter, r *http.Request, call func(context.Context) error) bool {
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
-	defer cancel()
-	if err := call(ctx); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment read timed out")
-			return false
-		}
-		writePaymentServiceError(w, r, err)
-		return false
-	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		writeError(w, http.StatusGatewayTimeout, errorCodeRequestTimeout, "payment read timed out")
-		return false
-	}
-	return true
 }

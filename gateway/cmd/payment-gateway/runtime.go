@@ -91,12 +91,18 @@ func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 	}
 
 	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metricsRuntime.paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
-	cfg.Options.Authenticator = authenticator
-	cfg.Options.RateLimiter, err = httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
+	rateLimiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
 	if err != nil {
 		return httpRuntime{}, err
 	}
-	handler, err := httpapi.NewHandler(paymentService, readiness, logger, httpMetricsWithRateLimitRejections{HTTPMetrics: metricsRuntime.httpMetrics, RateLimitMetrics: metricsRuntime.rateLimitMetrics}, cfg.Options)
+	handler, err := httpapi.NewHandler(httpapi.HandlerDependencies{
+		Payments:      paymentService,
+		Readiness:     readiness,
+		Logger:        logger,
+		Metrics:       httpAPIMetrics{HTTPMetrics: metricsRuntime.httpMetrics, RateLimitMetrics: metricsRuntime.rateLimitMetrics},
+		Authenticator: authenticator,
+		RateLimiter:   rateLimiter,
+	}, cfg.Options)
 	if err != nil {
 		return httpRuntime{}, err
 	}
@@ -173,7 +179,7 @@ func newMockBankClient(cfg MockBankConfig, metrics *observability.MockBankMetric
 	})
 }
 
-type httpMetricsWithRateLimitRejections struct {
+type httpAPIMetrics struct {
 	*observability.HTTPMetrics
 	*observability.RateLimitMetrics
 }

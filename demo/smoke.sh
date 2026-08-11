@@ -111,7 +111,7 @@ if [ -n "$MOCK_BANK_BASE_URL" ]; then
 fi
 
 unauthenticated_response="$tmpdir/unauthenticated-response.json"
-request GET /v1/payments/demo-smoke-payment - "$unauthenticated_response"
+request GET /api/v1/payments/demo-smoke-payment - "$unauthenticated_response"
 expect_status 401 "$unauthenticated_response" "unauthenticated Payment request"
 
 public_metrics_response="$tmpdir/public-metrics-response.txt"
@@ -138,7 +138,7 @@ cat > "$authorize_body" <<'JSON'
 JSON
 
 authorize_response="$tmpdir/authorize-response.json"
-request POST /v1/payments "$authorize_body" "$authorize_response" \
+request POST /api/v1/payments "$authorize_body" "$authorize_response" \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H "Idempotency-Key: demo-smoke-authorize-$(date +%s)"
@@ -152,13 +152,13 @@ if [ -z "$payment_id" ]; then
 fi
 
 capture_response="$tmpdir/capture-response.json"
-request POST "/v1/payments/$payment_id/capture" - "$capture_response" \
+request POST "/api/v1/payments/$payment_id/capture" - "$capture_response" \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H "Idempotency-Key: demo-smoke-capture-$(date +%s)"
 expect_status 200 "$capture_response" "capture Payment"
 
 fetch_response="$tmpdir/fetch-response.json"
-request GET "/v1/payments/$payment_id" - "$fetch_response" \
+request GET "/api/v1/payments/$payment_id" - "$fetch_response" \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 expect_status 200 "$fetch_response" "fetch Payment"
 

@@ -145,12 +145,13 @@ func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	options := testRuntimeHandlerOptions(t)
 	limiter, err := httpapi.NewRateLimiter(app.SystemClock{}, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1})
 	require.NoError(t, err)
-	options.RateLimiter = limiter
-	publicHandler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, options)
+	dependencies := testRuntimeHandlerDependencies(t, runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{})
+	dependencies.RateLimiter = limiter
+	publicHandler, err := httpapi.NewHandler(dependencies, options)
 	require.NoError(t, err)
 
 	for requestNumber := range 2 {
-		request := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
 		request.Header.Set("Authorization", "Bearer test-credential")
 		response := httptest.NewRecorder()
 		publicHandler.ServeHTTP(response, request)
@@ -338,10 +339,10 @@ func (m *cleanupMetricsFake) RecordIdempotencyReplayCleanup(result string, remov
 	m.calls = append(m.calls, cleanupMetricCall{result: result, removed: removed})
 }
 
-type runtimeHTTPMetricsFake struct{}
+type runtimeHTTPAPIMetricsFake struct{}
 
-func (runtimeHTTPMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
-func (runtimeHTTPMetricsFake) RecordRateLimitRejection(string)                      {}
+func (runtimeHTTPAPIMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
+func (runtimeHTTPAPIMetricsFake) RecordRateLimitRejection(string)                      {}
 
 type runtimePaymentApplicationFake struct{}
 
@@ -376,7 +377,7 @@ func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchP
 func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
 	t.Helper()
 
-	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPMetricsFake{}, testRuntimeHandlerOptions(t))
+	handler, err := httpapi.NewHandler(testRuntimeHandlerDependencies(t, runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}), testRuntimeHandlerOptions(t))
 	require.NoError(t, err)
 	return handler
 }
@@ -388,14 +389,24 @@ func discardRuntimeLogger() *slog.Logger {
 func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	t.Helper()
 	cfg := validConfig()
-	options := cfg.httpHandler().Options
+	return cfg.httpHandler().Options
+}
+
+func testRuntimeHandlerDependencies(t *testing.T, payments runtimePaymentApplicationFake, readiness *shutdownReadiness, logger *slog.Logger, metrics runtimeHTTPAPIMetricsFake) httpapi.HandlerDependencies {
+	t.Helper()
+	cfg := validConfig()
 	authenticator, err := cfg.Auth.authenticator()
 	require.NoError(t, err)
-	options.Authenticator = authenticator
 	limiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.HTTP.RateLimit)
 	require.NoError(t, err)
-	options.RateLimiter = limiter
-	return options
+	return httpapi.HandlerDependencies{
+		Payments:      payments,
+		Readiness:     readiness,
+		Logger:        logger,
+		Metrics:       metrics,
+		Authenticator: authenticator,
+		RateLimiter:   limiter,
+	}
 }
 func newTestListener(t *testing.T) net.Listener {
 	t.Helper()

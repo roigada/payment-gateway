@@ -14,7 +14,7 @@ type principalContextKey struct{}
 
 func (s *Handler) requireAuthentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, ok := s.options.Authenticator.Authenticate(r)
+		principal, ok := s.authenticator.Authenticate(r)
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized))
@@ -42,7 +42,7 @@ func (s *Handler) limitRate(routeClass RouteClass, next http.Handler) http.Handl
 			writeError(w, http.StatusForbidden, "forbidden", http.StatusText(http.StatusForbidden))
 			return
 		}
-		allowed, retryAfter := s.options.RateLimiter.Reserve(principal.ID(), routeClass)
+		allowed, retryAfter := s.rateLimiter.Reserve(principal.ID(), routeClass)
 		if !allowed {
 			s.metrics.RecordRateLimitRejection(string(routeClass))
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
