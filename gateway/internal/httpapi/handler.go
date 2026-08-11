@@ -91,7 +91,7 @@ func (s *Handler) routes() http.Handler {
 		if !ok {
 			panic("httpapi: route pattern must include a method")
 		}
-		mux.Handle(pattern, s.recordHTTPRequest(route, s.limitRequestBody(s.recoverPanic(handler))))
+		mux.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(s.limitRequestBody(handler))))
 	}
 
 	registerRoute("GET /healthz", s.healthz)
