@@ -102,7 +102,7 @@ func (s *Handler) routes() http.Handler {
 		versioned.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
 	}
 	registerVersionedRoute("GET /api/v1/payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
-	registerVersionedRoute("GET /api/v1/payments/{id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
+	registerVersionedRoute("GET /api/v1/payments/{payment_id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
 	registerVersionedRoute("POST /api/v1/payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
 	registerVersionedRoute("POST /api/v1/payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
 	registerVersionedRoute("POST /api/v1/payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)

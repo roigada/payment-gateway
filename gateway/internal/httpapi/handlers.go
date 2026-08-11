@@ -255,7 +255,7 @@ func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
-	query, err := app.NewGetPaymentQuery(r.PathValue("id"))
+	query, err := app.NewGetPaymentQuery(r.PathValue("payment_id"))
 	if err != nil {
 		writePaymentServiceError(w, r, err)
 		return

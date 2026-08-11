@@ -278,7 +278,7 @@ Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `
 
 `payment_gateway_mock_bank_retries_total` records bounded retry outcomes for authorization, capture, void, and refund with `operation` and `result` labels. Its results are `attempted`, `succeeded`, and `exhausted`; the existing Mock Bank request metrics record each physical attempt.
 
-Route labels use bounded route patterns, such as `/api/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
+Route labels use bounded route patterns, such as `/api/v1/payments/{payment_id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
 
 ## Public API
 

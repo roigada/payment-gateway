@@ -1054,7 +1054,7 @@ func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	require.Len(t, api.metrics.requests, 1)
 	assert.Equal(t, recordedHTTPRequest{
 		method: http.MethodGet,
-		route:  "/api/v1/payments/{id}",
+		route:  "/api/v1/payments/{payment_id}",
 		status: http.StatusOK,
 	}, api.metrics.requests[0].withoutDuration())
 }
