@@ -24,13 +24,13 @@ import (
 func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
 
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
+	assert.Equal(t, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
 	assert.Equal(t, mustAuthorizePaymentCommand(t), api.payments.authorizePaymentCommand)
 	assert.JSONEq(t, `{
 		"payment": {
@@ -60,7 +60,7 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 	}{
 		{
 			name:       "authorize",
-			path:       "/v1/payments",
+			path:       "/api/v1/payments",
 			body:       validAuthorizeBody(),
 			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "authorize-key"},
 			status:     http.StatusCreated,
@@ -68,7 +68,7 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 		},
 		{
 			name:       "authorization retry",
-			path:       "/v1/payments/" + paymentID + "/authorization-retries",
+			path:       "/api/v1/payments/" + paymentID + "/authorization-retries",
 			body:       validRetryAuthorizationBody(),
 			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "retry-key"},
 			status:     http.StatusOK,
@@ -76,21 +76,21 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 		},
 		{
 			name:       "capture",
-			path:       "/v1/payments/" + paymentID + "/capture",
+			path:       "/api/v1/payments/" + paymentID + "/capture",
 			headers:    map[string]string{"Idempotency-Key": "capture-key"},
 			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.capturePaymentCalls == 1 },
 		},
 		{
 			name:       "void",
-			path:       "/v1/payments/" + paymentID + "/void",
+			path:       "/api/v1/payments/" + paymentID + "/void",
 			headers:    map[string]string{"Idempotency-Key": "void-key"},
 			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.voidPaymentCalls == 1 },
 		},
 		{
 			name:       "refund",
-			path:       "/v1/payments/" + paymentID + "/refund",
+			path:       "/api/v1/payments/" + paymentID + "/refund",
 			headers:    map[string]string{"Idempotency-Key": "refund-key"},
 			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.refundPaymentCalls == 1 },
@@ -139,7 +139,7 @@ func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
-			req := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
 			if tt.authorization != "" {
 				req.Header.Set("Authorization", tt.authorization)
 			}
@@ -168,7 +168,7 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, options)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
 	req.Header.Set("Authorization", "Bearer write-only-credential")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -178,7 +178,7 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	assertErrorResponse(t, rec, "forbidden", http.StatusText(http.StatusForbidden))
 	assert.Equal(t, app.SearchPaymentsQuery{}, api.payments.searchPaymentsQuery)
 
-	lookup := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+	lookup := httptest.NewRequest(http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
 	lookup.Header.Set("Authorization", "Bearer write-only-credential")
 	lookupRec := httptest.NewRecorder()
 	handler.ServeHTTP(lookupRec, lookup)
@@ -192,10 +192,10 @@ func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testin
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 3, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
 
 	read := func() *httptest.ResponseRecorder {
-		return api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil)
+		return api.request(t, http.MethodGet, "/api/v1/payments?order_id=order-1", "", nil)
 	}
 	write := func(body string) *httptest.ResponseRecorder {
-		return api.request(t, http.MethodPost, "/v1/payments", body, map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replay-key"})
+		return api.request(t, http.MethodPost, "/api/v1/payments", body, map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replay-key"})
 	}
 
 	require.Equal(t, http.StatusOK, read().Code)
@@ -222,8 +222,8 @@ func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
 
-	require.Equal(t, http.StatusOK, api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil).Code)
-	require.Equal(t, http.StatusTooManyRequests, api.request(t, http.MethodGet, "/v1/payments?order_id=order-1", "", nil).Code)
+	require.Equal(t, http.StatusOK, api.request(t, http.MethodGet, "/api/v1/payments?order_id=order-1", "", nil).Code)
+	require.Equal(t, http.StatusTooManyRequests, api.request(t, http.MethodGet, "/api/v1/payments?order_id=order-1", "", nil).Code)
 
 	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/healthz", "", nil).Code)
 	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/readyz", "", nil).Code)
@@ -240,27 +240,27 @@ func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCred
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, authenticator)
 
-	unauthenticated := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(validAuthorizeBody()))
 	unauthenticated.Header.Set("Content-Type", "application/json")
 	unauthenticated.Header.Set("Idempotency-Key", "unauthenticated")
 	unauthenticatedRec := httptest.NewRecorder()
 	api.handler.ServeHTTP(unauthenticatedRec, unauthenticated)
 	require.Equal(t, http.StatusUnauthorized, unauthenticatedRec.Code)
 
-	forbidden := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+	forbidden := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
 	forbidden.Header.Set("Authorization", "Bearer write-only-credential")
 	forbiddenRec := httptest.NewRecorder()
 	api.handler.ServeHTTP(forbiddenRec, forbidden)
 	require.Equal(t, http.StatusForbidden, forbiddenRec.Code)
 
-	oldCredential := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer old-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
+	oldCredential := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer old-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
 	assert.NotEqual(t, http.StatusTooManyRequests, oldCredential.Code)
-	rotatedCredential := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
+	rotatedCredential := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"})
 	require.Equal(t, http.StatusTooManyRequests, rotatedCredential.Code)
 
 	// The rejected replay did not consume a future token and can safely retry.
 	clock.now = clock.now.Add(time.Second)
-	assert.NotEqual(t, http.StatusTooManyRequests, api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"}).Code)
+	assert.NotEqual(t, http.StatusTooManyRequests, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"}).Code)
 }
 
 func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
@@ -271,13 +271,13 @@ func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
 	}
 	headers := map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replayed-command"}
 
-	firstReplay := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers)
+	firstReplay := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers)
 	require.Equal(t, http.StatusOK, firstReplay.Code)
-	secondReplay := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers)
+	secondReplay := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers)
 	require.Equal(t, http.StatusTooManyRequests, secondReplay.Code)
 
 	clock.now = clock.now.Add(time.Second)
-	assert.Equal(t, http.StatusOK, api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), headers).Code)
+	assert.Equal(t, http.StatusOK, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers).Code)
 }
 
 func TestRateLimiterSeparatesPrincipalsAndAllowsTheFullBurst(t *testing.T) {
@@ -302,7 +302,7 @@ func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing
 	for _, authorization := range []string{"", "Basic read-credential", "Bearer invalid-credential"} {
 		t.Run(authorization, func(t *testing.T) {
 			api := newPaymentAPITest(t)
-			req := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
 			if authorization != "" {
 				req.Header.Set("Authorization", authorization)
 			}
@@ -379,7 +379,7 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	options.PaymentCommandTimeout = time.Millisecond
 	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
 	req.Header.Set("Authorization", "Bearer write-credential")
@@ -398,7 +398,7 @@ func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	options.PaymentCommandTimeout = time.Millisecond
 	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(validAuthorizeBody()))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
 	req.Header.Set("Authorization", "Bearer write-credential")
@@ -418,7 +418,7 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	options.PaymentCommandTimeout = time.Millisecond
 	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "key")
 	req.Header.Set("Authorization", "Bearer write-credential")
@@ -432,7 +432,7 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 
 func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
 		"Content-Type": "application/json",
 	})
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
@@ -448,13 +448,13 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 		{
 			name: "declared content length",
 			request: func(t *testing.T) *http.Request {
-				return httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(oversizedJSONBody(t)))
+				return httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(oversizedJSONBody(t)))
 			},
 		},
 		{
 			name: "streamed body",
 			request: func(t *testing.T) *http.Request {
-				req := httptest.NewRequest(http.MethodPost, "/v1/payments", nil)
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", nil)
 				req.Body = io.NopCloser(strings.NewReader(oversizedJSONBody(t)))
 				req.ContentLength = -1
 				return req
@@ -479,7 +479,7 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 			require.Len(t, api.metrics.requests, 1)
 			assert.Equal(t, recordedHTTPRequest{
 				method: http.MethodPost,
-				route:  "/v1/payments",
+				route:  "/api/v1/payments",
 				status: http.StatusRequestEntityTooLarge,
 			}, api.metrics.requests[0].withoutDuration())
 
@@ -541,7 +541,7 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	handler, err := httpapi.NewHandler(payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
 	req.Header.Set("Authorization", "Bearer read-credential")
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
@@ -553,7 +553,7 @@ func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	payment := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
 	payment.AuthorizationExpiresAt = time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
 	api.payments.authorizePaymentResult = payment
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
@@ -577,13 +577,13 @@ func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
 
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
+	assert.Equal(t, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -603,7 +603,7 @@ func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
@@ -627,7 +627,7 @@ func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
 func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.retryAuthorizationResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "retry-key-1",
 	})
@@ -652,7 +652,7 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.voidPaymentResult = newVoidedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void", "", map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void", "", map[string]string{
 		"Idempotency-Key": "void-key-1",
 	})
 
@@ -679,7 +679,7 @@ func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T)
 	refunded.UpdatedAt = time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
 	api.payments.refundPaymentResult = refunded
 
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
 		"Idempotency-Key": "public-refund-key-1",
 	})
 
@@ -703,7 +703,7 @@ func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T)
 func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
-	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
+	rec := api.request(t, http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, mustGetPaymentQuery(t, "pay_550e8400-e29b-41d4-a716-446655440000"), api.payments.getPaymentQuery)
@@ -726,7 +726,7 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentErr = app.NewPaymentNotFoundError("pay_550e8400-e29b-41d4-a716-446655440999", nil)
-	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440999", "", nil)
+	rec := api.request(t, http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440999", "", nil)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code, "body: %s", rec.Body.String())
 	assertErrorResponse(t, rec, "payment_not_found", "payment was not found")
@@ -737,7 +737,7 @@ func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	first := newPayment("pay_550e8400-e29b-41d4-a716-446655440001")
 	second := newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
 	api.payments.searchPaymentsResult = []app.PaymentResult{first, second}
-	rec := api.request(t, http.MethodGet, "/v1/payments?order_id=order-1&customer_id=customer-1&status=declined", "", nil)
+	rec := api.request(t, http.MethodGet, "/api/v1/payments?order_id=order-1&customer_id=customer-1&status=declined", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	assert.Equal(t, mustSearchPaymentsQuery(t, "order-1", "customer-1", "declined"), api.payments.searchPaymentsQuery)
@@ -775,9 +775,9 @@ func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 		name string
 		path string
 	}{
-		{name: "unfiltered", path: "/v1/payments"},
-		{name: "status only", path: "/v1/payments?status=authorized"},
-		{name: "unknown query parameter", path: "/v1/payments?order_id=order-1&limit=10"},
+		{name: "unfiltered", path: "/api/v1/payments"},
+		{name: "status only", path: "/api/v1/payments?status=authorized"},
+		{name: "unknown query parameter", path: "/api/v1/payments?order_id=order-1&limit=10"},
 	}
 
 	for _, tt := range tests {
@@ -794,7 +794,7 @@ func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 
 func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Idempotency-Key": "public-key-1",
 	})
 
@@ -804,7 +804,7 @@ func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
 
 func TestPostPaymentAuthorizationRetriesRequiresJSONContentType(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
 		"Idempotency-Key": "retry-key-1",
 	})
 
@@ -814,7 +814,7 @@ func TestPostPaymentAuthorizationRetriesRequiresJSONContentType(t *testing.T) {
 
 func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments", `{"order_id":`, map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":`, map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
@@ -825,7 +825,7 @@ func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 
 func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments", `{"order_id":"order-1","unexpected":true}`, map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":"order-1","unexpected":true}`, map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
@@ -859,7 +859,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.authorizePaymentErr = tt.err
-			rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+			rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 				"Content-Type":    "application/json",
 				"Idempotency-Key": "public-key-1",
 			})
@@ -877,7 +877,7 @@ func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 	captured.UpdatedAt = time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 	api.payments.capturePaymentResult = captured
 
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
 		"Idempotency-Key": "public-capture-key-1",
 	})
 
@@ -911,7 +911,7 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
-			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", tt.body, map[string]string{
+			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", tt.body, map[string]string{
 				"Content-Type":    "application/json",
 				"Idempotency-Key": "public-capture-key-1",
 			})
@@ -925,7 +925,7 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 
 func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", `{}`, map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", `{}`, map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-refund-key-1",
 	})
@@ -957,7 +957,7 @@ func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.capturePaymentErr = tt.err
-			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
+			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
 				"Idempotency-Key": "public-capture-key-1",
 			})
 
@@ -989,7 +989,7 @@ func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.refundPaymentErr = tt.err
-			rec := api.request(t, http.MethodPost, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
+			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
 				"Idempotency-Key": "public-refund-key-1",
 			})
 
@@ -1002,7 +1002,7 @@ func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 func TestPostPaymentsRecoversPanic(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentPanic = "database pool exploded"
-	rec := api.request(t, http.MethodPost, "/v1/payments", validAuthorizeBody(), map[string]string{
+	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
@@ -1042,13 +1042,13 @@ func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
 
-	rec := api.request(t, http.MethodGet, "/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
+	rec := api.request(t, http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", "", nil)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	require.Len(t, api.metrics.requests, 1)
 	assert.Equal(t, recordedHTTPRequest{
 		method: http.MethodGet,
-		route:  "/v1/payments/{id}",
+		route:  "/api/v1/payments/{id}",
 		status: http.StatusOK,
 	}, api.metrics.requests[0].withoutDuration())
 }

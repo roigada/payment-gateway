@@ -99,16 +99,16 @@ func (s *Handler) routes() http.Handler {
 	versioned := http.NewServeMux()
 	registerVersionedRoute := func(pattern string, scope serviceauth.Scope, routeClass RouteClass, handler http.HandlerFunc) {
 		_, route, _ := strings.Cut(pattern, " ")
-		versioned.Handle(pattern, s.recordHTTPRequest("/v1"+route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
+		versioned.Handle(pattern, s.recordHTTPRequest(route, s.recoverPanic(s.requireScope(scope, s.limitRate(routeClass, s.limitRequestBody(handler)).ServeHTTP))))
 	}
-	registerVersionedRoute("GET /payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
-	registerVersionedRoute("GET /payments/{id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
-	registerVersionedRoute("POST /payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
-	registerVersionedRoute("POST /payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)
-	registerVersionedRoute("POST /payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.voidPayment)
-	registerVersionedRoute("POST /payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.refundPayment)
-	mux.Handle("/v1/", s.requireAuthentication(http.StripPrefix("/v1", versioned)))
+	registerVersionedRoute("GET /api/v1/payments", serviceauth.ScopePaymentsRead, RouteClassRead, s.searchPayments)
+	registerVersionedRoute("GET /api/v1/payments/{id}", serviceauth.ScopePaymentsRead, RouteClassRead, s.getPayment)
+	registerVersionedRoute("POST /api/v1/payments", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.authorizePayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/authorization-retries", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.retryAuthorization)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/capture", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.capturePayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/void", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.voidPayment)
+	registerVersionedRoute("POST /api/v1/payments/{payment_id}/refund", serviceauth.ScopePaymentsWrite, RouteClassWrite, s.refundPayment)
+	mux.Handle("/api/v1/", s.requireAuthentication(versioned))
 
 	return s.logRequest(mux)
 }

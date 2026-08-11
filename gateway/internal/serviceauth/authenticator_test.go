@@ -32,7 +32,7 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 		{"invalid", "Bearer not-configured", ScopePaymentsRead, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/payments", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments", nil)
 			req.Header.Set("Authorization", tt.header)
 			principal, authenticated := authenticator.Authenticate(req)
 			authorized := authenticated && principal.HasScope(tt.scope)

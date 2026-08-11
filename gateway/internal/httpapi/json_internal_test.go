@@ -73,7 +73,7 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 
 func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(`{"order_id":"order-1"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"order_id":"order-1"}`))
 
 	assert.Panics(t, func() {
 		_ = decodeJSONRequest(rec, req, nil, testMaxJSONBodyBytes)
@@ -83,7 +83,7 @@ func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 func TestDecodeJSONRequestUsesProvidedBodyLimit(t *testing.T) {
 	body := `{"order_id":"order-1"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(body))
 	var request struct {
 		OrderID string `json:"order_id"`
 	}
@@ -108,11 +108,11 @@ func TestRequireEmptyRequestBodyAcceptsAbsentOrEmptyBody(t *testing.T) {
 		},
 		{
 			name: "server request with empty body reader",
-			req:  httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", nil),
+			req:  httptest.NewRequest(http.MethodPost, "/api/v1/payments/pay_1/capture", nil),
 		},
 		{
 			name: "explicit empty body reader",
-			req:  httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", strings.NewReader("")),
+			req:  httptest.NewRequest(http.MethodPost, "/api/v1/payments/pay_1/capture", strings.NewReader("")),
 		},
 	}
 
@@ -134,7 +134,7 @@ func TestRequireEmptyRequestBodyRejectsAnyBodyBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/v1/payments/pay_1/capture", strings.NewReader(tt.body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/payments/pay_1/capture", strings.NewReader(tt.body))
 
 			err := requireEmptyRequestBody(req)
 
@@ -146,7 +146,7 @@ func TestRequireEmptyRequestBodyRejectsAnyBodyBytes(t *testing.T) {
 
 func decodePaymentRequest(body string) error {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/payments", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(body))
 
 	var request struct {
 		OrderID string `json:"order_id"`

@@ -16,7 +16,7 @@ GET {{bank}}/docs
 
 ### Authorize a Payment
 # @name authorize
-POST {{gateway}}/v1/payments
+POST {{gateway}}/api/v1/payments
 Authorization: Bearer {{orderServiceCredential}}
 Content-Type: application/json
 Idempotency-Key: demo-authorize-order-1001
@@ -34,7 +34,7 @@ Idempotency-Key: demo-authorize-order-1001
 }
 
 ### Idempotency replay for the Authorize request
-POST {{gateway}}/v1/payments
+POST {{gateway}}/api/v1/payments
 Authorization: Bearer {{orderServiceCredential}}
 Content-Type: application/json
 Idempotency-Key: demo-authorize-order-1001
@@ -53,20 +53,20 @@ Idempotency-Key: demo-authorize-order-1001
 
 ### Capture the Authorized Payment
 # @name capture
-POST {{gateway}}/v1/payments/{{authorize.response.body.$.payment.id}}/capture
+POST {{gateway}}/api/v1/payments/{{authorize.response.body.$.payment.id}}/capture
 Authorization: Bearer {{orderServiceCredential}}
 Idempotency-Key: demo-capture-order-1001
 
 ### Fetch the Payment
-GET {{gateway}}/v1/payments/{{authorize.response.body.$.payment.id}}
+GET {{gateway}}/api/v1/payments/{{authorize.response.body.$.payment.id}}
 Authorization: Bearer {{orderServiceCredential}}
 
 ### Search Payments
-GET {{gateway}}/v1/payments?order_id=order-1001&customer_id=customer-501
+GET {{gateway}}/api/v1/payments?order_id=order-1001&customer_id=customer-501
 Authorization: Bearer {{orderServiceCredential}}
 
 ### Authorize a Declined Payment
-POST {{gateway}}/v1/payments
+POST {{gateway}}/api/v1/payments
 Authorization: Bearer {{orderServiceCredential}}
 Content-Type: application/json
 Idempotency-Key: demo-authorize-declined-order-1002

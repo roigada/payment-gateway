@@ -15,7 +15,7 @@ func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	metrics, err := NewHTTPMetrics(registry)
 	require.NoError(t, err)
 
-	metrics.RecordHTTPRequest("POST", "/v1/payments/{payment_id}/capture", 200, 125*time.Millisecond)
+	metrics.RecordHTTPRequest("POST", "/api/v1/payments/{payment_id}/capture", 200, 125*time.Millisecond)
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -25,7 +25,7 @@ func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	assert.Equal(t, float64(1), requests.GetMetric()[0].GetCounter().GetValue())
 	assertMetricLabels(t, requests.GetMetric()[0].GetLabel(), map[string]string{
 		"method": "POST",
-		"route":  "/v1/payments/{payment_id}/capture",
+		"route":  "/api/v1/payments/{payment_id}/capture",
 		"code":   "200",
 	})
 
@@ -35,7 +35,7 @@ func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	assert.Equal(t, 0.125, duration.GetMetric()[0].GetHistogram().GetSampleSum())
 	assertMetricLabels(t, duration.GetMetric()[0].GetLabel(), map[string]string{
 		"method": "POST",
-		"route":  "/v1/payments/{payment_id}/capture",
+		"route":  "/api/v1/payments/{payment_id}/capture",
 		"code":   "200",
 	})
 }

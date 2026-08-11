@@ -16,7 +16,7 @@ func TestRateLimitMetricsRecordsOnlyBoundedRouteClasses(t *testing.T) {
 	metrics.RecordRateLimitRejection("read")
 	metrics.RecordRateLimitRejection("write")
 	metrics.RecordRateLimitRejection("service-principal-123")
-	metrics.RecordRateLimitRejection("/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000")
+	metrics.RecordRateLimitRejection("/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000")
 
 	families, err := registry.Gather()
 	require.NoError(t, err)

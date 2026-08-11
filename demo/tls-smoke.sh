@@ -72,7 +72,7 @@ test "$status" = "404" || {
 }
 
 dd if=/dev/zero of="$tmpdir/oversized-request" bs=1 count=65537 2>/dev/null
-status="$(curl --cacert "$ca_bundle" -sS -o "$tmpdir/oversized-request-response" -w '%{http_code}' -X POST --data-binary "@$tmpdir/oversized-request" https://localhost:8443/v1/payments/authorize)"
+status="$(curl --cacert "$ca_bundle" -sS -o "$tmpdir/oversized-request-response" -w '%{http_code}' -X POST --data-binary "@$tmpdir/oversized-request" https://localhost:8443/api/v1/payments/authorize)"
 test "$status" = "413" || {
   fail "HTTPS oversized request returned $status, expected 413"
 }

@@ -150,7 +150,7 @@ func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	require.NoError(t, err)
 
 	for requestNumber := range 2 {
-		request := httptest.NewRequest(http.MethodGet, "/v1/payments?order_id=order-1", nil)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
 		request.Header.Set("Authorization", "Bearer test-credential")
 		response := httptest.NewRecorder()
 		publicHandler.ServeHTTP(response, request)

@@ -123,7 +123,7 @@ Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness ch
 
 ## Service credentials
 
-Every `/v1/` route requires an opaque `Authorization: Bearer <credential>` header. Payment search and lookup require `payments:read`; Payment commands require `payments:write`. Missing, malformed, or invalid credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`; valid credentials without the route's scope return `403 Forbidden`.
+Every `/api/v1/` route requires an opaque `Authorization: Bearer <credential>` header. Payment search and lookup require `payments:read`; Payment commands require `payments:write`. Missing, malformed, or invalid credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`; valid credentials without the route's scope return `403 Forbidden`.
 
 Generate a high-entropy credential and its configuration digest with a locally supplied HMAC key:
 
@@ -278,7 +278,7 @@ Mock Bank `operation` labels use gateway domain verbs: `authorize`, `capture`, `
 
 `payment_gateway_mock_bank_retries_total` records bounded retry outcomes for authorization, capture, void, and refund with `operation` and `result` labels. Its results are `attempted`, `succeeded`, and `exhausted`; the existing Mock Bank request metrics record each physical attempt.
 
-Route labels use bounded route patterns, such as `/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
+Route labels use bounded route patterns, such as `/api/v1/payments/{id}`, and metric labels never include Payment IDs, Bank Authorization IDs, Bank Capture IDs, Bank Refund IDs, Order IDs, Customer IDs, Idempotency Keys, card data, Decline Reasons, or raw request URIs. The registry also includes Go runtime and process metrics.
 
 ## Public API
 
@@ -289,7 +289,7 @@ The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/o
 ### Authorize a Payment
 
 ```sh
-curl -i http://localhost:8080/v1/payments \
+curl -i http://localhost:8080/api/v1/payments \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: authorize-order-1001' \
@@ -346,7 +346,7 @@ Authorization can also create a `declined` Payment with `decline_reason`, or a `
 Authorization retry is only for Payments whose authorization outcome is `pending`.
 
 ```sh
-curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries \
+curl -i http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: retry-auth-order-1001' \
@@ -365,19 +365,19 @@ curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-4466554400
 Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client. Capture and Void are rejected after `authorization_expires_at`.
 
 ```sh
-curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
+curl -i -X POST http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: capture-order-1001'
 ```
 
 ```sh
-curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void \
+curl -i -X POST http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/void \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: void-order-1001'
 ```
 
 ```sh
-curl -i -X POST http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund \
+curl -i -X POST http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL" \
   -H 'Idempotency-Key: refund-order-1001'
 ```
@@ -403,12 +403,12 @@ Captured response:
 ### Fetch and Search Payments
 
 ```sh
-curl -i http://localhost:8080/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000 \
+curl -i http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000 \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 ```
 
 ```sh
-curl -i 'http://localhost:8080/v1/payments?order_id=order-1001&customer_id=customer-501&status=authorized' \
+curl -i 'http://localhost:8080/api/v1/payments?order_id=order-1001&customer_id=customer-501&status=authorized' \
   -H "Authorization: Bearer $ORDER_SERVICE_CREDENTIAL"
 ```
 

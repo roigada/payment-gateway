@@ -85,7 +85,7 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Location", "/v1/payments/"+url.PathEscape(result.Payment.ID))
+	w.Header().Set("Location", "/api/v1/payments/"+url.PathEscape(result.Payment.ID))
 	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
 }
 

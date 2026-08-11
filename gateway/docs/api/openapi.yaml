@@ -18,7 +18,7 @@ tags:
 security:
   - BearerAuth: []
 paths:
-  /v1/payments:
+  /api/v1/payments:
     post:
       tags:
         - Payments
@@ -62,7 +62,7 @@ paths:
               description: Path of the created Payment resource.
               schema:
                 type: string
-                example: /v1/payments/pay_550e8400-e29b-41d4-a716-446655440000
+                example: /api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000
           content:
             application/json:
               schema:
@@ -134,7 +134,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "504":
           $ref: "#/components/responses/PaymentReadTimeout"
-  /v1/payments/{payment_id}:
+  /api/v1/payments/{payment_id}:
     get:
       tags:
         - Payments
@@ -162,7 +162,7 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "504":
           $ref: "#/components/responses/PaymentReadTimeout"
-  /v1/payments/{payment_id}/authorization-retries:
+  /api/v1/payments/{payment_id}/authorization-retries:
     post:
       tags:
         - Payments
@@ -211,7 +211,7 @@ paths:
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
           $ref: "#/components/responses/PaymentCommandTimeout"
-  /v1/payments/{payment_id}/capture:
+  /api/v1/payments/{payment_id}/capture:
     post:
       tags:
         - Payments
@@ -254,7 +254,7 @@ paths:
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
           $ref: "#/components/responses/PaymentCommandTimeout"
-  /v1/payments/{payment_id}/void:
+  /api/v1/payments/{payment_id}/void:
     post:
       tags:
         - Payments
@@ -297,7 +297,7 @@ paths:
           $ref: "#/components/responses/BankDependencyFailure"
         "504":
           $ref: "#/components/responses/PaymentCommandTimeout"
-  /v1/payments/{payment_id}/refund:
+  /api/v1/payments/{payment_id}/refund:
     post:
       tags:
         - Payments
