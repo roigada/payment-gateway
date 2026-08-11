@@ -13,12 +13,23 @@ import (
 )
 
 type Handler struct {
-	handler   http.Handler
-	logger    *slog.Logger
-	metrics   httpMetrics
-	payments  paymentApplication
-	readiness readinessChecker
-	options   HandlerOptions
+	handler       http.Handler
+	logger        *slog.Logger
+	metrics       httpMetrics
+	payments      paymentApplication
+	readiness     readinessChecker
+	authenticator *serviceauth.Authenticator
+	rateLimiter   *RateLimiter
+	options       HandlerOptions
+}
+
+type HandlerDependencies struct {
+	Payments      paymentApplication
+	Readiness     readinessChecker
+	Logger        *slog.Logger
+	Metrics       httpMetrics
+	Authenticator *serviceauth.Authenticator
+	RateLimiter   *RateLimiter
 }
 
 type HandlerOptions struct {
@@ -26,8 +37,6 @@ type HandlerOptions struct {
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
-	Authenticator         *serviceauth.Authenticator
-	RateLimiter           *RateLimiter
 }
 
 type paymentApplication interface {
@@ -49,32 +58,34 @@ type httpMetrics interface {
 	RecordRateLimitRejection(routeClass string)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, options HandlerOptions) (*Handler, error) {
-	if payments == nil {
+func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Handler, error) {
+	if dependencies.Payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
-	if readiness == nil {
+	if dependencies.Readiness == nil {
 		return nil, errors.New("httpapi handler: readiness checker is required")
 	}
-	if logger == nil {
+	if dependencies.Logger == nil {
 		return nil, errors.New("httpapi handler: logger is required")
 	}
-	if metrics == nil {
+	if dependencies.Metrics == nil {
 		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
 	}
-	if options.Authenticator == nil {
+	if dependencies.Authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	if options.RateLimiter == nil {
+	if dependencies.RateLimiter == nil {
 		return nil, errors.New("httpapi handler: rate limiter is required")
 	}
 
 	handler := &Handler{
-		logger:    logger,
-		metrics:   metrics,
-		payments:  payments,
-		readiness: readiness,
-		options:   options,
+		logger:        dependencies.Logger,
+		metrics:       dependencies.Metrics,
+		payments:      dependencies.Payments,
+		readiness:     dependencies.Readiness,
+		authenticator: dependencies.Authenticator,
+		rateLimiter:   dependencies.RateLimiter,
+		options:       options,
 	}
 	handler.handler = handler.routes()
 	return handler, nil
