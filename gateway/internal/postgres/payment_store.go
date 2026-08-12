@@ -50,43 +50,14 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 	if payment == nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("authorization start claim requires a payment"))
 	}
-	return r.claimPaymentCommand(ctx, request, payment.ID(), func(ctx context.Context, tx *sql.Tx, record idempotencyRecord, outcome idempotencyClaimOutcome) (paymentCommandPreparation, error) {
-		switch outcome {
-		case idempotencyClaimAcquired:
-			return prepareAcquiredAuthorizationStart(ctx, tx, request)
-		case idempotencyClaimRecovered:
-			return prepareRecoveredAuthorizationStart(ctx, tx, request, record)
-		default:
-			return paymentCommandPreparation{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
-		}
-	})
-}
 
-// ClaimExistingPaymentCommand claims the public idempotency record before an
-// operation on an existing Payment.
-func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
-	return r.claimPaymentCommand(ctx, request, request.PaymentID(), func(ctx context.Context, tx *sql.Tx, record idempotencyRecord, outcome idempotencyClaimOutcome) (paymentCommandPreparation, error) {
-		switch outcome {
-		case idempotencyClaimAcquired:
-			return prepareAcquiredExistingPaymentCommand(ctx, tx, request)
-		case idempotencyClaimRecovered:
-			return prepareRecoveredExistingPaymentCommand(ctx, tx, request, record)
-		default:
-			return paymentCommandPreparation{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
-		}
-	})
-}
-
-type paymentCommandPreparer func(context.Context, *sql.Tx, idempotencyRecord, idempotencyClaimOutcome) (paymentCommandPreparation, error)
-
-func (r *PaymentStore) claimPaymentCommand(ctx context.Context, request app.PaymentCommandClaimRequest, paymentID domain.PaymentID, prepare paymentCommandPreparer) (app.PaymentCommandClaim, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 	defer tx.Rollback()
 
-	record, outcome, err := claimIdempotency(ctx, tx, request, paymentID)
+	record, outcome, err := claimIdempotency(ctx, tx, request, payment.ID())
 	if err != nil {
 		return app.PaymentCommandClaim{}, err
 	}
@@ -97,93 +68,106 @@ func (r *PaymentStore) claimPaymentCommand(ctx context.Context, request app.Paym
 		return replayOrError(request, record)
 	}
 
-	preparation, err := prepare(ctx, tx, record, outcome)
-	if err != nil {
-		return app.PaymentCommandClaim{}, err
-	}
-	if preparation.authorizationExpired {
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+	if outcome == idempotencyClaimAcquired {
+		if err := insertPayment(ctx, tx, payment); err != nil {
+			return app.PaymentCommandClaim{}, err
 		}
-		return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
+	} else if outcome == idempotencyClaimRecovered {
+		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
+		if err != nil {
+			return app.PaymentCommandClaim{}, err
+		}
+		if payment.Status() != request.ExpectedStatus() {
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+		}
+	} else {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
 
 	if err := tx.Commit(); err != nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 	if outcome == idempotencyClaimRecovered {
-		return app.NewRecoveredPaymentCommand(request, preparation.payment), nil
+		return app.NewRecoveredPaymentCommand(request, payment), nil
 	}
-	return app.NewClaimedPaymentCommand(request, preparation.payment), nil
+	return app.NewClaimedPaymentCommand(request, payment), nil
 }
 
-type paymentCommandPreparation struct {
-	payment              *domain.Payment
-	authorizationExpired bool
-}
-
-func prepareAcquiredAuthorizationStart(ctx context.Context, tx *sql.Tx, request app.AuthorizationStartClaimRequest) (paymentCommandPreparation, error) {
-	if err := insertPayment(ctx, tx, request.Payment()); err != nil {
-		return paymentCommandPreparation{}, err
-	}
-	return paymentCommandPreparation{payment: request.Payment()}, nil
-}
-
-func prepareAcquiredExistingPaymentCommand(ctx context.Context, tx *sql.Tx, request app.ExistingPaymentCommandClaimRequest) (paymentCommandPreparation, error) {
-	payment, err := findPaymentByID(ctx, tx, request.PaymentID(), true)
+// ClaimExistingPaymentCommand claims the public idempotency record before an
+// operation on an existing Payment.
+func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return paymentCommandPreparation{}, err
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
-	if err := validateAcquiredPaymentCommand(request, payment); err != nil {
-		return paymentCommandPreparation{}, err
+	defer tx.Rollback()
+
+	record, outcome, err := claimIdempotency(ctx, tx, request, request.PaymentID())
+	if err != nil {
+		return app.PaymentCommandClaim{}, err
 	}
-	if shouldExpireBeforeNewBankCall(request, payment) {
-		if err := expirePaymentBeforeNewBankCall(ctx, tx, request, payment); err != nil {
-			return paymentCommandPreparation{}, err
+	if outcome == idempotencyClaimExisting {
+		if err := tx.Commit(); err != nil {
+			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
-		return paymentCommandPreparation{authorizationExpired: true}, nil
+		return replayOrError(request, record)
 	}
-	if request.BankOperationKeyKind() != "" {
-		if err := ensureBankOperationKey(ctx, tx, payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
-			return paymentCommandPreparation{}, err
-		}
-		payment, err = findPaymentByID(ctx, tx, request.PaymentID(), false)
+
+	var payment *domain.Payment
+	if outcome == idempotencyClaimAcquired {
+		payment, err = findPaymentByID(ctx, tx, request.PaymentID(), true)
 		if err != nil {
-			return paymentCommandPreparation{}, err
+			return app.PaymentCommandClaim{}, err
 		}
+		if err := validateAcquiredPaymentCommand(request, payment); err != nil {
+			return app.PaymentCommandClaim{}, err
+		}
+		if shouldExpireBeforeNewBankCall(request, payment) {
+			if err := expirePaymentBeforeNewBankCall(ctx, tx, request, payment); err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+			}
+			return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
+		}
+		if request.BankOperationKeyKind() != "" {
+			if err := ensureBankOperationKey(ctx, tx, payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+			payment, err = findPaymentByID(ctx, tx, request.PaymentID(), false)
+			if err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+		}
+	} else if outcome == idempotencyClaimRecovered {
+		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
+		if err != nil {
+			return app.PaymentCommandClaim{}, err
+		}
+		if request.PaymentID() != record.paymentID {
+			return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+		}
+		if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
+			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+		}
+		if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
+			return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+		}
+		if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
+			return app.PaymentCommandClaim{}, err
+		}
+	} else {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
-	return paymentCommandPreparation{payment: payment}, nil
-}
 
-func prepareRecoveredAuthorizationStart(ctx context.Context, tx *sql.Tx, request app.AuthorizationStartClaimRequest, record idempotencyRecord) (paymentCommandPreparation, error) {
-	payment, err := findRecoveredPayment(ctx, tx, record.paymentID)
-	if err != nil {
-		return paymentCommandPreparation{}, err
+	if err := tx.Commit(); err != nil {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
-	if payment.Status() != request.ExpectedStatus() {
-		return paymentCommandPreparation{}, app.NewPaymentStatusConflictError(nil)
+	if outcome == idempotencyClaimRecovered {
+		return app.NewRecoveredPaymentCommand(request, payment), nil
 	}
-	return paymentCommandPreparation{payment: payment}, nil
-}
-
-func prepareRecoveredExistingPaymentCommand(ctx context.Context, tx *sql.Tx, request app.ExistingPaymentCommandClaimRequest, record idempotencyRecord) (paymentCommandPreparation, error) {
-	payment, err := findRecoveredPayment(ctx, tx, record.paymentID)
-	if err != nil {
-		return paymentCommandPreparation{}, err
-	}
-	if request.PaymentID() != record.paymentID {
-		return paymentCommandPreparation{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
-	}
-	if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
-		return paymentCommandPreparation{}, app.NewPaymentStatusConflictError(nil)
-	}
-	if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
-		return paymentCommandPreparation{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
-	}
-	if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
-		return paymentCommandPreparation{}, err
-	}
-	return paymentCommandPreparation{payment: payment}, nil
+	return app.NewClaimedPaymentCommand(request, payment), nil
 }
 
 func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID) (*domain.Payment, error) {
