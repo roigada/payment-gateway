@@ -4,10 +4,11 @@ Payment command persistence crosses Payment rows and public idempotency rows, so
 
 The Postgres adapter exposes this as one concrete `PaymentStore`. It does not expose a separate idempotency repository or row-level payment mutation repository for command flows. Idempotency rows are still stored in Postgres, but their SQL is an internal implementation detail of the store.
 
-`PaymentStore` owns command persistence through one command claim method plus claim-handle completion and release methods:
+`PaymentStore` owns command persistence through two intention-specific claim methods plus shared claim-handle completion and release methods:
 
-- Intention-specific claim request constructors such as `NewAuthorizationStartClaim`, `NewAuthorizationRetryClaim`, `NewCaptureClaim`, `NewVoidClaim`, and `NewRefundClaim` build the request passed to `ClaimPaymentCommand`. The single claim method claims the public idempotency slot for a payment command and durably stores or reuses pre-bank recovery facts before a Mock Bank call. The store encodes command-specific persistence invariants, including expected **Payment Status** checks, row locking, authorization card fingerprint checks, and capture/void/refund **Bank Operation Key** persistence.
-- `PaymentCommandClaim` is the opaque handle returned by `ClaimPaymentCommand`. It hides idempotency record and status details, carries the Payment for a new bank call, returns a stored replay result for replay, and is passed back for completion or release.
+- `ClaimAuthorizationStart` accepts an `AuthorizationStartClaimRequest` and claims the public idempotency slot while creating, or recovering, the new **Payment** being authorized. The request owns a new Pending **Payment**.
+- `ClaimExistingPaymentCommand` accepts an `ExistingPaymentCommandClaimRequest` for Authorization Retry, Capture, Void, or Refund. It claims the public idempotency slot while loading, locking, and validating an existing **Payment**, then persists or reuses its pre-bank recovery facts. The store encodes command-specific persistence invariants, including expected **Payment Status** checks, authorization card fingerprint checks, and capture/void/refund **Bank Operation Key** persistence.
+- `PaymentCommandClaim` is the opaque handle returned by either claim method. It hides idempotency record and status details, carries the Payment for a new bank call, returns a stored replay result for replay, and is passed back for completion or release.
 - `CompletePaymentCommand` saves the Payment transition attached to the claim and completes the replay snapshot in the same database transaction after a definitive bank result.
 - `ReleasePaymentCommand` releases the `in_progress` public idempotency claim represented by the claim handle after transient post-claim failures.
 

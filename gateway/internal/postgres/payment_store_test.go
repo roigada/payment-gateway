@@ -540,13 +540,13 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	}
 	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, testIdempotencyClaimStuckAfter)
 
-	claimed, err := store.ClaimPaymentCommand(ctx, request)
+	claimed, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	assert.Same(t, payment, claimed.Payment())
 	require.NoError(t, payment.MarkDeclined(domain.DeclineReasonInvalidCard, now))
 	require.NoError(t, store.CompletePaymentCommand(ctx, claimed, result, now.Add(time.Minute)))
 
-	saved, err := store.ClaimPaymentCommand(ctx, request)
+	saved, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	replayed, ok := saved.ReplayResult()
 	require.True(t, ok)
@@ -571,7 +571,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 		now,
 	)
 	require.NoError(t, err)
-	missing, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("missing-key", "fingerprint-1", missingPayment, now, testIdempotencyClaimStuckAfter))
+	missing, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("missing-key", "fingerprint-1", missingPayment, now, testIdempotencyClaimStuckAfter))
 	require.NoError(t, err)
 	assert.Same(t, missingPayment, missing.Payment())
 }
@@ -588,7 +588,7 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	completedAt := now.Add(time.Minute)
 	payment := newStorePayment(t, 90, "order-1", "customer-1", domain.PaymentStatusPending, now)
 	request := app.NewAuthorizationStartClaim("completed-key", "fingerprint-1", payment, now, testIdempotencyClaimStuckAfter)
-	claim, err := store.ClaimPaymentCommand(ctx, request)
+	claim, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	require.NoError(t, claim.Payment().MarkDeclined(domain.DeclineReasonInvalidCard, completedAt))
 	require.NoError(t, store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 201), completedAt))
@@ -611,7 +611,7 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	removed, err := store.CleanupCompletedIdempotencyRecords(ctx, completedAt)
 	require.NoError(t, err)
 	assert.Zero(t, removed)
-	_, err = store.ClaimPaymentCommand(ctx, request)
+	_, err = store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 
 	removed, err = store.CleanupCompletedIdempotencyRecords(ctx, completedAt.Add(time.Microsecond))
@@ -619,7 +619,7 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	assert.Equal(t, 1, removed)
 
 	replacement := newStorePayment(t, 92, "order-3", "customer-1", domain.PaymentStatusPending, now)
-	newClaim, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("completed-key", "fingerprint-3", replacement, now, testIdempotencyClaimStuckAfter))
+	newClaim, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("completed-key", "fingerprint-3", replacement, now, testIdempotencyClaimStuckAfter))
 	require.NoError(t, err)
 	assert.Same(t, replacement, newClaim.Payment())
 
@@ -641,16 +641,16 @@ func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
 	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, time.Now())
 	insertPaymentFixture(t, db, payment)
 	request := app.NewCaptureClaim("public-key-1", "fingerprint-1", payment.ID(), "bok_550e8400-e29b-41d4-a716-446655440010", time.Time{}, testIdempotencyClaimStuckAfter)
-	claim, err := store.ClaimPaymentCommand(ctx, request)
+	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	require.NotNil(t, claim.Payment())
 
-	_, err = store.ClaimPaymentCommand(ctx, request)
+	_, err = store.ClaimExistingPaymentCommand(ctx, request)
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress))
 
 	require.NoError(t, store.ReleasePaymentCommand(ctx, claim))
-	reclaimed, err := store.ClaimPaymentCommand(ctx, request)
+	reclaimed, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	assert.NotNil(t, reclaimed.Payment())
 }
@@ -671,7 +671,7 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
 	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute)
 
-	claim, err := store.ClaimPaymentCommand(ctx, request)
+	claim, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	require.NotNil(t, claim.Payment())
 	assert.Equal(t, original.ID(), claim.Payment().ID())
@@ -682,7 +682,7 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 	result := newStorePaymentCommandResult(claim.Payment(), 201)
 	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result, now.Add(time.Minute)))
 
-	replayed, err := store.ClaimPaymentCommand(ctx, request)
+	replayed, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	replayResult, ok := replayed.ReplayResult()
 	require.True(t, ok)
@@ -713,7 +713,7 @@ func TestPaymentStoreDoesNotRecoverNonStuckAuthorizationClaim(t *testing.T) {
 	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), now.Add(-4*time.Minute))
 	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
+	_, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyInProgress))
@@ -735,7 +735,7 @@ func TestPaymentStoreRejectsAuthorizationFingerprintMismatchWithoutRefreshingCla
 	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", original.ID(), stuckClaimedAt)
 	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-2", candidate, now, 5*time.Minute))
+	_, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-2", candidate, now, 5*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -755,7 +755,7 @@ func TestPaymentStoreReturnsInternalErrorWhenRecoveredAuthorizationPaymentIsMiss
 	insertIdempotencyClaimFixture(t, db, app.AuthorizePaymentOperation, "public-key-1", "fingerprint-1", missingPaymentID, now.Add(-6*time.Minute))
 	candidate := newStorePayment(t, 82, "order-1", "customer-1", domain.PaymentStatusPending, now)
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
+	_, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidate, now, 5*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
@@ -774,7 +774,7 @@ func TestPaymentStoreRecoversStuckAuthorizationRetryClaim(t *testing.T) {
 	insertPaymentFixture(t, db, payment)
 	insertIdempotencyClaimFixture(t, db, app.RetryAuthorizationOperation, "retry-key-1", "fingerprint-1", payment.ID(), now.Add(-6*time.Minute))
 
-	claim, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationRetryClaim(
+	claim, err := store.ClaimExistingPaymentCommand(ctx, app.NewAuthorizationRetryClaim(
 		"retry-key-1",
 		"fingerprint-1",
 		payment.ID(),
@@ -805,7 +805,7 @@ func TestPaymentStoreRecoveredAuthorizationRetryCardFingerprintMismatchIsIdempot
 	stuckClaimedAt := now.Add(-6 * time.Minute)
 	insertIdempotencyClaimFixture(t, db, app.RetryAuthorizationOperation, "retry-key-1", "fingerprint-1", payment.ID(), stuckClaimedAt)
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationRetryClaim(
+	_, err := store.ClaimExistingPaymentCommand(ctx, app.NewAuthorizationRetryClaim(
 		"retry-key-1",
 		"fingerprint-1",
 		payment.ID(),
@@ -831,7 +831,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 		fingerprint       string
 		payment           func(t *testing.T, now time.Time) *domain.Payment
 		persistRecovery   func(t *testing.T, db *sql.DB, payment *domain.Payment)
-		request           func(payment *domain.Payment, now time.Time) app.PaymentCommandClaimRequest
+		request           func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest
 		recoveredKey      func(payment *domain.Payment) string
 		generatedFreshKey string
 	}{
@@ -849,7 +849,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 				require.NoError(t, payment.SetCaptureBankOperationKey("bok_00000000-0000-4000-8000-000000000931"))
 				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyCapture)
 			},
-			request: func(payment *domain.Payment, now time.Time) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewCaptureClaim("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
 			},
 			recoveredKey: func(payment *domain.Payment) string {
@@ -871,7 +871,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 				require.NoError(t, payment.SetVoidBankOperationKey("bok_00000000-0000-4000-8000-000000000941"))
 				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyVoid)
 			},
-			request: func(payment *domain.Payment, now time.Time) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewVoidClaim("void-key-1", "void-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
 			},
 			recoveredKey: func(payment *domain.Payment) string {
@@ -893,7 +893,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 				require.NoError(t, payment.SetRefundBankOperationKey("bok_00000000-0000-4000-8000-000000000951"))
 				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyRefund)
 			},
-			request: func(payment *domain.Payment, now time.Time) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewRefundClaim("refund-key-1", "refund-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
 			},
 			recoveredKey: func(payment *domain.Payment) string {
@@ -914,7 +914,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 			tt.persistRecovery(t, db, payment)
 			insertIdempotencyClaimFixture(t, db, tt.operation, tt.publicKey, tt.fingerprint, payment.ID(), now.Add(-6*time.Minute))
 
-			claim, err := store.ClaimPaymentCommand(ctx, tt.request(payment, now))
+			claim, err := store.ClaimExistingPaymentCommand(ctx, tt.request(payment, now))
 
 			require.NoError(t, err)
 			require.NotNil(t, claim.Payment())
@@ -941,7 +941,7 @@ func TestPaymentStoreRecoveredCommandMissingBankOperationKeyIsUnrecoverable(t *t
 	stuckClaimedAt := now.Add(-6 * time.Minute)
 	insertIdempotencyClaimFixture(t, db, app.CapturePaymentOperation, "capture-key-1", "capture-fingerprint-1", payment.ID(), stuckClaimedAt)
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewCaptureClaim("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute))
+	_, err := store.ClaimExistingPaymentCommand(ctx, app.NewCaptureClaim("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
@@ -964,7 +964,7 @@ func TestPaymentStoreRecoveredCommandInvalidPaymentStatusRemainsPaymentStatusCon
 	insertPaymentFixture(t, db, payment)
 	insertIdempotencyClaimFixture(t, db, app.CapturePaymentOperation, "capture-key-1", "capture-fingerprint-1", payment.ID(), now.Add(-6*time.Minute))
 
-	_, err := store.ClaimPaymentCommand(ctx, app.NewCaptureClaim("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute))
+	_, err := store.ClaimExistingPaymentCommand(ctx, app.NewCaptureClaim("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
@@ -995,7 +995,7 @@ func TestPaymentStoreConcurrentStuckAuthorizationRecoveryAllowsOneRetriever(t *t
 		go func(sequence int) {
 			defer wg.Done()
 			<-start
-			_, err := store.ClaimPaymentCommand(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidates[sequence], now, 5*time.Minute))
+			_, err := store.ClaimAuthorizationStart(ctx, app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", candidates[sequence], now, 5*time.Minute))
 			results <- err
 		}(i)
 	}
@@ -1027,40 +1027,40 @@ func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T
 	tests := []struct {
 		name    string
 		payment *domain.Payment
-		request func(*domain.Payment) app.PaymentCommandClaimRequest
+		request func(*domain.Payment) app.ExistingPaymentCommandClaimRequest
 	}{
 		{
 			name:    "retry authorization requires pending payment",
 			payment: newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, time.Now()),
-			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment) app.ExistingPaymentCommandClaimRequest {
 				return app.NewAuthorizationRetryClaim("retry-key-1", "fingerprint-1", payment.ID(), payment.AuthorizationCardFingerprint(), time.Now(), testIdempotencyClaimStuckAfter)
 			},
 		},
 		{
 			name:    "retry authorization requires matching authorization card fingerprint",
 			payment: newStorePayment(t, 2, "order-1", "customer-1", domain.PaymentStatusPending, time.Now()),
-			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment) app.ExistingPaymentCommandClaimRequest {
 				return app.NewAuthorizationRetryClaim("retry-key-2", "fingerprint-2", payment.ID(), "different-fingerprint", time.Now(), testIdempotencyClaimStuckAfter)
 			},
 		},
 		{
 			name:    "capture requires authorized payment",
 			payment: newStorePayment(t, 3, "order-1", "customer-1", domain.PaymentStatusPending, time.Now()),
-			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment) app.ExistingPaymentCommandClaimRequest {
 				return app.NewCaptureClaim("capture-key-1", "fingerprint-3", payment.ID(), "bok_00000000-0000-4000-8000-000000000103", time.Time{}, testIdempotencyClaimStuckAfter)
 			},
 		},
 		{
 			name:    "void requires authorized payment",
 			payment: newStorePayment(t, 4, "order-1", "customer-1", domain.PaymentStatusCaptured, time.Now()),
-			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment) app.ExistingPaymentCommandClaimRequest {
 				return app.NewVoidClaim("void-key-1", "fingerprint-4", payment.ID(), "bok_00000000-0000-4000-8000-000000000104", time.Time{}, testIdempotencyClaimStuckAfter)
 			},
 		},
 		{
 			name:    "refund requires captured payment",
 			payment: newStorePayment(t, 5, "order-1", "customer-1", domain.PaymentStatusAuthorized, time.Now()),
-			request: func(payment *domain.Payment) app.PaymentCommandClaimRequest {
+			request: func(payment *domain.Payment) app.ExistingPaymentCommandClaimRequest {
 				return app.NewRefundClaim("refund-key-1", "fingerprint-5", payment.ID(), "bok_00000000-0000-4000-8000-000000000105", time.Now(), testIdempotencyClaimStuckAfter)
 			},
 		},
@@ -1073,7 +1073,7 @@ func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			insertPaymentFixture(t, db, tt.payment)
 
-			_, err := store.ClaimPaymentCommand(ctx, tt.request(tt.payment))
+			_, err := store.ClaimExistingPaymentCommand(ctx, tt.request(tt.payment))
 
 			require.Error(t, err)
 			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
@@ -1101,7 +1101,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	)
 	require.NoError(t, err)
 	request := app.NewAuthorizationStartClaim("public-key-1", "fingerprint-1", payment, now, testIdempotencyClaimStuckAfter)
-	claim, err := store.ClaimPaymentCommand(ctx, request)
+	claim, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	require.Same(t, payment, claim.Payment())
 	require.NoError(t, payment.MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now.Add(time.Minute)))
@@ -1131,7 +1131,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
 	insertPaymentFixture(t, db, payment)
 	request := app.NewCaptureClaim("public-capture-key-1", "fingerprint-1", payment.ID(), "bok_550e8400-e29b-41d4-a716-446655440010", time.Time{}, testIdempotencyClaimStuckAfter)
-	claim, err := store.ClaimPaymentCommand(ctx, request)
+	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	require.NotNil(t, claim.Payment())
 	require.NoError(t, claim.Payment().Capture("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment().CaptureBankOperationKey(), now.Add(time.Minute)))
@@ -1147,7 +1147,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 	assert.Empty(t, saved.BankCaptureID())
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440010", saved.CaptureBankOperationKey())
-	claimStatus, err := store.ClaimPaymentCommand(ctx, request)
+	claimStatus, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	assert.NotNil(t, claimStatus.Payment())
 }

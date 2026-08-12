@@ -2296,7 +2296,11 @@ func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID, ti
 	return nil, s.err
 }
 
-func (s *alwaysInProgressPaymentStore) ClaimPaymentCommand(context.Context, app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+func (s *alwaysInProgressPaymentStore) ClaimAuthorizationStart(context.Context, app.AuthorizationStartClaimRequest) (app.PaymentCommandClaim, error) {
+	return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyInProgressError(nil)
+}
+
+func (s *alwaysInProgressPaymentStore) ClaimExistingPaymentCommand(context.Context, app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
 	return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyInProgressError(nil)
 }
 

@@ -133,8 +133,12 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 	return r.update(payment)
 }
 
-func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.PaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
-	record, outcome := r.claim(request)
+func (r *PaymentStore) ClaimAuthorizationStart(_ context.Context, request app.AuthorizationStartClaimRequest) (app.PaymentCommandClaim, error) {
+	payment := request.Payment()
+	if payment == nil {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("authorization start claim requires a payment"))
+	}
+	record, outcome := r.claim(request, payment.ID())
 	if outcome != idempotencyClaimAcquired {
 		if outcome == idempotencyClaimRecovered {
 			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
@@ -144,7 +148,33 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 				}
 				return app.PaymentCommandClaim{}, err
 			}
-			if request.PaymentID() != "" && request.PaymentID() != record.paymentID {
+			if payment.Status() != request.ExpectedStatus() {
+				return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+			}
+			return app.NewRecoveredPaymentCommand(request, payment), nil
+		}
+		return replayOrError(request, record)
+	}
+
+	if err := r.SeedPayment(context.Background(), request.Payment()); err != nil {
+		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
+		return app.PaymentCommandClaim{}, err
+	}
+	return app.NewClaimedPaymentCommand(request, request.Payment()), nil
+}
+
+func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+	record, outcome := r.claim(request, request.PaymentID())
+	if outcome != idempotencyClaimAcquired {
+		if outcome == idempotencyClaimRecovered {
+			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
+			if err != nil {
+				if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
+					return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
+				}
+				return app.PaymentCommandClaim{}, err
+			}
+			if request.PaymentID() != record.paymentID {
 				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
 			}
 			if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
@@ -159,17 +189,6 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 			return app.NewRecoveredPaymentCommand(request, payment), nil
 		}
 		return replayOrError(request, record)
-	}
-
-	if request.Payment() != nil {
-		if err := r.SeedPayment(context.Background(), request.Payment()); err != nil {
-			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-			return app.PaymentCommandClaim{}, err
-		}
-		return app.NewClaimedPaymentCommand(request, request.Payment()), nil
-	}
-	if request.PaymentID() == "" {
-		return app.NewClaimedPaymentCommand(request, nil), nil
 	}
 
 	payment, err := r.FindByID(context.Background(), request.PaymentID(), time.Time{})
@@ -210,7 +229,7 @@ func (r *PaymentStore) ClaimPaymentCommand(_ context.Context, request app.Paymen
 	return app.NewClaimedPaymentCommand(request, payment), nil
 }
 
-func shouldExpireBeforeNewBankCall(request app.PaymentCommandClaimRequest, payment *domain.Payment) bool {
+func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) bool {
 	if request.Now().IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(request.Now()) {
 		return false
 	}
@@ -314,7 +333,7 @@ func (c FixedClock) Now() time.Time {
 	return c.Time
 }
 
-func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest) (idempotencyRecord, idempotencyClaimOutcome) {
+func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest, paymentID domain.PaymentID) (idempotencyRecord, idempotencyClaimOutcome) {
 	mapKey := idempotencyMapKey(request.Operation(), request.Key())
 	now := request.Now()
 	if now.IsZero() {
@@ -322,10 +341,6 @@ func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest) (idempotenc
 	}
 	entry, ok := r.records[mapKey]
 	if !ok {
-		paymentID := request.PaymentID()
-		if request.Payment() != nil {
-			paymentID = request.Payment().ID()
-		}
 		record := idempotencyRecord{
 			operation:          request.Operation(),
 			key:                request.Key(),
