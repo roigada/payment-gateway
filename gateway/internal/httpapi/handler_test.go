@@ -626,15 +626,21 @@ func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
-func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
+func TestPostPaymentsReturnsAcceptedPendingPaymentWithLocation(t *testing.T) {
 	api := newPaymentAPITest(t)
-	api.payments.authorizePaymentResult = newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		return app.PaymentCommandResult{
+			Payment:    newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000"),
+			HTTPStatus: http.StatusAccepted,
+		}, nil
+	}
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
 
-	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, http.StatusAccepted, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",

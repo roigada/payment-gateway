@@ -324,7 +324,7 @@ Authorized response:
 }
 ```
 
-Authorization can also create a `declined` Payment with `decline_reason`, or a `pending` Payment when the Mock Bank authorization outcome is unknown:
+Authorization can also create a `declined` Payment with `decline_reason`. When the Mock Bank authorization outcome remains unknown, it returns `202 Accepted` with a `Location` header for the created `pending` Payment:
 
 ```json
 {
@@ -344,6 +344,8 @@ Authorization can also create a `declined` Payment with `decline_reason`, or a `
 ### Retry a Pending Authorization
 
 Authorization retry is only for Payments whose authorization outcome is `pending`.
+
+The original authorization Idempotency Key replays this `202` response; it does not start another bank attempt. To resolve the Payment, send this command with a new Idempotency Key. If a retry has an unknown bank outcome, it returns `502` or `504`; repeat that same retry command and key to make another safe attempt using the Payment's stored Bank Operation Key.
 
 ```sh
 curl -i http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries \

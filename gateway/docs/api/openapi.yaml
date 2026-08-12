@@ -27,14 +27,14 @@ paths:
       description: |
         Requires the `payments:write` scope. Creates a Payment and asks the
         Mock Bank to authorize the full Amount.
-        The response Payment Status can be `authorized`, `expired`,
-        `declined`, or `pending`. `pending` means the Mock Bank accepted the
-        authorization request but did not produce a definitive approval or
-        decline outcome. Mock Bank dependency failures before a usable bank
-        response are returned as public `bank_unavailable` or `bank_timeout`
-        errors. If the synchronous command exhausts its overall deadline, it
-        returns `payment_timeout`; this does not mean that the Payment failed.
-        Retry either timeout with the same Idempotency Key.
+        A definitive response has Payment Status `authorized`, `expired`, or
+        `declined`. If the Mock Bank does not produce a definitive outcome,
+        the gateway creates a `pending` Payment and returns it with `202`.
+        Repeating the same request and Idempotency Key replays that `202`;
+        resolve the Payment through the Authorization Retry command. If the
+        synchronous command exhausts its overall deadline, it returns
+        `payment_timeout`; this does not mean that the Payment failed. Retry
+        that timeout with the same Idempotency Key.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -67,8 +67,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PaymentEnvelope"
-        "200":
-          description: Idempotency Replay for a completed authorize request.
+        "202":
+          description: Payment was created but its authorization outcome is pending.
+          headers:
+            Location:
+              description: Path of the created Payment resource.
+              schema:
+                type: string
+                example: /api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000
           content:
             application/json:
               schema:

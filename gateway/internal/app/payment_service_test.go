@@ -154,16 +154,30 @@ func TestAuthorizePaymentStoresDeclinedPaymentAndReturnsPublicResult(t *testing.
 	assert.Equal(t, "bok_123", saved.AuthorizationBankOperationKey())
 }
 
-func TestAuthorizePaymentStoresPendingPaymentAndReleasesClaimForUnknownBankOutcome(t *testing.T) {
+func TestAuthorizePaymentReturnsPendingPaymentForUnknownBankOutcome(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	bankErr := app.NewPaymentBankTimeoutError(context.DeadlineExceeded)
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: bankErr}, now)
 
-	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	result, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 
-	require.Error(t, err)
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, result.HTTPStatus)
+	assert.Equal(t, app.PaymentResult{
+		ID:          "pay_550e8400-e29b-41d4-a716-446655440000",
+		OrderID:     "order-1",
+		CustomerID:  "customer-1",
+		AmountCents: 1299,
+		Currency:    "USD",
+		Status:      "pending",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, result.Payment)
+
+	replayed, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+	require.NoError(t, err)
+	assert.Equal(t, result, replayed)
 
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
@@ -198,14 +212,14 @@ func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
 	firstRepo := testsupport.NewPaymentStore()
 	firstService := newPaymentService(firstRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	_, err := firstService.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	secondRepo := testsupport.NewPaymentStore()
 	secondService := newPaymentService(secondRepo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	secondCommand, err := newAuthorizePaymentCommand("order-1", "customer-1", 2599, validCardDetails(), "public-key-1")
 	require.NoError(t, err)
 	_, err = secondService.AuthorizePayment(context.Background(), secondCommand)
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	firstSaved, err := firstRepo.FindByID(context.Background(), domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), time.Time{})
 	require.NoError(t, err)
@@ -250,7 +264,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service = newPaymentService(repo, bank, now.Add(time.Minute))
@@ -280,7 +294,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToExpiredWhenApprovedAuthorizat
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{
 		BankAuthorizationID:    "bank-auth-id-1",
@@ -300,7 +314,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToDeclined(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}
 	service = newPaymentService(repo, bank, now.Add(time.Minute))
@@ -318,7 +332,7 @@ func TestRetryAuthorizationLeavesPendingPaymentPendingAndReleasesClaimForUnknown
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	bank := &bankAuthorizerFake{err: app.NewPaymentBankTimeoutError(context.DeadlineExceeded)}
 	service = newPaymentService(repo, bank, now.Add(time.Minute))
@@ -338,7 +352,7 @@ func TestRetryAuthorizationRejectsFingerprintMismatchWithoutCallingBank(t *testi
 	repo := testsupport.NewPaymentStore()
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
 	service = newPaymentService(repo, bank, time.Date(2026, 6, 18, 12, 1, 0, 0, time.UTC))
@@ -373,7 +387,7 @@ func TestRetryAuthorizationRecoversStuckClaimUsingAuthorizationBankOperationKeyA
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentServiceWithBankOperationKeys(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_original"}})
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	crashingBank := &bankAuthorizerFake{}
 	crashingBank.onAuthorize = func() {
@@ -409,7 +423,7 @@ func TestRetryAuthorizationRecoveredCardFingerprintMismatchIsIdempotencyConflict
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentServiceWithBankOperationKeys(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_original"}})
 	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	crashingBank := &bankAuthorizerFake{}
 	crashingBank.onAuthorize = func() {
@@ -512,7 +526,7 @@ func TestPaymentOperationsRecordSuccessAndReplayOutcomes(t *testing.T) {
 				now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 				initial := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
 				_, err := initial.AuthorizePayment(context.Background(), validAuthorizeCommand())
-				require.Error(t, err)
+				require.NoError(t, err)
 				metrics := &paymentOperationMetricsFake{}
 				service := newPaymentServiceWithMetrics(repo, &bankAuthorizerFake{result: app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInvalidCard}}, now.Add(time.Minute), metrics)
 				command := validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -607,15 +621,15 @@ func TestPaymentOperationsRecordExpectedAppErrorOutcomes(t *testing.T) {
 		run       func(t *testing.T) *paymentOperationMetricsFake
 	}{
 		{
-			name:      "authorize bank timeout",
+			name:      "authorize pending",
 			operation: app.AuthorizePaymentOperation,
-			outcome:   string(app.PaymentErrorBankTimeout),
+			outcome:   "pending",
 			run: func(t *testing.T) *paymentOperationMetricsFake {
 				t.Helper()
 				metrics := &paymentOperationMetricsFake{}
 				service := newPaymentServiceWithMetrics(testsupport.NewPaymentStore(), &bankAuthorizerFake{err: app.NewPaymentBankTimeoutError(context.DeadlineExceeded)}, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC), metrics)
 				_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
-				require.Error(t, err)
+				require.NoError(t, err)
 				return metrics
 			},
 		},

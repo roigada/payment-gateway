@@ -393,6 +393,18 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		CardExpiryYear:  command.card.expiryYear,
 	})
 	if err != nil {
+		if isUnknownAuthorizationOutcome(err) {
+			result = PaymentCommandResult{
+				Payment:    newPaymentResult(payment),
+				HTTPStatus: 202,
+			}
+			if err := s.completePaymentCommand(ctx, claim, result); err != nil {
+				return PaymentCommandResult{}, err
+			}
+			s.recordIdempotencyRecoveryCompleted(claim)
+
+			return result, nil
+		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -741,6 +753,11 @@ func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthoriza
 		return ensurePaymentError(payment.MarkDeclined(bankResult.DeclineReason, now))
 	}
 	return ensurePaymentError(payment.MarkAuthorized(bankResult.BankAuthorizationID, bankResult.AuthorizationExpiresAt, now))
+}
+
+func isUnknownAuthorizationOutcome(err error) bool {
+	return HasPaymentErrorKind(err, PaymentErrorBankTimeout) ||
+		HasPaymentErrorKind(err, PaymentErrorBankUnavailable)
 }
 
 func authorizePaymentRequestFingerprint(command AuthorizePaymentCommand, secret string) string {

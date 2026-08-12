@@ -1,0 +1,7 @@
+# Return a Pending Payment for unknown authorization outcomes
+
+An initial `POST /api/v1/payments` always creates the gateway-owned Payment before calling the Mock Bank. If the bank cannot provide a definitive authorization outcome after the gateway's bounded retry, the gateway returns `202 Accepted` with that `pending` Payment and a `Location` header naming it. The authorization idempotency record is completed with this `202` response, so repeating the original request with the same key replays the same pending Payment rather than creating another Payment or attempting the bank again.
+
+The caller resolves the Payment through `POST /api/v1/payments/{payment_id}/authorization-retries`, using a new idempotency key for each retry command. The Payment retains its authorization Bank Operation Key, so every authorization-retry bank call represents the original bank operation. If an authorization retry has an unknown bank outcome, its in-progress idempotency claim is released and the gateway returns `502` or `504`; repeating that same retry command/key makes another safe attempt. A definitive retry outcome completes and snapshots that retry command as a normal Idempotency Replay.
+
+This keeps resource creation and later resolution as distinct public commands. It avoids a special idempotency-record state or recovery window for initial authorization, does not require storing card details or CVV, and lets clients inspect a Pending Payment using normal read endpoints.
