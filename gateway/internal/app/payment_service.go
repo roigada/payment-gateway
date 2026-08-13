@@ -304,19 +304,6 @@ func (c PaymentCommandClaim) ReplayResult() (PaymentCommandResult, bool) {
 }
 func (c PaymentCommandClaim) Recovered() bool { return c.recovered }
 
-type IdempotencyRecoveryError struct {
-	result string
-	cause  error
-}
-
-func NewIdempotencyRecoveryError(result string, cause error) error {
-	return &IdempotencyRecoveryError{result: result, cause: cause}
-}
-
-func (e *IdempotencyRecoveryError) Result() string { return e.result }
-func (e *IdempotencyRecoveryError) Error() string  { return e.cause.Error() }
-func (e *IdempotencyRecoveryError) Unwrap() error  { return e.cause }
-
 type PaymentIDGenerator interface {
 	NewPaymentID() domain.PaymentID
 }

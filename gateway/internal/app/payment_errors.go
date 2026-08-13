@@ -23,6 +23,22 @@ type PaymentError struct {
 	cause   error
 }
 
+// IdempotencyRecoveryError preserves the payment error produced while
+// recovering a stuck idempotency claim, along with its recovery outcome for
+// operational metrics.
+type IdempotencyRecoveryError struct {
+	result string
+	cause  error
+}
+
+func NewIdempotencyRecoveryError(result string, cause error) error {
+	return &IdempotencyRecoveryError{result: result, cause: cause}
+}
+
+func (e *IdempotencyRecoveryError) Result() string { return e.result }
+func (e *IdempotencyRecoveryError) Error() string  { return e.cause.Error() }
+func (e *IdempotencyRecoveryError) Unwrap() error  { return e.cause }
+
 func NewInvalidPaymentInputError(reason string, cause error) error {
 	return &PaymentError{
 		kind:    PaymentErrorInvalidInput,
