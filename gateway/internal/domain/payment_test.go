@@ -110,7 +110,7 @@ func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
 	require.NoError(t, err)
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		" cap_550e8400-e29b-41d4-a716-446655440002 ",
 		" bok_550e8400-e29b-41d4-a716-446655440003 ",
 		capturedAt,
@@ -177,7 +177,7 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			err = payment.Capture(tt.bankCaptureID, tt.bok, tt.now)
+			err = payment.MarkCaptured(tt.bankCaptureID, tt.bok, tt.now)
 
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
@@ -200,14 +200,14 @@ func TestRefundCapturedPaymentStoresPrivateRefundFields(t *testing.T) {
 	)
 	require.NoError(t, err)
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440001",
 		"bok-capture",
 		capturedAt,
 	))
 	refundedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
 
-	require.NoError(t, payment.Refund(
+	require.NoError(t, payment.MarkRefunded(
 		" ref_550e8400-e29b-41d4-a716-446655440002 ",
 		" bok-refund ",
 		refundedAt,
@@ -279,7 +279,7 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			err = payment.Refund(tt.bankRefundID, tt.bok, tt.now)
+			err = payment.MarkRefunded(tt.bankRefundID, tt.bok, tt.now)
 
 			assert.ErrorIs(t, err, tt.wantErr)
 		})

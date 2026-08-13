@@ -366,7 +366,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	insertPaymentFixture(t, db, payment)
 
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
 		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
@@ -440,7 +440,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
 		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
@@ -448,7 +448,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	insertPaymentFixture(t, db, payment)
 
 	refundedAt := time.Date(2026, 6, 19, 11, 0, 0, 0, time.UTC)
-	require.NoError(t, payment.Refund(
+	require.NoError(t, payment.MarkRefunded(
 		"ref_550e8400-e29b-41d4-a716-446655440004",
 		"bok_550e8400-e29b-41d4-a716-446655440005",
 		refundedAt,
@@ -488,7 +488,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 	)
 	require.NoError(t, err)
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
 		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
@@ -1138,7 +1138,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	require.NotNil(t, claim.Payment())
-	require.NoError(t, claim.Payment().Capture("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment().CaptureBankOperationKey(), now.Add(time.Minute)))
+	require.NoError(t, claim.Payment().MarkCaptured("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment().CaptureBankOperationKey(), now.Add(time.Minute)))
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "capture_payment", "public-capture-key-1")
 	require.NoError(t, err)
 
@@ -1191,7 +1191,7 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 		return payment
 	case domain.PaymentStatusCaptured:
 		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusAuthorized, now)
-		require.NoError(t, payment.Capture(
+		require.NoError(t, payment.MarkCaptured(
 			fmt.Sprintf("cap_00000000-0000-4000-8000-%012d", sequence),
 			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000),
 			now.Add(time.Minute),
@@ -1207,7 +1207,7 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 		return payment
 	case domain.PaymentStatusRefunded:
 		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusCaptured, now)
-		require.NoError(t, payment.Refund(
+		require.NoError(t, payment.MarkRefunded(
 			fmt.Sprintf("ref_00000000-0000-4000-8000-%012d", sequence),
 			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+2000),
 			now.Add(2*time.Minute),

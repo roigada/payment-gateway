@@ -2421,7 +2421,7 @@ func newCapturedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
 	t.Helper()
 
 	payment := newAuthorizedDomainPayment(t, now)
-	require.NoError(t, payment.Capture(
+	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440001",
 		"bok_550e8400-e29b-41d4-a716-446655440002",
 		now,

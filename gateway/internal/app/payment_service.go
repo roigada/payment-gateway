@@ -586,7 +586,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := payment.Capture(bankResult.BankCaptureID, payment.CaptureBankOperationKey(), s.clock.Now()); err != nil {
+	if err := payment.MarkCaptured(bankResult.BankCaptureID, payment.CaptureBankOperationKey(), s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -721,7 +721,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := payment.Refund(bankResult.BankRefundID, payment.RefundBankOperationKey(), s.clock.Now()); err != nil {
+	if err := payment.MarkRefunded(bankResult.BankRefundID, payment.RefundBankOperationKey(), s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}

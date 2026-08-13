@@ -517,7 +517,7 @@ func (p *Payment) MarkPending(now time.Time) error {
 	return nil
 }
 
-func (p *Payment) Capture(bankCaptureID string, captureBankOperationKey string, now time.Time) error {
+func (p *Payment) MarkCaptured(bankCaptureID string, captureBankOperationKey string, now time.Time) error {
 	if p.status != PaymentStatusAuthorized {
 		return ErrInvalidPaymentStatus
 	}
@@ -589,7 +589,7 @@ func (p *Payment) SetVoidBankOperationKey(voidBankOperationKey string) error {
 	return nil
 }
 
-func (p *Payment) Refund(bankRefundID string, refundBankOperationKey string, now time.Time) error {
+func (p *Payment) MarkRefunded(bankRefundID string, refundBankOperationKey string, now time.Time) error {
 	if p.status != PaymentStatusCaptured {
 		return ErrInvalidPaymentStatus
 	}
