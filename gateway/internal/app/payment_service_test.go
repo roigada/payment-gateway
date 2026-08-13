@@ -1651,6 +1651,27 @@ func TestCapturePaymentRecoveredClaimMissingBankOperationKeyRecordsUnrecoverable
 	}, metrics.recoveryRecords)
 }
 
+func TestCapturePaymentRecoveredClaimPaymentStatusConflictRecordsConflict(t *testing.T) {
+	repo := testsupport.NewPaymentStore()
+	payment := newCapturedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, repo.SeedPayment(context.Background(), payment))
+	now := time.Date(2026, 6, 18, 12, 31, 0, 0, time.UTC)
+	repo.SeedAuthorizationClaim(app.CapturePaymentOperation, "public-capture-key-1", capturePaymentRequestFingerprintForTest(t, string(payment.ID())), payment.ID(), now.Add(-6*time.Minute))
+
+	metrics := &paymentOperationMetricsFake{}
+	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002"}}
+	service := newPaymentServiceWithBankOperationKeysAndMetrics(repo, bank, now, &sequenceBankOperationKeyGenerator{keys: []string{"bok_capture_new"}}, metrics)
+	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
+	assert.Zero(t, bank.captureCalls)
+	assert.Equal(t, []idempotencyRecoveryMetricRecord{
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryAttempted},
+		{operation: app.CapturePaymentOperation, result: app.IdempotencyRecoveryConflict},
+	}, metrics.recoveryRecords)
+}
+
 func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)

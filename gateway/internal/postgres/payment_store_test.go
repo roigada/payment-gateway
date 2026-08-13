@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -968,6 +969,9 @@ func TestPaymentStoreRecoveredCommandInvalidPaymentStatusRemainsPaymentStatusCon
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorPaymentStatusConflict))
+	recoveryErr, ok := errors.AsType[*app.IdempotencyRecoveryError](err)
+	require.True(t, ok)
+	assert.Equal(t, app.IdempotencyRecoveryConflict, recoveryErr.Result())
 }
 
 func TestPaymentStoreConcurrentStuckAuthorizationRecoveryAllowsOneRetriever(t *testing.T) {

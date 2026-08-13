@@ -178,7 +178,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
 			}
 			if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
-				return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
+				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentStatusConflictError(nil))
 			}
 			if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
 				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
