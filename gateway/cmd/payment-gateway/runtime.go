@@ -66,7 +66,7 @@ func run(cfg config, logger *slog.Logger) error {
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.HTTP)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger, cancelCleanup)
+	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.HTTP)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
 }
 
 type httpRuntime struct {
@@ -226,19 +226,12 @@ type runtimeServer struct {
 	server   *http.Server
 }
 
-func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: server}}, readiness, shutdownTimeout, shutdownSignals, logger, onShutdownStart)
-}
-
-func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
+func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
 	if logger == nil {
 		return errors.New("runtime logger is required")
 	}
-	activeRequestsCtx, cancelActiveRequests := context.WithCancel(context.Background())
-	defer cancelActiveRequests()
 	serveResult := make(chan error, len(servers))
 	for _, runtimeServer := range servers {
-		runtimeServer.server.BaseContext = func(net.Listener) context.Context { return activeRequestsCtx }
 		go func(server *http.Server, listener net.Listener) {
 			err := server.Serve(listener)
 			if errors.Is(err, http.ErrServerClosed) {
@@ -261,11 +254,7 @@ func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness
 		logger.Info("payment-gateway shutdown signal received", "signal", receivedSignal.String())
 	}
 
-	if onShutdownStart != nil {
-		onShutdownStart()
-	}
 	readiness.beginDrain()
-	cancelActiveRequests()
 	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
