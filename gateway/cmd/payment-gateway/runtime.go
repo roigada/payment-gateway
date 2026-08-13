@@ -75,6 +75,11 @@ type httpRuntime struct {
 	cleanupMetrics *observability.IdempotencyReplayCleanupMetrics
 }
 
+type httpAPIMetrics struct {
+	*observability.HTTPMetrics
+	*observability.RateLimitMetrics
+}
+
 func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (httpRuntime, error) {
 	authenticator, err := cfg.Auth.authenticator()
 	if err != nil {
@@ -179,11 +184,6 @@ func newMockBankClient(cfg MockBankConfig, metrics *observability.MockBankMetric
 	})
 }
 
-type httpAPIMetrics struct {
-	*observability.HTTPMetrics
-	*observability.RateLimitMetrics
-}
-
 func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {
 	return &http.Server{
 		Handler: handler, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout,
@@ -221,13 +221,13 @@ func (r *shutdownReadiness) beginDrain() {
 	r.draining.Store(true)
 }
 
-func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: server}}, readiness, shutdownTimeout, shutdownSignals, logger, onShutdownStart)
-}
-
 type runtimeServer struct {
 	listener net.Listener
 	server   *http.Server
+}
+
+func serveUntilShutdown(listener net.Listener, server *http.Server, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
+	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: server}}, readiness, shutdownTimeout, shutdownSignals, logger, onShutdownStart)
 }
 
 func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger, onShutdownStart func()) error {
