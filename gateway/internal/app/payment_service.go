@@ -376,16 +376,26 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		s.operationMetrics.RecordPaymentOperation(AuthorizePaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := authorizePaymentRequestFingerprint(command, s.fingerprintSecret)
-	authorizationCardFingerprint := authorizationCardFingerprint(command.card, s.fingerprintSecret)
-	paymentID := s.paymentIDs.NewPaymentID()
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	now := s.clock.Now()
-	payment, err := domain.NewPendingPayment(paymentID, command.orderID, command.customerID, command.amountCents, bankOperationKey, authorizationCardFingerprint, now)
+	payment, err := domain.NewPendingPayment(
+		s.paymentIDs.NewPaymentID(),
+		command.orderID,
+		command.customerID,
+		command.amountCents,
+		s.bankOperationKeys.NewBankOperationKey(),
+		authorizationCardFingerprint(command.card, s.fingerprintSecret),
+		now,
+	)
 	if err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	claim, err := s.store.ClaimAuthorizationStart(ctx, NewAuthorizationStartClaimRequest(command.idempotencyKey, fingerprint, payment, now, s.claimStuckAfter))
+	claim, err := s.store.ClaimAuthorizationStart(ctx, NewAuthorizationStartClaimRequest(
+		command.idempotencyKey,
+		authorizePaymentRequestFingerprint(command, s.fingerprintSecret),
+		payment,
+		now,
+		s.claimStuckAfter,
+	))
 	if err != nil {
 		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
 			s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
@@ -458,10 +468,9 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		s.operationMetrics.RecordPaymentOperation(RetryAuthorizationOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	requestFingerprint := retryAuthorizationRequestFingerprint(command, s.fingerprintSecret)
 	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewAuthorizationRetryClaimRequest(
 		command.idempotencyKey,
-		requestFingerprint,
+		retryAuthorizationRequestFingerprint(command, s.fingerprintSecret),
 		command.paymentID,
 		authorizationCardFingerprint(command.card, s.fingerprintSecret),
 		s.clock.Now(),
@@ -526,9 +535,8 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		s.operationMetrics.RecordPaymentOperation(CapturePaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := capturePaymentRequestFingerprint(command, s.fingerprintSecret)
 	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewCaptureClaimRequest(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewCaptureClaimRequest(command.idempotencyKey, capturePaymentRequestFingerprint(command, s.fingerprintSecret), command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
 	if err != nil {
 		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
 			s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
@@ -599,9 +607,8 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		s.operationMetrics.RecordPaymentOperation(VoidPaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := voidPaymentRequestFingerprint(command, s.fingerprintSecret)
 	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewVoidClaimRequest(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewVoidClaimRequest(command.idempotencyKey, voidPaymentRequestFingerprint(command, s.fingerprintSecret), command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
 	if err != nil {
 		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
 			s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
@@ -670,9 +677,8 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		s.operationMetrics.RecordPaymentOperation(RefundPaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := refundPaymentRequestFingerprint(command, s.fingerprintSecret)
 	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewRefundClaimRequest(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewRefundClaimRequest(command.idempotencyKey, refundPaymentRequestFingerprint(command, s.fingerprintSecret), command.paymentID, bankOperationKey, s.clock.Now(), s.claimStuckAfter))
 	if err != nil {
 		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
 			s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
