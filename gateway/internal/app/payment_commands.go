@@ -124,3 +124,15 @@ func NewRefundPaymentCommand(paymentID string, idempotencyKey string) (RefundPay
 	}
 	return RefundPaymentCommand{paymentID: id, idempotencyKey: key}, nil
 }
+
+func parsePaymentOperationInput(paymentID string, idempotencyKey string) (domain.PaymentID, string, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return "", "", NewInvalidPaymentInputError("idempotency key is required", nil)
+	}
+	parsedPaymentID, err := parsePaymentID(paymentID)
+	if err != nil {
+		return "", "", err
+	}
+	return parsedPaymentID, idempotencyKey, nil
+}
