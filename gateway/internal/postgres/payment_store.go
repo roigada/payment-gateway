@@ -388,14 +388,12 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.Payment
 	if now.IsZero() {
 		now = time.Now()
 	}
-	if canAttemptIdempotencyRecovery(request) {
-		recovered, ok, err := recoverIdempotencyClaim(ctx, exec, request, now)
-		if err != nil {
-			return idempotencyRecord{}, 0, err
-		}
-		if ok {
-			return recovered, idempotencyClaimRecovered, nil
-		}
+	recovered, ok, err := recoverIdempotencyClaim(ctx, exec, request, now)
+	if err != nil {
+		return idempotencyRecord{}, 0, err
+	}
+	if ok {
+		return recovered, idempotencyClaimRecovered, nil
 	}
 	insert, err := exec.ExecContext(
 		ctx,
@@ -483,15 +481,6 @@ func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation st
 	record.paymentID = domain.PaymentID(nullStringValue(paymentID))
 	record.claimedAt = claimedAt
 	return record, status, paymentData, httpStatus, nil
-}
-
-func canAttemptIdempotencyRecovery(request app.PaymentCommandClaimRequest) bool {
-	switch request.Operation() {
-	case app.AuthorizePaymentOperation, app.RetryAuthorizationOperation, app.CapturePaymentOperation, app.VoidPaymentOperation, app.RefundPaymentOperation:
-		return request.ClaimStuckAfter() > 0
-	default:
-		return false
-	}
 }
 
 func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
