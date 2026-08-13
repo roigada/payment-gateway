@@ -68,11 +68,12 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		return replayOrError(request, record)
 	}
 
-	if outcome == idempotencyClaimAcquired {
+	switch outcome {
+	case idempotencyClaimAcquired:
 		if err := insertPayment(ctx, tx, payment); err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
-	} else if outcome == idempotencyClaimRecovered {
+	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
 		if err != nil {
 			return app.PaymentCommandClaim{}, err
@@ -80,7 +81,7 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		if payment.Status() != request.ExpectedStatus() {
 			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 		}
-	} else {
+	default:
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
 
@@ -114,7 +115,8 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 	}
 
 	var payment *domain.Payment
-	if outcome == idempotencyClaimAcquired {
+	switch outcome {
+	case idempotencyClaimAcquired:
 		payment, err = findPaymentByID(ctx, tx, request.PaymentID(), true)
 		if err != nil {
 			return app.PaymentCommandClaim{}, err
@@ -140,7 +142,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 				return app.PaymentCommandClaim{}, err
 			}
 		}
-	} else if outcome == idempotencyClaimRecovered {
+	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
 		if err != nil {
 			return app.PaymentCommandClaim{}, err
@@ -157,7 +159,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
-	} else {
+	default:
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
 
@@ -998,7 +1000,7 @@ type paymentResultSnapshot struct {
 	Currency               string    `json:"currency"`
 	Status                 string    `json:"status"`
 	DeclineReason          string    `json:"decline_reason,omitempty"`
-	AuthorizationExpiresAt time.Time `json:"authorization_expires_at,omitempty"`
+	AuthorizationExpiresAt time.Time `json:"authorization_expires_at"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 }
