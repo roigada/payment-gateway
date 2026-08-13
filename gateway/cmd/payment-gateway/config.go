@@ -343,6 +343,9 @@ func (cfg config) validate() error {
 	if cfg.Payment.CommandTimeout <= 0 {
 		return fmt.Errorf("PAYMENT_COMMAND_TIMEOUT must be a positive duration")
 	}
+	if cfg.Payment.IdempotencyClaimStuckAfter <= cfg.Payment.CommandTimeout {
+		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT")
+	}
 	if cfg.Payment.ReadTimeout <= 0 {
 		return fmt.Errorf("PAYMENT_READ_TIMEOUT must be a positive duration")
 	}

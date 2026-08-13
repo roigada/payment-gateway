@@ -710,6 +710,26 @@ func TestPaymentOperationsRecordExpectedAppErrorOutcomes(t *testing.T) {
 	}
 }
 
+func TestAuthorizePaymentRecordsReleaseFailureAndPreservesBankError(t *testing.T) {
+	metrics := &paymentOperationMetricsFake{}
+	bankErr := app.NewPaymentBankStateConflictError(errors.New("bank state conflict"))
+	service := newPaymentServiceWithMetrics(
+		&failingReleasePaymentStore{
+			PaymentStore: testsupport.NewPaymentStore(),
+			err:          app.NewInternalPaymentError(errors.New("release failed")),
+		},
+		&bankAuthorizerFake{err: bankErr},
+		time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC),
+		metrics,
+	)
+
+	_, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankStateConflict))
+	assert.Equal(t, []string{app.AuthorizePaymentOperation}, metrics.releaseFailureOperations)
+}
+
 func TestPaymentOperationsRecordExpiredOutcomeWhenCaptureOrVoidDurablyExpiresPayment(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -2214,8 +2234,9 @@ type idempotencyRecoveryMetricRecord struct {
 }
 
 type paymentOperationMetricsFake struct {
-	records         []paymentOperationMetricRecord
-	recoveryRecords []idempotencyRecoveryMetricRecord
+	records                  []paymentOperationMetricRecord
+	recoveryRecords          []idempotencyRecoveryMetricRecord
+	releaseFailureOperations []string
 }
 
 func (m *paymentOperationMetricsFake) RecordPaymentOperation(operation string, outcome string, duration time.Duration) {
@@ -2231,6 +2252,10 @@ func (m *paymentOperationMetricsFake) RecordIdempotencyRecovery(operation string
 		operation: operation,
 		result:    result,
 	})
+}
+
+func (m *paymentOperationMetricsFake) RecordPaymentCommandReleaseFailure(operation string) {
+	m.releaseFailureOperations = append(m.releaseFailureOperations, operation)
 }
 
 type sequenceBankOperationKeyGenerator struct {
@@ -2311,6 +2336,15 @@ type alwaysInProgressPaymentStore struct {
 type failingFindPaymentStore struct {
 	app.PaymentStore
 	err error
+}
+
+type failingReleasePaymentStore struct {
+	app.PaymentStore
+	err error
+}
+
+func (s *failingReleasePaymentStore) ReleasePaymentCommand(context.Context, app.PaymentCommandClaim) error {
+	return s.err
 }
 
 func (s *failingFindPaymentStore) FindByID(context.Context, domain.PaymentID, time.Time) (*domain.Payment, error) {

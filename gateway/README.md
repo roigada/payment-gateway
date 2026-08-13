@@ -249,6 +249,14 @@ payment_gateway_idempotency_recovery_total{operation,result}
 
 `operation` is one of `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, or `refund_payment`; `result` is one of `attempted`, `recovered`, `unrecoverable`, or `conflict`. The metric never labels public Idempotency Keys, Payment IDs, card data, bank IDs, or raw errors.
 
+Best-effort failed releases of an in-progress Idempotency Claim export:
+
+```text
+payment_gateway_payment_command_release_failures_total{operation}
+```
+
+The gateway preserves the original Payment command error and records this counter. A retry can recover the claim after the configured Stuck Idempotency Claim threshold.
+
 and Mock Bank dependency RED:
 
 ```text

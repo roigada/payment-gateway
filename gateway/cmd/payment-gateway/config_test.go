@@ -54,6 +54,7 @@ func TestConfigValidate(t *testing.T) {
 		{"service credentials", func(c *config) { c.Auth.Credentials = nil }, "service credential configuration is invalid"},
 		{"mock bank initial attempt", func(c *config) { c.MockBank.InitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank timeout", func(c *config) { c.MockBank.Timeout = 0 }, "MOCK_BANK_TIMEOUT must be a positive duration"},
+		{"idempotency claim stuck-after budget", func(c *config) { c.Payment.IdempotencyClaimStuckAfter = c.Payment.CommandTimeout }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"mock bank timeout budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
 		{"mock bank retry delay", func(c *config) { c.MockBank.RetryDelay = 0 }, "MOCK_BANK_RETRY_DELAY must be a positive duration"},
 		{"mock bank retry attempt", func(c *config) { c.MockBank.RetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
