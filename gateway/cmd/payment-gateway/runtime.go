@@ -234,11 +234,11 @@ func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness
 	if logger == nil {
 		return errors.New("runtime logger is required")
 	}
-	requestWork, cancelRequestWork := context.WithCancel(context.Background())
-	defer cancelRequestWork()
+	activeRequestsCtx, cancelActiveRequests := context.WithCancel(context.Background())
+	defer cancelActiveRequests()
 	serveResult := make(chan error, len(servers))
 	for _, runtimeServer := range servers {
-		runtimeServer.server.BaseContext = func(net.Listener) context.Context { return requestWork }
+		runtimeServer.server.BaseContext = func(net.Listener) context.Context { return activeRequestsCtx }
 		go func(server *http.Server, listener net.Listener) {
 			err := server.Serve(listener)
 			if errors.Is(err, http.ErrServerClosed) {
@@ -265,9 +265,11 @@ func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness
 		onShutdownStart()
 	}
 	readiness.beginDrain()
-	cancelRequestWork()
+	cancelActiveRequests()
 	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
 
+	// Shutdown closes listeners (no new connections) and waits for handlers to
+	// return. The deadline bounds how long this graceful phase may take.
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- shutdownServers(ctx, servers) }()
@@ -281,11 +283,15 @@ func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness
 		}
 		logger.Warn("payment-gateway shutdown drain timed out", "error", err)
 	case receivedSignal := <-shutdownSignals:
+		// A second signal is an explicit operator request to skip the remaining
+		// graceful wait and close connections immediately.
 		logger.Warn("payment-gateway shutdown force requested", "signal", receivedSignal.String())
 		cancel()
 		<-shutdownResult
 	}
 
+	// Shutdown exceeded its deadline or was force-requested. Close interrupts
+	// remaining connections rather than waiting any longer.
 	if closeErr := closeServers(servers); closeErr != nil {
 		return closeErr
 	}
@@ -294,6 +300,8 @@ func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness
 }
 
 func shutdownServers(ctx context.Context, servers []runtimeServer) error {
+	// Shut down listeners concurrently: a slow handler on one listener must not
+	// postpone telling the other listener to stop accepting connections.
 	results := make(chan error, len(servers))
 	var group sync.WaitGroup
 	for _, runtimeServer := range servers {
@@ -304,6 +312,7 @@ func shutdownServers(ctx context.Context, servers []runtimeServer) error {
 		}(runtimeServer.server)
 	}
 	group.Wait()
+	// No sender remains, so ranging over results is safe and gathers all errors.
 	close(results)
 	for err := range results {
 		if err != nil {
@@ -314,6 +323,8 @@ func shutdownServers(ctx context.Context, servers []runtimeServer) error {
 }
 
 func closeServers(servers []runtimeServer) error {
+	// Unlike Shutdown, Close immediately terminates active connections. This is
+	// only the bounded-shutdown fallback, not the normal path.
 	for _, runtimeServer := range servers {
 		if err := runtimeServer.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
