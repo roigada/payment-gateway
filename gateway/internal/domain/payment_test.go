@@ -9,6 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsValidPaymentStatus(t *testing.T) {
+	validStatuses := []domain.PaymentStatus{
+		domain.PaymentStatusPending,
+		domain.PaymentStatusAuthorized,
+		domain.PaymentStatusExpired,
+		domain.PaymentStatusDeclined,
+		domain.PaymentStatusCaptured,
+		domain.PaymentStatusVoided,
+		domain.PaymentStatusRefunded,
+	}
+
+	for _, status := range validStatuses {
+		t.Run(string(status), func(t *testing.T) {
+			assert.True(t, domain.IsValidPaymentStatus(status))
+		})
+	}
+
+	assert.False(t, domain.IsValidPaymentStatus("unknown"))
+}
+
 func TestNewAuthorizedPaymentCreatesPaymentWithPrivateBankAuthorizationID(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(time.Hour)

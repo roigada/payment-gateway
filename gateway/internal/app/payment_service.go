@@ -798,15 +798,6 @@ func paymentOperationOutcome(result PaymentCommandResult, err error, replayed bo
 	return string(PaymentErrorInternal)
 }
 
-func isValidPaymentStatus(status domain.PaymentStatus) bool {
-	switch status {
-	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusExpired, domain.PaymentStatusDeclined, domain.PaymentStatusCaptured, domain.PaymentStatusVoided, domain.PaymentStatusRefunded:
-		return true
-	default:
-		return false
-	}
-}
-
 func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthorizationResult, now time.Time) error {
 	if bankResult.DeclineReason != "" {
 		return payment.MarkDeclined(bankResult.DeclineReason, now)

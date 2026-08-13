@@ -39,6 +39,15 @@ const (
 	PaymentStatusRefunded   PaymentStatus = "refunded"
 )
 
+func IsValidPaymentStatus(status PaymentStatus) bool {
+	switch status {
+	case PaymentStatusPending, PaymentStatusAuthorized, PaymentStatusExpired, PaymentStatusDeclined, PaymentStatusCaptured, PaymentStatusVoided, PaymentStatusRefunded:
+		return true
+	default:
+		return false
+	}
+}
+
 type DeclineReason string
 
 const (
