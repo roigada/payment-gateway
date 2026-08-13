@@ -393,12 +393,12 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if claim.Recovered() {
-		s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
-	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
 		return replayResult, nil
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
 	}
 	payment = claim.Payment()
 
@@ -474,12 +474,12 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if claim.Recovered() {
-		s.recordIdempotencyRecoveryAttempt(RetryAuthorizationOperation)
-	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
 		return replayResult, nil
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(RetryAuthorizationOperation)
 	}
 
 	payment := claim.Payment()
@@ -536,12 +536,12 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if claim.Recovered() {
-		s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
-	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
 		return replayResult, nil
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
 	}
 	payment := claim.Payment()
 	bankOperationKey = payment.CaptureBankOperationKey()
@@ -609,12 +609,12 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if claim.Recovered() {
-		s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
-	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
 		return replayResult, nil
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
 	}
 	payment := claim.Payment()
 	bankOperationKey = payment.VoidBankOperationKey()
@@ -680,12 +680,12 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if claim.Recovered() {
-		s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
-	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
 		return replayResult, nil
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
 	}
 	payment := claim.Payment()
 	bankOperationKey = payment.RefundBankOperationKey()
@@ -788,9 +788,9 @@ func isValidPaymentStatus(status domain.PaymentStatus) bool {
 
 func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthorizationResult, now time.Time) error {
 	if bankResult.DeclineReason != "" {
-		return ensurePaymentError(payment.MarkDeclined(bankResult.DeclineReason, now))
+		return payment.MarkDeclined(bankResult.DeclineReason, now)
 	}
-	return ensurePaymentError(payment.MarkAuthorized(bankResult.BankAuthorizationID, bankResult.AuthorizationExpiresAt, now))
+	return payment.MarkAuthorized(bankResult.BankAuthorizationID, bankResult.AuthorizationExpiresAt, now)
 }
 
 func isUnknownAuthorizationOutcome(err error) bool {
