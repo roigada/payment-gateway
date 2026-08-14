@@ -167,7 +167,7 @@ func (r *PaymentStore) ClaimAuthorizationStart(_ context.Context, request app.Au
 			}
 			return app.NewRecoveredPaymentCommand(request, payment), nil
 		}
-		return replayOrError(request, record)
+		return resolveExistingIdempotencyRecord(request, record)
 	}
 
 	if err := r.SeedPayment(context.Background(), request.Payment()); err != nil {
@@ -205,7 +205,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 			}
 			return app.NewRecoveredPaymentCommand(request, payment), nil
 		}
-		return replayOrError(request, record)
+		return resolveExistingIdempotencyRecord(request, record)
 	}
 
 	payment, err := r.findPayment(request.PaymentID())
@@ -509,7 +509,7 @@ func cloneIdempotencyRecord(record idempotencyRecord) idempotencyRecord {
 	}
 }
 
-func replayOrError(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
+func resolveExistingIdempotencyRecord(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
 	if record.requestFingerprint != request.RequestFingerprint() {
 		return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyConflictError(nil)
 	}

@@ -90,7 +90,7 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		if err := tx.Commit(); err != nil {
 			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
-		return replayOrError(request, record)
+		return resolveExistingIdempotencyRecord(request, record)
 	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
 		if err != nil {
@@ -161,7 +161,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		if err := tx.Commit(); err != nil {
 			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
-		return replayOrError(request, record)
+		return resolveExistingIdempotencyRecord(request, record)
 	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
 		if err != nil {
@@ -532,7 +532,7 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 	return record, status, paymentData, httpStatus, nil
 }
 
-func replayOrError(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
+func resolveExistingIdempotencyRecord(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
 	if record.requestFingerprint != request.RequestFingerprint() {
 		return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyConflictError(nil)
 	}
