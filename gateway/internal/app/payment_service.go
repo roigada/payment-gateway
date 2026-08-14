@@ -95,14 +95,6 @@ func NewPaymentService(
 	}
 }
 
-type BankOperationKeyKind string
-
-const (
-	BankOperationKeyCapture BankOperationKeyKind = "capture"
-	BankOperationKeyVoid    BankOperationKeyKind = "void"
-	BankOperationKeyRefund  BankOperationKeyKind = "refund"
-)
-
 type PaymentResult struct {
 	ID                     string
 	OrderID                string
@@ -178,7 +170,6 @@ type ExistingPaymentCommandClaimRequest struct {
 	requestFingerprint           string
 	expectedStatus               domain.PaymentStatus
 	paymentID                    domain.PaymentID
-	bankOperationKeyKind         BankOperationKeyKind
 	bankOperationKey             string
 	authorizationCardFingerprint string
 	now                          time.Time
@@ -200,43 +191,40 @@ func NewAuthorizationRetryClaimRequest(key string, requestFingerprint string, pa
 
 func NewCaptureClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
 	return ExistingPaymentCommandClaimRequest{
-		operation:            CapturePaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		expectedStatus:       domain.PaymentStatusAuthorized,
-		paymentID:            paymentID,
-		bankOperationKeyKind: BankOperationKeyCapture,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+		operation:          CapturePaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusAuthorized,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
 func NewVoidClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
 	return ExistingPaymentCommandClaimRequest{
-		operation:            VoidPaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		expectedStatus:       domain.PaymentStatusAuthorized,
-		paymentID:            paymentID,
-		bankOperationKeyKind: BankOperationKeyVoid,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+		operation:          VoidPaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusAuthorized,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
 func NewRefundClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
 	return ExistingPaymentCommandClaimRequest{
-		operation:            RefundPaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		expectedStatus:       domain.PaymentStatusCaptured,
-		paymentID:            paymentID,
-		bankOperationKeyKind: BankOperationKeyRefund,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+		operation:          RefundPaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusCaptured,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
@@ -249,10 +237,7 @@ func (r ExistingPaymentCommandClaimRequest) ExpectedStatus() domain.PaymentStatu
 func (r ExistingPaymentCommandClaimRequest) Now() time.Time                 { return r.now }
 func (r ExistingPaymentCommandClaimRequest) ClaimStuckAfter() time.Duration { return r.claimStuckAfter }
 func (r ExistingPaymentCommandClaimRequest) PaymentID() domain.PaymentID    { return r.paymentID }
-func (r ExistingPaymentCommandClaimRequest) BankOperationKeyKind() BankOperationKeyKind {
-	return r.bankOperationKeyKind
-}
-func (r ExistingPaymentCommandClaimRequest) BankOperationKey() string { return r.bankOperationKey }
+func (r ExistingPaymentCommandClaimRequest) BankOperationKey() string       { return r.bankOperationKey }
 func (r ExistingPaymentCommandClaimRequest) AuthorizationCardFingerprint() string {
 	return r.authorizationCardFingerprint
 }

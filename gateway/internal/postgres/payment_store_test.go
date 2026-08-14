@@ -287,7 +287,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 	insertPaymentFixture(t, db, payment)
 	require.NoError(t, payment.SetVoidBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
 
-	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyVoid)
+	saveBankOperationKeyFixture(t, db, payment, app.VoidPaymentOperation)
 
 	saved, err := store.FindByID(ctx, payment.ID(), testNonExpiringBusinessTime)
 	require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 	insertPaymentFixture(t, db, payment)
 	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
 
-	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyCapture)
+	saveBankOperationKeyFixture(t, db, payment, app.CapturePaymentOperation)
 
 	saved, err := store.FindByID(ctx, payment.ID(), testNonExpiringBusinessTime)
 	require.NoError(t, err)
@@ -540,7 +540,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 	insertPaymentFixture(t, db, payment)
 	require.NoError(t, payment.SetRefundBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440004"))
 
-	saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyRefund)
+	saveBankOperationKeyFixture(t, db, payment, app.RefundPaymentOperation)
 
 	saved, err := store.FindByID(ctx, payment.ID(), testNonExpiringBusinessTime)
 	require.NoError(t, err)
@@ -895,7 +895,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 			persistRecovery: func(t *testing.T, db *sql.DB, payment *domain.Payment) {
 				t.Helper()
 				require.NoError(t, payment.SetCaptureBankOperationKey("bok_00000000-0000-4000-8000-000000000931"))
-				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyCapture)
+				saveBankOperationKeyFixture(t, db, payment, app.CapturePaymentOperation)
 			},
 			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewCaptureClaimRequest("capture-key-1", "capture-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
@@ -917,7 +917,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 			persistRecovery: func(t *testing.T, db *sql.DB, payment *domain.Payment) {
 				t.Helper()
 				require.NoError(t, payment.SetVoidBankOperationKey("bok_00000000-0000-4000-8000-000000000941"))
-				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyVoid)
+				saveBankOperationKeyFixture(t, db, payment, app.VoidPaymentOperation)
 			},
 			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewVoidClaimRequest("void-key-1", "void-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
@@ -939,7 +939,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 			persistRecovery: func(t *testing.T, db *sql.DB, payment *domain.Payment) {
 				t.Helper()
 				require.NoError(t, payment.SetRefundBankOperationKey("bok_00000000-0000-4000-8000-000000000951"))
-				saveBankOperationKeyFixture(t, db, payment, app.BankOperationKeyRefund)
+				saveBankOperationKeyFixture(t, db, payment, app.RefundPaymentOperation)
 			},
 			request: func(payment *domain.Payment, now time.Time) app.ExistingPaymentCommandClaimRequest {
 				return app.NewRefundClaimRequest("refund-key-1", "refund-fingerprint-1", payment.ID(), "bok_00000000-0000-4000-8000-000000000999", now, 5*time.Minute)
@@ -1423,7 +1423,7 @@ func updatePaymentFixture(t *testing.T, db *sql.DB, payment *domain.Payment, exp
 	require.Equal(t, int64(1), rowsAffected)
 }
 
-func saveBankOperationKeyFixture(t *testing.T, db *sql.DB, payment *domain.Payment, operation app.BankOperationKeyKind) {
+func saveBankOperationKeyFixture(t *testing.T, db *sql.DB, payment *domain.Payment, operation string) {
 	t.Helper()
 
 	var (
@@ -1432,20 +1432,20 @@ func saveBankOperationKeyFixture(t *testing.T, db *sql.DB, payment *domain.Payme
 		expectedStatus domain.PaymentStatus
 	)
 	switch operation {
-	case app.BankOperationKeyCapture:
+	case app.CapturePaymentOperation:
 		column = "capture_bank_operation_key"
 		value = nullableString(payment.CaptureBankOperationKey())
 		expectedStatus = domain.PaymentStatusAuthorized
-	case app.BankOperationKeyVoid:
+	case app.VoidPaymentOperation:
 		column = "void_bank_operation_key"
 		value = nullableString(payment.VoidBankOperationKey())
 		expectedStatus = domain.PaymentStatusAuthorized
-	case app.BankOperationKeyRefund:
+	case app.RefundPaymentOperation:
 		column = "refund_bank_operation_key"
 		value = nullableString(payment.RefundBankOperationKey())
 		expectedStatus = domain.PaymentStatusCaptured
 	default:
-		t.Fatalf("unsupported bank operation key kind %q", operation)
+		t.Fatalf("unsupported payment operation %q", operation)
 	}
 
 	result, err := db.ExecContext(

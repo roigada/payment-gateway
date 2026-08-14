@@ -92,7 +92,7 @@ func (r *PaymentStore) saveIfStatus(_ context.Context, payment *domain.Payment, 
 	return r.update(payment)
 }
 
-func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.Payment, operation app.BankOperationKeyKind) error {
+func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.Payment, operation string) error {
 	existing, ok := r.payments[payment.ID()]
 	if !ok {
 		return app.NewPaymentNotFoundError(string(payment.ID()), nil)
@@ -100,9 +100,11 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 
 	var expectedStatus domain.PaymentStatus
 	switch operation {
-	case app.BankOperationKeyCapture, app.BankOperationKeyVoid:
+	case app.RetryAuthorizationOperation:
+		return nil
+	case app.CapturePaymentOperation, app.VoidPaymentOperation:
 		expectedStatus = domain.PaymentStatusAuthorized
-	case app.BankOperationKeyRefund:
+	case app.RefundPaymentOperation:
 		expectedStatus = domain.PaymentStatusCaptured
 	default:
 		return app.NewInternalPaymentError(errors.New("unknown bank operation"))
@@ -160,16 +162,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 				}
 				return app.PaymentCommandClaim{}, err
 			}
-			if request.PaymentID() != record.paymentID {
-				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
-			}
-			if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
-				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentStatusConflictError(nil))
-			}
-			if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
-				return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
-			}
-			if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
+			if err := validateRecoveredPaymentCommand(request, record, payment); err != nil {
 				return app.PaymentCommandClaim{}, err
 			}
 			return app.NewRecoveredPaymentCommand(request, payment), nil
@@ -190,15 +183,13 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
 		return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 	}
-	if request.BankOperationKeyKind() != "" {
-		if err := setBankOperationKey(payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
-			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-			return app.PaymentCommandClaim{}, err
-		}
-		if err := r.saveBankOperationKey(context.Background(), payment, request.BankOperationKeyKind()); err != nil {
-			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-			return app.PaymentCommandClaim{}, err
-		}
+	if err := setBankOperationKey(payment, request.Operation(), request.BankOperationKey()); err != nil {
+		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
+		return app.PaymentCommandClaim{}, err
+	}
+	if err := r.saveBankOperationKey(context.Background(), payment, request.Operation()); err != nil {
+		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
+		return app.PaymentCommandClaim{}, err
 	}
 	return app.NewClaimedPaymentCommand(request, payment), nil
 }
@@ -358,19 +349,21 @@ func (r *PaymentStore) complete(claim app.PaymentCommandClaim, result app.Paymen
 	return nil
 }
 
-func setBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind, key string) error {
+func setBankOperationKey(payment *domain.Payment, operation string, key string) error {
 	switch operation {
-	case app.BankOperationKeyCapture:
+	case app.RetryAuthorizationOperation:
+		return nil
+	case app.CapturePaymentOperation:
 		if payment.CaptureBankOperationKey() != "" {
 			return nil
 		}
 		return payment.SetCaptureBankOperationKey(key)
-	case app.BankOperationKeyVoid:
+	case app.VoidPaymentOperation:
 		if payment.VoidBankOperationKey() != "" {
 			return nil
 		}
 		return payment.SetVoidBankOperationKey(key)
-	case app.BankOperationKeyRefund:
+	case app.RefundPaymentOperation:
 		if payment.RefundBankOperationKey() != "" {
 			return nil
 		}
@@ -380,16 +373,26 @@ func setBankOperationKey(payment *domain.Payment, operation app.BankOperationKey
 	}
 }
 
-func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind) error {
+func validateRecoveredPaymentCommand(request app.ExistingPaymentCommandClaimRequest, record idempotencyRecord, payment *domain.Payment) error {
+	if request.PaymentID() != record.paymentID {
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+	}
+	if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentStatusConflictError(nil))
+	}
+	if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
+		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryConflict, app.NewPaymentIdempotencyConflictError(nil))
+	}
+
 	var key string
-	switch operation {
-	case "":
+	switch request.Operation() {
+	case app.RetryAuthorizationOperation:
 		return nil
-	case app.BankOperationKeyCapture:
+	case app.CapturePaymentOperation:
 		key = payment.CaptureBankOperationKey()
-	case app.BankOperationKeyVoid:
+	case app.VoidPaymentOperation:
 		key = payment.VoidBankOperationKey()
-	case app.BankOperationKeyRefund:
+	case app.RefundPaymentOperation:
 		key = payment.RefundBankOperationKey()
 	default:
 		return app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(errors.New("unknown bank operation")))
