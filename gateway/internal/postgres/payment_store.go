@@ -96,7 +96,7 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		}
 		return app.NewClaimedPaymentCommand(request, payment), nil
 	case idempotencyClaimRecovered:
-		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
+		payment, err = findRecoveredPayment(ctx, tx, record.paymentID, false)
 		if err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
@@ -167,7 +167,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		}
 		return app.NewClaimedPaymentCommand(request, payment), nil
 	case idempotencyClaimRecovered:
-		payment, err = findRecoveredPayment(ctx, tx, record.paymentID)
+		payment, err = findRecoveredPayment(ctx, tx, record.paymentID, true)
 		if err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
@@ -542,8 +542,8 @@ func resolveExistingIdempotencyRecord(request app.PaymentCommandClaimRequest, re
 	return app.NewReplayedPaymentCommand(request, record.result), nil
 }
 
-func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID) (*domain.Payment, error) {
-	payment, err := findPaymentByID(ctx, tx, paymentID, true)
+func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
+	payment, err := findPaymentByID(ctx, tx, paymentID, forUpdate)
 	if err != nil && app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
 		return nil, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
 	}

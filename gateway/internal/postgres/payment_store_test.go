@@ -810,6 +810,9 @@ func TestPaymentStoreReturnsInternalErrorWhenRecoveredAuthorizationPaymentIsMiss
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+	recoveryErr, ok := errors.AsType[*app.IdempotencyRecoveryError](err)
+	require.True(t, ok)
+	assert.Equal(t, app.IdempotencyRecoveryUnrecoverable, recoveryErr.Result())
 }
 
 func TestPaymentStoreRecoversStuckAuthorizationRetryClaim(t *testing.T) {
