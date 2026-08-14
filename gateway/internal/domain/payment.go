@@ -109,76 +109,6 @@ func NewPendingPayment(
 	)
 }
 
-func NewAuthorizedPayment(
-	id PaymentID,
-	orderID string,
-	customerID string,
-	amountCents int64,
-	bankAuthorizationID string,
-	authorizationExpiresAt time.Time,
-	authorizationBankOperationKey string,
-	authorizationCardFingerprint string,
-	now time.Time,
-) (*Payment, error) {
-	status := PaymentStatusAuthorized
-	if !now.IsZero() && !authorizationExpiresAt.IsZero() && !now.Before(authorizationExpiresAt) {
-		status = PaymentStatusExpired
-	}
-	return newPayment(
-		id,
-		orderID,
-		customerID,
-		amountCents,
-		status,
-		bankAuthorizationID,
-		authorizationExpiresAt,
-		authorizationBankOperationKey,
-		authorizationCardFingerprint,
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		now,
-	)
-}
-
-func NewDeclinedPayment(
-	id PaymentID,
-	orderID string,
-	customerID string,
-	amountCents int64,
-	declineReason DeclineReason,
-	authorizationBankOperationKey string,
-	authorizationCardFingerprint string,
-	now time.Time,
-) (*Payment, error) {
-	if err := validateDeclineReason(declineReason); err != nil {
-		return nil, err
-	}
-	return newPayment(
-		id,
-		orderID,
-		customerID,
-		amountCents,
-		PaymentStatusDeclined,
-		"",
-		time.Time{},
-		authorizationBankOperationKey,
-		authorizationCardFingerprint,
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		declineReason,
-		now,
-	)
-}
-
 func LoadPayment(
 	id PaymentID,
 	orderID string,
@@ -213,8 +143,14 @@ func LoadPayment(
 	)
 	switch status {
 	case PaymentStatusPending:
-		if strings.TrimSpace(bankAuthorizationID) != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
+		if strings.TrimSpace(bankAuthorizationID) != "" {
 			return nil, ErrInvalidBankAuthorizationID
+		}
+		if strings.TrimSpace(bankCaptureID) != "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		if !authorizationExpiresAt.IsZero() {
 			return nil, ErrInvalidAuthorizationExpirationTime
@@ -236,8 +172,11 @@ func LoadPayment(
 		}
 		payment, err = NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
 	case PaymentStatusAuthorized:
-		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" {
+		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
+		}
+		if strings.TrimSpace(bankCaptureID) != "" {
+			return nil, ErrInvalidBankCaptureID
 		}
 		if strings.TrimSpace(bankRefundID) != "" {
 			return nil, ErrInvalidBankRefundID
@@ -250,8 +189,14 @@ func LoadPayment(
 		}
 		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationExpiresAt, authorizationBankOperationKey, authorizationCardFingerprint, "", captureBankOperationKey, "", "", "", voidBankOperationKey, "", createdAt)
 	case PaymentStatusExpired:
-		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
+		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
+		}
+		if strings.TrimSpace(bankCaptureID) != "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		if strings.TrimSpace(bankRefundID) != "" {
 			return nil, ErrInvalidBankRefundID
@@ -267,8 +212,14 @@ func LoadPayment(
 		}
 		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationExpiresAt, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", "", "", "", "", createdAt)
 	case PaymentStatusDeclined:
-		if strings.TrimSpace(bankAuthorizationID) != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
+		if strings.TrimSpace(bankAuthorizationID) != "" {
 			return nil, ErrInvalidBankAuthorizationID
+		}
+		if strings.TrimSpace(bankCaptureID) != "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		if !authorizationExpiresAt.IsZero() {
 			return nil, ErrInvalidAuthorizationExpirationTime
@@ -285,10 +236,16 @@ func LoadPayment(
 		if strings.TrimSpace(voidBankOperationKey) != "" {
 			return nil, ErrInvalidBankOperationKey
 		}
-		payment, err = NewDeclinedPayment(id, orderID, customerID, amountCents, declineReason, authorizationBankOperationKey, authorizationCardFingerprint, createdAt)
+		payment, err = newPayment(id, orderID, customerID, amountCents, status, "", time.Time{}, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", "", "", "", declineReason, createdAt)
 	case PaymentStatusCaptured:
 		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
+		}
+		if strings.TrimSpace(bankCaptureID) == "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) == "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		if strings.TrimSpace(bankRefundID) != "" {
 			return nil, ErrInvalidBankRefundID
@@ -301,13 +258,25 @@ func LoadPayment(
 		}
 		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationExpiresAt, authorizationBankOperationKey, authorizationCardFingerprint, bankCaptureID, captureBankOperationKey, "", refundBankOperationKey, "", "", "", createdAt)
 	case PaymentStatusVoided:
-		if declineReason != "" || strings.TrimSpace(bankCaptureID) != "" || strings.TrimSpace(captureBankOperationKey) != "" {
+		if declineReason != "" {
 			return nil, ErrInvalidDeclineReason
+		}
+		if strings.TrimSpace(bankCaptureID) != "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
 		}
 		if strings.TrimSpace(bankRefundID) != "" {
 			return nil, ErrInvalidBankRefundID
 		}
 		if strings.TrimSpace(refundBankOperationKey) != "" {
+			return nil, ErrInvalidBankOperationKey
+		}
+		if strings.TrimSpace(bankVoidID) == "" {
+			return nil, ErrInvalidBankVoidID
+		}
+		if strings.TrimSpace(voidBankOperationKey) == "" {
 			return nil, ErrInvalidBankOperationKey
 		}
 		payment, err = newPayment(id, orderID, customerID, amountCents, status, bankAuthorizationID, authorizationExpiresAt, authorizationBankOperationKey, authorizationCardFingerprint, "", "", "", "", bankVoidID, voidBankOperationKey, "", createdAt)
@@ -319,6 +288,12 @@ func LoadPayment(
 			return nil, ErrInvalidBankRefundID
 		}
 		if strings.TrimSpace(refundBankOperationKey) == "" {
+			return nil, ErrInvalidBankOperationKey
+		}
+		if strings.TrimSpace(bankCaptureID) == "" {
+			return nil, ErrInvalidBankCaptureID
+		}
+		if strings.TrimSpace(captureBankOperationKey) == "" {
 			return nil, ErrInvalidBankOperationKey
 		}
 		if strings.TrimSpace(bankVoidID) != "" {
@@ -511,17 +486,6 @@ func (p *Payment) MarkDeclined(declineReason DeclineReason, now time.Time) error
 	p.bankAuthorizationID = ""
 	p.authorizationExpiresAt = time.Time{}
 	p.declineReason = declineReason
-	p.updatedAt = now
-	return nil
-}
-
-func (p *Payment) MarkPending(now time.Time) error {
-	if p.status != PaymentStatusPending {
-		return ErrInvalidPaymentStatus
-	}
-	if now.IsZero() {
-		return ErrInvalidPaymentTimestamp
-	}
 	p.updatedAt = now
 	return nil
 }

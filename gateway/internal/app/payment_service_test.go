@@ -970,7 +970,7 @@ func TestAuthorizePaymentNormalizesBankErrorAfterStoringPendingPayment(t *testin
 func TestGetPaymentReturnsPublicResult(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -1317,7 +1317,7 @@ func TestVoidPaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testing.T
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
-	secondPayment, err := domain.NewAuthorizedPayment(
+	secondPayment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
 		"order-2",
 		"customer-1",
@@ -1735,7 +1735,7 @@ func TestCapturePaymentRejectsReusedIdempotencyKeyWithDifferentPayment(t *testin
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
-	secondPayment, err := domain.NewAuthorizedPayment(
+	secondPayment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440001"),
 		"order-2",
 		"customer-1",
@@ -2057,7 +2057,7 @@ func TestNewPaymentServiceRequiresCollaborators(t *testing.T) {
 func mustAuthorizedPayment(t *testing.T, id string, orderID string, customerID string, now time.Time) *domain.Payment {
 	t.Helper()
 
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID(id),
 		orderID,
 		customerID,
@@ -2075,7 +2075,7 @@ func mustAuthorizedPayment(t *testing.T, id string, orderID string, customerID s
 func mustDeclinedPayment(t *testing.T, id string, orderID string, customerID string, now time.Time) *domain.Payment {
 	t.Helper()
 
-	payment, err := domain.NewDeclinedPayment(
+	payment, err := testsupport.NewDeclinedPayment(
 		domain.PaymentID(id),
 		orderID,
 		customerID,
@@ -2402,7 +2402,7 @@ func (f *bankFake) RefundPayment(_ context.Context, request app.BankRefundReques
 func newAuthorizedDomainPayment(t *testing.T, now time.Time) *domain.Payment {
 	t.Helper()
 
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",

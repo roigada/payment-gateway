@@ -13,6 +13,7 @@ import (
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/roigada/payment-gateway/internal/postgres"
+	"github.com/roigada/payment-gateway/internal/testsupport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -30,7 +31,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -73,7 +74,7 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewDeclinedPayment(
+	payment, err := testsupport.NewDeclinedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -117,7 +118,7 @@ func TestPaymentStoreReportsAggregatePendingMetricsWithoutChangingPaymentStatuse
 		now.Add(-6*time.Minute),
 	)
 	require.NoError(t, err)
-	declined, err := domain.NewDeclinedPayment(
+	declined, err := testsupport.NewDeclinedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440002"),
 		"order-declined",
 		"customer-declined",
@@ -183,7 +184,7 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -222,7 +223,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -351,7 +352,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -393,7 +394,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -427,7 +428,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -475,7 +476,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	authorizedAt := time.Date(2026, 6, 19, 10, 30, 0, 0, time.UTC)
-	payment, err := domain.NewAuthorizedPayment(
+	payment, err := testsupport.NewAuthorizedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
 		"order-1",
 		"customer-1",
@@ -1176,7 +1177,7 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 		require.NoError(t, err)
 		return payment
 	case domain.PaymentStatusAuthorized:
-		payment, err := domain.NewAuthorizedPayment(
+		payment, err := testsupport.NewAuthorizedPayment(
 			id,
 			orderID,
 			customerID,
@@ -1214,7 +1215,7 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 		))
 		return payment
 	case domain.PaymentStatusDeclined:
-		payment, err := domain.NewDeclinedPayment(
+		payment, err := testsupport.NewDeclinedPayment(
 			id,
 			orderID,
 			customerID,
