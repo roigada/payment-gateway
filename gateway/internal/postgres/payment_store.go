@@ -78,13 +78,13 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 
 	record, outcome, err := claimIdempotency(ctx, tx, request, payment.ID())
 	if err != nil {
-		return app.PaymentCommandClaim{}, err
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 
 	switch outcome {
 	case idempotencyClaimAcquired:
 		if err := insertPayment(ctx, tx, payment); err != nil {
-			return app.PaymentCommandClaim{}, err
+			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
 	case idempotencyClaimExisting:
 		if err := tx.Commit(); err != nil {
@@ -126,7 +126,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 
 	record, outcome, err := claimIdempotency(ctx, tx, request, request.PaymentID())
 	if err != nil {
-		return app.PaymentCommandClaim{}, err
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 
 	var payment *domain.Payment
@@ -296,7 +296,7 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 	defer tx.Rollback()
 
 	if err := refreshExpiredAuthorizations(ctx, tx, query, now); err != nil {
-		return nil, err
+		return nil, app.NewInternalPaymentError(err)
 	}
 
 	rows, err := tx.QueryContext(
@@ -338,7 +338,7 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 	for rows.Next() {
 		payment, err := scanPayment(rows)
 		if err != nil {
-			return nil, err
+			return nil, app.NewInternalPaymentError(err)
 		}
 		payments = append(payments, payment)
 	}
@@ -427,11 +427,11 @@ func claimIdempotency(ctx context.Context, tx *sql.Tx, request app.PaymentComman
 		now,
 	)
 	if err != nil {
-		return idempotencyRecord{}, 0, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, 0, err
 	}
 	rowsAffected, err := insert.RowsAffected()
 	if err != nil {
-		return idempotencyRecord{}, 0, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, 0, err
 	}
 	if rowsAffected == 1 {
 		return idempotencyRecord{
@@ -451,7 +451,7 @@ func claimIdempotency(ctx context.Context, tx *sql.Tx, request app.PaymentComman
 	if status == idempotencyRecordCompleted {
 		paymentResult, err := decodePaymentResultSnapshot(paymentData)
 		if err != nil {
-			return idempotencyRecord{}, 0, app.NewInternalPaymentError(err)
+			return idempotencyRecord{}, 0, err
 		}
 		record.result = app.PaymentCommandResult{
 			Payment:    paymentResult,
@@ -481,11 +481,11 @@ func recoverIdempotencyClaim(ctx context.Context, tx *sql.Tx, request app.Paymen
 		now,
 	)
 	if err != nil {
-		return idempotencyRecord{}, false, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, false, err
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return idempotencyRecord{}, false, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, false, err
 	}
 	if rowsAffected == 0 {
 		return idempotencyRecord{}, false, nil
@@ -522,7 +522,7 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 		key,
 	).Scan(&record.requestFingerprint, &paymentID, &status, &httpStatus, &paymentData, &claimedAt)
 	if err != nil {
-		return idempotencyRecord{}, "", nil, sql.NullInt64{}, app.NewInternalPaymentError(err)
+		return idempotencyRecord{}, "", nil, sql.NullInt64{}, err
 	}
 
 	record.operation = operation
@@ -720,7 +720,7 @@ func insertPayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment) err
 		payment.UpdatedAt(),
 	)
 	if err != nil {
-		return app.NewInternalPaymentError(err)
+		return err
 	}
 	return nil
 }
@@ -927,7 +927,7 @@ func scanPayment(rows *sql.Rows) (*domain.Payment, error) {
 		&updatedAt,
 	)
 	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
+		return nil, err
 	}
 
 	payment, err := domain.LoadPayment(
@@ -952,7 +952,7 @@ func scanPayment(rows *sql.Rows) (*domain.Payment, error) {
 		updatedAt.Time,
 	)
 	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
+		return nil, err
 	}
 	return payment, nil
 }
@@ -985,7 +985,7 @@ func refreshExpiredAuthorizations(ctx context.Context, tx *sql.Tx, query app.Sea
 		domain.PaymentStatusAuthorized,
 	)
 	if err != nil {
-		return app.NewInternalPaymentError(err)
+		return err
 	}
 	return nil
 }
