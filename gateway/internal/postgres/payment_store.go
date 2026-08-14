@@ -26,8 +26,10 @@ type idempotencyClaimOutcome int
 
 const (
 	idempotencyClaimAcquired idempotencyClaimOutcome = iota
-	idempotencyClaimExisting
 	idempotencyClaimRecovered
+	idempotencyClaimReplayed
+	idempotencyClaimInProgress
+	idempotencyClaimConflict
 )
 
 type idempotencyRecord struct {
@@ -81,20 +83,22 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 
+	var (
+		claim    app.PaymentCommandClaim
+		claimErr error
+	)
 	switch outcome {
-	case idempotencyClaimExisting:
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		return resolveExistingIdempotencyRecord(request, record)
+	case idempotencyClaimReplayed:
+		claim = app.NewReplayedPaymentCommand(request, record.result)
+	case idempotencyClaimInProgress:
+		claimErr = app.NewPaymentIdempotencyInProgressError(nil)
+	case idempotencyClaimConflict:
+		claimErr = app.NewPaymentIdempotencyConflictError(nil)
 	case idempotencyClaimAcquired:
 		if err := insertPayment(ctx, tx, payment); err != nil {
 			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 		}
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		return app.NewClaimedPaymentCommand(request, payment), nil
+		claim = app.NewClaimedPaymentCommand(request, payment)
 	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID, false)
 		if err != nil {
@@ -103,13 +107,14 @@ func (r *PaymentStore) ClaimAuthorizationStart(ctx context.Context, request app.
 		if payment.Status() != request.ExpectedStatus() {
 			return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 		}
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		return app.NewRecoveredPaymentCommand(request, payment), nil
+		claim = app.NewRecoveredPaymentCommand(request, payment)
 	default:
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
+	if err := tx.Commit(); err != nil {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+	}
+	return claim, claimErr
 }
 
 // ClaimExistingPaymentCommand claims the public idempotency record before an
@@ -129,13 +134,18 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
 	}
 
-	var payment *domain.Payment
+	var (
+		claim    app.PaymentCommandClaim
+		claimErr error
+		payment  *domain.Payment
+	)
 	switch outcome {
-	case idempotencyClaimExisting:
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		return resolveExistingIdempotencyRecord(request, record)
+	case idempotencyClaimReplayed:
+		claim = app.NewReplayedPaymentCommand(request, record.result)
+	case idempotencyClaimInProgress:
+		claimErr = app.NewPaymentIdempotencyInProgressError(nil)
+	case idempotencyClaimConflict:
+		claimErr = app.NewPaymentIdempotencyConflictError(nil)
 	case idempotencyClaimAcquired:
 		payment, err = findPaymentByID(ctx, tx, request.PaymentID(), true)
 		if err != nil {
@@ -148,12 +158,8 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 			if err := expirePaymentBeforeNewBankCall(ctx, tx, request, payment); err != nil {
 				return app.PaymentCommandClaim{}, err
 			}
-			if err := tx.Commit(); err != nil {
-				return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-			}
-			return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
-		}
-		if request.BankOperationKeyKind() != "" {
+			claimErr = app.NewPaymentAuthorizationExpiredError(nil)
+		} else if request.BankOperationKeyKind() != "" {
 			if err := ensureBankOperationKey(ctx, tx, payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
 				return app.PaymentCommandClaim{}, err
 			}
@@ -162,10 +168,9 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 				return app.PaymentCommandClaim{}, err
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+		if claimErr == nil {
+			claim = app.NewClaimedPaymentCommand(request, payment)
 		}
-		return app.NewClaimedPaymentCommand(request, payment), nil
 	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID, true)
 		if err != nil {
@@ -183,13 +188,14 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		if err := ensureRecoveredBankOperationKey(payment, request.BankOperationKeyKind()); err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
-		if err := tx.Commit(); err != nil {
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		return app.NewRecoveredPaymentCommand(request, payment), nil
+		claim = app.NewRecoveredPaymentCommand(request, payment)
 	default:
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("unknown idempotency claim outcome"))
 	}
+	if err := tx.Commit(); err != nil {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
+	}
+	return claim, claimErr
 }
 
 func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
@@ -447,7 +453,17 @@ func claimIdempotency(ctx context.Context, tx *sql.Tx, request app.PaymentComman
 		return idempotencyRecord{}, 0, err
 	}
 
-	return record, idempotencyClaimExisting, nil
+	if record.requestFingerprint != request.RequestFingerprint() {
+		return record, idempotencyClaimConflict, nil
+	}
+	switch record.status {
+	case idempotencyRecordInProgress:
+		return record, idempotencyClaimInProgress, nil
+	case idempotencyRecordCompleted:
+		return record, idempotencyClaimReplayed, nil
+	default:
+		return idempotencyRecord{}, 0, errors.New("unknown idempotency record status")
+	}
 }
 
 func recoverIdempotencyClaim(ctx context.Context, tx *sql.Tx, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
@@ -527,16 +543,6 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 		}
 	}
 	return record, nil
-}
-
-func resolveExistingIdempotencyRecord(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
-	if record.requestFingerprint != request.RequestFingerprint() {
-		return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyConflictError(nil)
-	}
-	if record.status == idempotencyRecordInProgress {
-		return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyInProgressError(nil)
-	}
-	return app.NewReplayedPaymentCommand(request, record.result), nil
 }
 
 func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
