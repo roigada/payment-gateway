@@ -15,15 +15,6 @@ type PaymentStore struct {
 	db *sql.DB
 }
 
-type sqlExecutor interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-type paymentScanner interface {
-	Scan(dest ...any) error
-}
-
 type idempotencyRecordStatus string
 
 const (
@@ -254,7 +245,19 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 }
 
 func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim) error {
-	return deleteIdempotencyClaim(ctx, r.db, claim.Operation(), claim.Key())
+	_, err := r.db.ExecContext(
+		ctx,
+		`DELETE FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2
+		    AND status = 'in_progress'`,
+		claim.Operation(),
+		claim.Key(),
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
 }
 
 // Payment queries.
@@ -396,16 +399,16 @@ func (r *PaymentStore) PendingPaymentMetrics(ctx context.Context) (int64, float6
 
 // Command claim and recovery helpers.
 
-func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, paymentID domain.PaymentID) (idempotencyRecord, idempotencyClaimOutcome, error) {
+func claimIdempotency(ctx context.Context, tx *sql.Tx, request app.PaymentCommandClaimRequest, paymentID domain.PaymentID) (idempotencyRecord, idempotencyClaimOutcome, error) {
 	now := request.Now()
-	recovered, ok, err := recoverIdempotencyClaim(ctx, exec, request, now)
+	recovered, ok, err := recoverIdempotencyClaim(ctx, tx, request, now)
 	if err != nil {
 		return idempotencyRecord{}, 0, err
 	}
 	if ok {
 		return recovered, idempotencyClaimRecovered, nil
 	}
-	insert, err := exec.ExecContext(
+	insert, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO idempotency_records (
 		     operation,
@@ -439,7 +442,7 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.Payment
 		}, idempotencyClaimAcquired, nil
 	}
 
-	record, status, paymentData, httpStatus, err := selectIdempotencyRecord(ctx, exec, request.Operation(), request.Key())
+	record, status, paymentData, httpStatus, err := selectIdempotencyRecord(ctx, tx, request.Operation(), request.Key())
 	if err != nil {
 		return idempotencyRecord{}, 0, err
 	}
@@ -459,10 +462,10 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.Payment
 	return record, idempotencyClaimExisting, nil
 }
 
-func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
+func recoverIdempotencyClaim(ctx context.Context, tx *sql.Tx, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
 	// Refresh ownership atomically so concurrent retriers observe this claim as
 	// in progress instead of both proceeding to the Mock Bank.
-	result, err := exec.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE idempotency_records
 		    SET claimed_at = $5
@@ -487,7 +490,7 @@ func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.
 	if rowsAffected == 0 {
 		return idempotencyRecord{}, false, nil
 	}
-	record, _, _, _, err := selectIdempotencyRecord(ctx, exec, request.Operation(), request.Key())
+	record, _, _, _, err := selectIdempotencyRecord(ctx, tx, request.Operation(), request.Key())
 	if err != nil {
 		return idempotencyRecord{}, false, err
 	}
@@ -495,7 +498,7 @@ func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.
 	return record, true, nil
 }
 
-func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation string, key string) (idempotencyRecord, idempotencyRecordStatus, []byte, sql.NullInt64, error) {
+func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, key string) (idempotencyRecord, idempotencyRecordStatus, []byte, sql.NullInt64, error) {
 	var (
 		record      idempotencyRecord
 		status      idempotencyRecordStatus
@@ -504,7 +507,7 @@ func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation st
 		paymentID   sql.NullString
 		claimedAt   time.Time
 	)
-	err := exec.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT request_fingerprint,
 		        payment_id,
@@ -581,7 +584,7 @@ func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimReques
 	}
 }
 
-func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *domain.Payment, operation app.BankOperationKeyKind, newKey string) error {
+func ensureBankOperationKey(ctx context.Context, tx *sql.Tx, payment *domain.Payment, operation app.BankOperationKeyKind, newKey string) error {
 	var (
 		column string
 		value  string
@@ -620,7 +623,7 @@ func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *doma
 
 	// Persist the key before the bank call so a recovered claim repeats the
 	// original bank operation rather than creating a second one.
-	result, err := exec.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE payments SET `+column+` = $2 WHERE id = $1 AND status = $3`,
 		payment.ID(),
@@ -630,7 +633,7 @@ func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *doma
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
+	return ensurePaymentUpdateAffected(ctx, tx, result, payment.ID())
 }
 
 func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.BankOperationKeyKind) error {
@@ -653,8 +656,8 @@ func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.Bank
 	return nil
 }
 
-func deleteIdempotencyClaim(ctx context.Context, exec sqlExecutor, operation string, key string) error {
-	_, err := exec.ExecContext(
+func deleteIdempotencyClaim(ctx context.Context, tx *sql.Tx, operation string, key string) error {
+	_, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM idempotency_records
 		  WHERE operation = $1
@@ -671,8 +674,8 @@ func deleteIdempotencyClaim(ctx context.Context, exec sqlExecutor, operation str
 
 // Payment persistence and mapping helpers.
 
-func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment) error {
-	_, err := exec.ExecContext(
+func insertPayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment) error {
+	_, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO payments (
 		     id,
@@ -722,8 +725,8 @@ func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Paymen
 	return nil
 }
 
-func updatePayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
-	result, err := exec.ExecContext(
+func updatePayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE payments
 		    SET status = $2,
@@ -760,16 +763,16 @@ func updatePayment(ctx context.Context, exec sqlExecutor, payment *domain.Paymen
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
+	return ensurePaymentUpdateAffected(ctx, tx, result, payment.ID())
 }
 
-func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result sql.Result, id domain.PaymentID) error {
+func ensurePaymentUpdateAffected(ctx context.Context, tx *sql.Tx, result sql.Result, id domain.PaymentID) error {
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
 	if affected == 0 {
-		_, err := findPaymentByID(ctx, exec, id, false)
+		_, err := findPaymentByID(ctx, tx, id, false)
 		if err != nil {
 			return err
 		}
@@ -778,7 +781,7 @@ func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result s
 	return nil
 }
 
-func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
+func findPaymentByID(ctx context.Context, tx *sql.Tx, id domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
 	var (
 		orderID                       string
 		customerID                    string
@@ -822,7 +825,7 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	if forUpdate {
 		query += ` FOR UPDATE`
 	}
-	err := exec.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		query,
 		id,
@@ -880,7 +883,7 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	return payment, nil
 }
 
-func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
+func scanPayment(rows *sql.Rows) (*domain.Payment, error) {
 	var (
 		id                            domain.PaymentID
 		orderID                       string
@@ -902,7 +905,7 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 		createdAt                     sql.NullTime
 		updatedAt                     sql.NullTime
 	)
-	err := scanner.Scan(
+	err := rows.Scan(
 		&id,
 		&orderID,
 		&customerID,
@@ -954,11 +957,11 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 	return payment, nil
 }
 
-func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query app.SearchPaymentsQuery, now time.Time) error {
+func refreshExpiredAuthorizations(ctx context.Context, tx *sql.Tx, query app.SearchPaymentsQuery, now time.Time) error {
 	if now.IsZero() {
 		return nil
 	}
-	_, err := exec.ExecContext(
+	_, err := tx.ExecContext(
 		ctx,
 		`UPDATE payments
 		    SET status = $4,
@@ -987,7 +990,7 @@ func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query a
 	return nil
 }
 
-func refreshReadExpiration(ctx context.Context, exec sqlExecutor, payment *domain.Payment, now time.Time) error {
+func refreshReadExpiration(ctx context.Context, tx *sql.Tx, payment *domain.Payment, now time.Time) error {
 	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
 		return nil
 	}
@@ -997,7 +1000,7 @@ func refreshReadExpiration(ctx context.Context, exec sqlExecutor, payment *domai
 	if err := payment.MarkExpired(now); err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return updatePayment(ctx, exec, payment, domain.PaymentStatusAuthorized)
+	return updatePayment(ctx, tx, payment, domain.PaymentStatusAuthorized)
 }
 
 // Database boundary conversions.
