@@ -63,12 +63,23 @@ func (r *PaymentStore) AgeClaim(operation string, key string, claimedAt time.Tim
 }
 
 func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
-	payment, ok := r.payments[id]
-	if !ok {
-		return nil, app.NewPaymentNotFoundError(string(id), nil)
+	if now.IsZero() {
+		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
+	payment, err := r.findPayment(id)
+	if err != nil {
+		return nil, err
 	}
 	if err := r.refreshReadExpiration(payment, now); err != nil {
 		return nil, err
+	}
+	return clonePayment(payment)
+}
+
+func (r *PaymentStore) findPayment(id domain.PaymentID) (*domain.Payment, error) {
+	payment, ok := r.payments[id]
+	if !ok {
+		return nil, app.NewPaymentNotFoundError(string(id), nil)
 	}
 	return clonePayment(payment)
 }
@@ -134,6 +145,9 @@ func (r *PaymentStore) saveBankOperationKey(_ context.Context, payment *domain.P
 }
 
 func (r *PaymentStore) ClaimAuthorizationStart(_ context.Context, request app.AuthorizationStartClaimRequest) (app.PaymentCommandClaim, error) {
+	if request.Now().IsZero() {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
 	payment := request.Payment()
 	if payment == nil {
 		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("authorization start claim requires a payment"))
@@ -141,7 +155,7 @@ func (r *PaymentStore) ClaimAuthorizationStart(_ context.Context, request app.Au
 	record, outcome := r.claim(request, payment.ID())
 	if outcome != idempotencyClaimAcquired {
 		if outcome == idempotencyClaimRecovered {
-			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
+			payment, err := r.findPayment(record.paymentID)
 			if err != nil {
 				if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
 					return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
@@ -164,10 +178,13 @@ func (r *PaymentStore) ClaimAuthorizationStart(_ context.Context, request app.Au
 }
 
 func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+	if request.Now().IsZero() {
+		return app.PaymentCommandClaim{}, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
 	record, outcome := r.claim(request, request.PaymentID())
 	if outcome != idempotencyClaimAcquired {
 		if outcome == idempotencyClaimRecovered {
-			payment, err := r.FindByID(context.Background(), record.paymentID, time.Time{})
+			payment, err := r.findPayment(record.paymentID)
 			if err != nil {
 				if app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
 					return app.PaymentCommandClaim{}, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
@@ -191,7 +208,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 		return replayOrError(request, record)
 	}
 
-	payment, err := r.FindByID(context.Background(), request.PaymentID(), time.Time{})
+	payment, err := r.findPayment(request.PaymentID())
 	if err != nil {
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
 		return app.PaymentCommandClaim{}, err
@@ -244,6 +261,9 @@ func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimReques
 }
 
 func (r *PaymentStore) CompletePaymentCommand(_ context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
+	if completedAt.IsZero() {
+		return app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
 	if err := r.saveIfStatus(context.Background(), claim.Payment(), claim.ExpectedStatus()); err != nil {
 		return err
 	}
@@ -256,6 +276,9 @@ func (r *PaymentStore) ReleasePaymentCommand(_ context.Context, claim app.Paymen
 }
 
 func (r *PaymentStore) CleanupCompletedIdempotencyRecords(_ context.Context, completedBefore time.Time) (int, error) {
+	if completedBefore.IsZero() {
+		return 0, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
 	removed := 0
 	for mapKey, entry := range r.records {
 		if entry.status == idempotencyRecordCompleted && entry.record.completedAt.Before(completedBefore) {
@@ -267,6 +290,9 @@ func (r *PaymentStore) CleanupCompletedIdempotencyRecords(_ context.Context, com
 }
 
 func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
+	if now.IsZero() {
+		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
 	if err := r.refreshExpiredAuthorizations(query, now); err != nil {
 		return nil, err
 	}
@@ -336,9 +362,6 @@ func (c FixedClock) Now() time.Time {
 func (r *PaymentStore) claim(request app.PaymentCommandClaimRequest, paymentID domain.PaymentID) (idempotencyRecord, idempotencyClaimOutcome) {
 	mapKey := idempotencyMapKey(request.Operation(), request.Key())
 	now := request.Now()
-	if now.IsZero() {
-		now = time.Now()
-	}
 	entry, ok := r.records[mapKey]
 	if !ok {
 		record := idempotencyRecord{

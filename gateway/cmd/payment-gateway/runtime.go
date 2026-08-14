@@ -35,7 +35,8 @@ func run(cfg config, logger *slog.Logger) error {
 
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	paymentStore := postgres.NewPaymentStore(db)
-	httpRuntime, err := buildHTTPRuntime(db, paymentStore, readiness, logger, cfg.httpHandler())
+	paymentClock := app.SystemClock{}
+	httpRuntime, err := buildHTTPRuntime(db, paymentStore, readiness, logger, cfg.httpHandler(), paymentClock)
 	if err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func run(cfg config, logger *slog.Logger) error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		defer close(cleanupDone)
-		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, app.SystemClock{}, logger, httpRuntime.cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
+		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, paymentClock, logger, httpRuntime.cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
 	}()
 	defer func() {
 		cancelCleanup()
@@ -80,7 +81,7 @@ type httpAPIMetrics struct {
 	*observability.RateLimitMetrics
 }
 
-func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig) (httpRuntime, error) {
+func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentClock app.Clock) (httpRuntime, error) {
 	authenticator, err := cfg.Auth.authenticator()
 	if err != nil {
 		return httpRuntime{}, err
@@ -95,7 +96,7 @@ func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 		return httpRuntime{}, err
 	}
 
-	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metricsRuntime.paymentOperationMetrics, app.SystemClock{}, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
+	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metricsRuntime.paymentOperationMetrics, paymentClock, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	rateLimiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
 	if err != nil {
 		return httpRuntime{}, err
