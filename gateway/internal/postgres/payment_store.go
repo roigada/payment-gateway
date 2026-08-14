@@ -20,28 +20,53 @@ type sqlExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+type paymentScanner interface {
+	Scan(dest ...any) error
+}
+
+type idempotencyRecordStatus string
+
+const (
+	idempotencyRecordInProgress idempotencyRecordStatus = "in_progress"
+	idempotencyRecordCompleted  idempotencyRecordStatus = "completed"
+)
+
+type idempotencyClaimOutcome int
+
+const (
+	idempotencyClaimAcquired idempotencyClaimOutcome = iota
+	idempotencyClaimExisting
+	idempotencyClaimRecovered
+)
+
+type idempotencyRecord struct {
+	operation          string
+	key                string
+	requestFingerprint string
+	paymentID          domain.PaymentID
+	status             idempotencyRecordStatus
+	claimedAt          time.Time
+	result             app.PaymentCommandResult
+}
+
+type paymentResultSnapshot struct {
+	ID                     string    `json:"id"`
+	OrderID                string    `json:"order_id"`
+	CustomerID             string    `json:"customer_id"`
+	AmountCents            int64     `json:"amount"`
+	Currency               string    `json:"currency"`
+	Status                 string    `json:"status"`
+	DeclineReason          string    `json:"decline_reason,omitempty"`
+	AuthorizationExpiresAt time.Time `json:"authorization_expires_at"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
+}
+
 func NewPaymentStore(db *sql.DB) *PaymentStore {
 	return &PaymentStore{db: db}
 }
 
-// PendingPaymentMetrics returns aggregate current Pending Payment visibility. The
-// query is read-only and intentionally returns no Payment, order, customer, bank,
-// fingerprint, or card data.
-func (r *PaymentStore) PendingPaymentMetrics(ctx context.Context) (int64, float64, error) {
-	var count int64
-	var oldestAgeSeconds float64
-	err := r.db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at)), 0)
-		   FROM payments
-		  WHERE status = $1`,
-		domain.PaymentStatusPending,
-	).Scan(&count, &oldestAgeSeconds)
-	if err != nil {
-		return 0, 0, app.NewInternalPaymentError(err)
-	}
-	return count, oldestAgeSeconds, nil
-}
+// Payment command lifecycle.
 
 // ClaimAuthorizationStart claims the public idempotency record before starting
 // a new Payment authorization.
@@ -176,48 +201,6 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 	return app.NewClaimedPaymentCommand(request, payment), nil
 }
 
-func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID) (*domain.Payment, error) {
-	payment, err := findPaymentByID(ctx, tx, paymentID, true)
-	if err != nil && app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
-		return nil, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
-	}
-	return payment, err
-}
-
-func validateAcquiredPaymentCommand(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) error {
-	if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
-		return app.NewPaymentStatusConflictError(nil)
-	}
-	if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
-		return app.NewPaymentStatusConflictError(nil)
-	}
-	return nil
-}
-
-func expirePaymentBeforeNewBankCall(ctx context.Context, tx *sql.Tx, request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) error {
-	if err := payment.MarkExpired(request.Now()); err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if err := updatePayment(ctx, tx, payment, domain.PaymentStatusAuthorized); err != nil {
-		return err
-	}
-	return deleteIdempotencyClaim(ctx, tx, request.Operation(), request.Key())
-}
-
-func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) bool {
-	if request.Now().IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(request.Now()) {
-		return false
-	}
-	switch request.BankOperationKeyKind() {
-	case app.BankOperationKeyCapture:
-		return payment.CaptureBankOperationKey() == ""
-	case app.BankOperationKeyVoid:
-		return payment.VoidBankOperationKey() == ""
-	default:
-		return false
-	}
-}
-
 func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
 	if completedAt.IsZero() {
 		return app.NewInternalPaymentError(errors.New("payment store business time is required"))
@@ -270,6 +253,107 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 	return nil
 }
 
+func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim) error {
+	return deleteIdempotencyClaim(ctx, r.db, claim.Operation(), claim.Key())
+}
+
+// Payment queries.
+
+func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
+	if now.IsZero() {
+		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	defer tx.Rollback()
+
+	payment, err := findPaymentByID(ctx, tx, id, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := refreshReadExpiration(ctx, tx, payment, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payment, nil
+}
+
+func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
+	if now.IsZero() {
+		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	defer tx.Rollback()
+
+	if err := refreshExpiredAuthorizations(ctx, tx, query, now); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT id,
+		        order_id,
+		        customer_id,
+		        amount_cents,
+		        currency,
+		        status,
+		        bank_authorization_id,
+		        authorization_expires_at,
+		        authorization_bank_operation_key,
+		        authorization_card_fingerprint,
+		        bank_capture_id,
+		        capture_bank_operation_key,
+		        bank_refund_id,
+		        refund_bank_operation_key,
+		        bank_void_id,
+		        void_bank_operation_key,
+		        decline_reason,
+		        created_at,
+		        updated_at
+		   FROM payments
+		  WHERE ($1 = '' OR order_id = $1)
+		    AND ($2 = '' OR customer_id = $2)
+		    AND ($3 = '' OR status = $3)
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 100`,
+		query.OrderID(),
+		query.CustomerID(),
+		query.Status(),
+	)
+	if err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+
+	var payments []*domain.Payment
+	for rows.Next() {
+		payment, err := scanPayment(rows)
+		if err != nil {
+			return nil, err
+		}
+		payments = append(payments, payment)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, app.NewInternalPaymentError(err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, app.NewInternalPaymentError(err)
+	}
+	return payments, nil
+}
+
+// Operational maintenance and visibility.
+
 func (r *PaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error) {
 	if completedBefore.IsZero() {
 		return 0, app.NewInternalPaymentError(errors.New("payment store business time is required"))
@@ -291,109 +375,26 @@ func (r *PaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, c
 	return int(rowsAffected), nil
 }
 
-func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, claim app.PaymentCommandClaim) error {
-	return deleteIdempotencyClaim(ctx, r.db, claim.Operation(), claim.Key())
+// PendingPaymentMetrics returns aggregate current Pending Payment visibility. The
+// query is read-only and intentionally returns no Payment, order, customer, bank,
+// fingerprint, or card data.
+func (r *PaymentStore) PendingPaymentMetrics(ctx context.Context) (int64, float64, error) {
+	var count int64
+	var oldestAgeSeconds float64
+	err := r.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at)), 0)
+		   FROM payments
+		  WHERE status = $1`,
+		domain.PaymentStatusPending,
+	).Scan(&count, &oldestAgeSeconds)
+	if err != nil {
+		return 0, 0, app.NewInternalPaymentError(err)
+	}
+	return count, oldestAgeSeconds, nil
 }
 
-func deleteIdempotencyClaim(ctx context.Context, exec sqlExecutor, operation string, key string) error {
-	_, err := exec.ExecContext(
-		ctx,
-		`DELETE FROM idempotency_records
-		  WHERE operation = $1
-		    AND key = $2
-		    AND status = 'in_progress'`,
-		operation,
-		key,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return nil
-}
-
-func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment) error {
-	_, err := exec.ExecContext(
-		ctx,
-		`INSERT INTO payments (
-		     id,
-		     order_id,
-		     customer_id,
-		     amount_cents,
-		     currency,
-		     status,
-		     bank_authorization_id,
-		     authorization_expires_at,
-		     authorization_bank_operation_key,
-		     authorization_card_fingerprint,
-		     bank_capture_id,
-		     capture_bank_operation_key,
-		     bank_refund_id,
-		     refund_bank_operation_key,
-		     bank_void_id,
-		     void_bank_operation_key,
-		     decline_reason,
-		     created_at,
-		     updated_at
-		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
-		payment.ID(),
-		payment.OrderID(),
-		payment.CustomerID(),
-		payment.AmountCents(),
-		payment.Currency(),
-		payment.Status(),
-		nullableString(payment.BankAuthorizationID()),
-		nullableTime(payment.AuthorizationExpiresAt()),
-		payment.AuthorizationBankOperationKey(),
-		payment.AuthorizationCardFingerprint(),
-		nullableString(payment.BankCaptureID()),
-		nullableString(payment.CaptureBankOperationKey()),
-		nullableString(payment.BankRefundID()),
-		nullableString(payment.RefundBankOperationKey()),
-		nullableString(payment.BankVoidID()),
-		nullableString(payment.VoidBankOperationKey()),
-		nullableString(string(payment.DeclineReason())),
-		payment.CreatedAt(),
-		payment.UpdatedAt(),
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return nil
-}
-
-func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query app.SearchPaymentsQuery, now time.Time) error {
-	if now.IsZero() {
-		return nil
-	}
-	_, err := exec.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $4,
-		        capture_bank_operation_key = NULL,
-		        void_bank_operation_key = NULL,
-		        updated_at = $3
-		  WHERE id IN (
-		        SELECT id
-		          FROM payments
-		         WHERE status = $5
-		           AND authorization_expires_at <= $3
-		           AND capture_bank_operation_key IS NULL
-		           AND void_bank_operation_key IS NULL
-		           AND ($1 = '' OR order_id = $1)
-		           AND ($2 = '' OR customer_id = $2)
-		  )`,
-		query.OrderID(),
-		query.CustomerID(),
-		now,
-		domain.PaymentStatusExpired,
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return nil
-}
+// Command claim and recovery helpers.
 
 func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, paymentID domain.PaymentID) (idempotencyRecord, idempotencyClaimOutcome, error) {
 	now := request.Now()
@@ -458,40 +459,6 @@ func claimIdempotency(ctx context.Context, exec sqlExecutor, request app.Payment
 	return record, idempotencyClaimExisting, nil
 }
 
-func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation string, key string) (idempotencyRecord, idempotencyRecordStatus, []byte, sql.NullInt64, error) {
-	var (
-		record      idempotencyRecord
-		status      idempotencyRecordStatus
-		paymentData []byte
-		httpStatus  sql.NullInt64
-		paymentID   sql.NullString
-		claimedAt   time.Time
-	)
-	err := exec.QueryRowContext(
-		ctx,
-		`SELECT request_fingerprint,
-		        payment_id,
-		        status,
-		        http_status,
-		        payment_result,
-		        claimed_at
-		   FROM idempotency_records
-		  WHERE operation = $1
-		    AND key = $2`,
-		operation,
-		key,
-	).Scan(&record.requestFingerprint, &paymentID, &status, &httpStatus, &paymentData, &claimedAt)
-	if err != nil {
-		return idempotencyRecord{}, "", nil, sql.NullInt64{}, app.NewInternalPaymentError(err)
-	}
-
-	record.operation = operation
-	record.key = key
-	record.paymentID = domain.PaymentID(nullStringValue(paymentID))
-	record.claimedAt = claimedAt
-	return record, status, paymentData, httpStatus, nil
-}
-
 func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.PaymentCommandClaimRequest, now time.Time) (idempotencyRecord, bool, error) {
 	// Refresh ownership atomically so concurrent retriers observe this claim as
 	// in progress instead of both proceeding to the Mock Bank.
@@ -528,30 +495,39 @@ func recoverIdempotencyClaim(ctx context.Context, exec sqlExecutor, request app.
 	return record, true, nil
 }
 
-type idempotencyRecord struct {
-	operation          string
-	key                string
-	requestFingerprint string
-	paymentID          domain.PaymentID
-	status             idempotencyRecordStatus
-	claimedAt          time.Time
-	result             app.PaymentCommandResult
+func selectIdempotencyRecord(ctx context.Context, exec sqlExecutor, operation string, key string) (idempotencyRecord, idempotencyRecordStatus, []byte, sql.NullInt64, error) {
+	var (
+		record      idempotencyRecord
+		status      idempotencyRecordStatus
+		paymentData []byte
+		httpStatus  sql.NullInt64
+		paymentID   sql.NullString
+		claimedAt   time.Time
+	)
+	err := exec.QueryRowContext(
+		ctx,
+		`SELECT request_fingerprint,
+		        payment_id,
+		        status,
+		        http_status,
+		        payment_result,
+		        claimed_at
+		   FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2`,
+		operation,
+		key,
+	).Scan(&record.requestFingerprint, &paymentID, &status, &httpStatus, &paymentData, &claimedAt)
+	if err != nil {
+		return idempotencyRecord{}, "", nil, sql.NullInt64{}, app.NewInternalPaymentError(err)
+	}
+
+	record.operation = operation
+	record.key = key
+	record.paymentID = domain.PaymentID(nullStringValue(paymentID))
+	record.claimedAt = claimedAt
+	return record, status, paymentData, httpStatus, nil
 }
-
-type idempotencyRecordStatus string
-
-const (
-	idempotencyRecordInProgress idempotencyRecordStatus = "in_progress"
-	idempotencyRecordCompleted  idempotencyRecordStatus = "completed"
-)
-
-type idempotencyClaimOutcome int
-
-const (
-	idempotencyClaimAcquired idempotencyClaimOutcome = iota
-	idempotencyClaimExisting
-	idempotencyClaimRecovered
-)
 
 func replayOrError(request app.PaymentCommandClaimRequest, record idempotencyRecord) (app.PaymentCommandClaim, error) {
 	if record.requestFingerprint != request.RequestFingerprint() {
@@ -561,6 +537,48 @@ func replayOrError(request app.PaymentCommandClaimRequest, record idempotencyRec
 		return app.PaymentCommandClaim{}, app.NewPaymentIdempotencyInProgressError(nil)
 	}
 	return app.NewReplayedPaymentCommand(request, record.result), nil
+}
+
+func findRecoveredPayment(ctx context.Context, tx *sql.Tx, paymentID domain.PaymentID) (*domain.Payment, error) {
+	payment, err := findPaymentByID(ctx, tx, paymentID, true)
+	if err != nil && app.HasPaymentErrorKind(err, app.PaymentErrorNotFound) {
+		return nil, app.NewIdempotencyRecoveryError(app.IdempotencyRecoveryUnrecoverable, app.NewInternalPaymentError(err))
+	}
+	return payment, err
+}
+
+func validateAcquiredPaymentCommand(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) error {
+	if request.ExpectedStatus() != "" && payment.Status() != request.ExpectedStatus() {
+		return app.NewPaymentStatusConflictError(nil)
+	}
+	if request.AuthorizationCardFingerprint() != "" && request.AuthorizationCardFingerprint() != payment.AuthorizationCardFingerprint() {
+		return app.NewPaymentStatusConflictError(nil)
+	}
+	return nil
+}
+
+func expirePaymentBeforeNewBankCall(ctx context.Context, tx *sql.Tx, request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) error {
+	if err := payment.MarkExpired(request.Now()); err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if err := updatePayment(ctx, tx, payment, domain.PaymentStatusAuthorized); err != nil {
+		return err
+	}
+	return deleteIdempotencyClaim(ctx, tx, request.Operation(), request.Key())
+}
+
+func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) bool {
+	if request.Now().IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(request.Now()) {
+		return false
+	}
+	switch request.BankOperationKeyKind() {
+	case app.BankOperationKeyCapture:
+		return payment.CaptureBankOperationKey() == ""
+	case app.BankOperationKeyVoid:
+		return payment.VoidBankOperationKey() == ""
+	default:
+		return false
+	}
 }
 
 func ensureBankOperationKey(ctx context.Context, exec sqlExecutor, payment *domain.Payment, operation app.BankOperationKeyKind, newKey string) error {
@@ -635,40 +653,129 @@ func ensureRecoveredBankOperationKey(payment *domain.Payment, operation app.Bank
 	return nil
 }
 
-func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
-	tx, err := r.db.BeginTx(ctx, nil)
+func deleteIdempotencyClaim(ctx context.Context, exec sqlExecutor, operation string, key string) error {
+	_, err := exec.ExecContext(
+		ctx,
+		`DELETE FROM idempotency_records
+		  WHERE operation = $1
+		    AND key = $2
+		    AND status = 'in_progress'`,
+		operation,
+		key,
+	)
 	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-	defer tx.Rollback()
-
-	payment, err := findPaymentByID(ctx, tx, id, true)
-	if err != nil {
-		return nil, err
-	}
-	if err := refreshReadExpiration(ctx, tx, payment, now); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-	return payment, nil
-}
-
-func refreshReadExpiration(ctx context.Context, exec sqlExecutor, payment *domain.Payment, now time.Time) error {
-	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
-		return nil
-	}
-	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
-		return nil
-	}
-	if err := payment.MarkExpired(now); err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return updatePayment(ctx, exec, payment, domain.PaymentStatusAuthorized)
+	return nil
+}
+
+// Payment persistence and mapping helpers.
+
+func insertPayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment) error {
+	_, err := exec.ExecContext(
+		ctx,
+		`INSERT INTO payments (
+		     id,
+		     order_id,
+		     customer_id,
+		     amount_cents,
+		     currency,
+		     status,
+		     bank_authorization_id,
+		     authorization_expires_at,
+		     authorization_bank_operation_key,
+		     authorization_card_fingerprint,
+		     bank_capture_id,
+		     capture_bank_operation_key,
+		     bank_refund_id,
+		     refund_bank_operation_key,
+		     bank_void_id,
+		     void_bank_operation_key,
+		     decline_reason,
+		     created_at,
+		     updated_at
+		 )
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		payment.ID(),
+		payment.OrderID(),
+		payment.CustomerID(),
+		payment.AmountCents(),
+		payment.Currency(),
+		payment.Status(),
+		nullableString(payment.BankAuthorizationID()),
+		nullableTime(payment.AuthorizationExpiresAt()),
+		payment.AuthorizationBankOperationKey(),
+		payment.AuthorizationCardFingerprint(),
+		nullableString(payment.BankCaptureID()),
+		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(payment.BankRefundID()),
+		nullableString(payment.RefundBankOperationKey()),
+		nullableString(payment.BankVoidID()),
+		nullableString(payment.VoidBankOperationKey()),
+		nullableString(string(payment.DeclineReason())),
+		payment.CreatedAt(),
+		payment.UpdatedAt(),
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return nil
+}
+
+func updatePayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+	result, err := exec.ExecContext(
+		ctx,
+		`UPDATE payments
+		    SET status = $2,
+		        bank_authorization_id = $3,
+		        authorization_expires_at = $4,
+		        authorization_bank_operation_key = $5,
+		        authorization_card_fingerprint = $6,
+		        bank_capture_id = $7,
+		        capture_bank_operation_key = $8,
+		        bank_refund_id = $9,
+		        refund_bank_operation_key = $10,
+		        bank_void_id = $11,
+		        void_bank_operation_key = $12,
+		        decline_reason = $13,
+		        updated_at = $14
+		  WHERE id = $1
+		    AND status = $15`,
+		payment.ID(),
+		payment.Status(),
+		nullableString(payment.BankAuthorizationID()),
+		nullableTime(payment.AuthorizationExpiresAt()),
+		payment.AuthorizationBankOperationKey(),
+		payment.AuthorizationCardFingerprint(),
+		nullableString(payment.BankCaptureID()),
+		nullableString(payment.CaptureBankOperationKey()),
+		nullableString(payment.BankRefundID()),
+		nullableString(payment.RefundBankOperationKey()),
+		nullableString(payment.BankVoidID()),
+		nullableString(payment.VoidBankOperationKey()),
+		nullableString(string(payment.DeclineReason())),
+		payment.UpdatedAt(),
+		expectedStatus,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
+}
+
+func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result sql.Result, id domain.PaymentID) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if affected == 0 {
+		_, err := findPaymentByID(ctx, exec, id, false)
+		if err != nil {
+			return err
+		}
+		return app.NewPaymentStatusConflictError(nil)
+	}
+	return nil
 }
 
 func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID, forUpdate bool) (*domain.Payment, error) {
@@ -773,80 +880,6 @@ func findPaymentByID(ctx context.Context, exec sqlExecutor, id domain.PaymentID,
 	return payment, nil
 }
 
-func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-	defer tx.Rollback()
-
-	if err := refreshExpiredAuthorizations(ctx, tx, query, now); err != nil {
-		return nil, err
-	}
-
-	rows, err := tx.QueryContext(
-		ctx,
-		`SELECT id,
-		        order_id,
-		        customer_id,
-		        amount_cents,
-		        currency,
-		        status,
-		        bank_authorization_id,
-		        authorization_expires_at,
-		        authorization_bank_operation_key,
-		        authorization_card_fingerprint,
-		        bank_capture_id,
-		        capture_bank_operation_key,
-		        bank_refund_id,
-		        refund_bank_operation_key,
-		        bank_void_id,
-		        void_bank_operation_key,
-		        decline_reason,
-		        created_at,
-		        updated_at
-		   FROM payments
-		  WHERE ($1 = '' OR order_id = $1)
-		    AND ($2 = '' OR customer_id = $2)
-		    AND ($3 = '' OR status = $3)
-		  ORDER BY created_at DESC, id DESC
-		  LIMIT 100`,
-		query.OrderID(),
-		query.CustomerID(),
-		query.Status(),
-	)
-	if err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-
-	var payments []*domain.Payment
-	for rows.Next() {
-		payment, err := scanPayment(rows)
-		if err != nil {
-			return nil, err
-		}
-		payments = append(payments, payment)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, app.NewInternalPaymentError(err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
-	return payments, nil
-}
-
-type paymentScanner interface {
-	Scan(dest ...any) error
-}
-
 func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 	var (
 		id                            domain.PaymentID
@@ -921,61 +954,53 @@ func scanPayment(scanner paymentScanner) (*domain.Payment, error) {
 	return payment, nil
 }
 
-func updatePayment(ctx context.Context, exec sqlExecutor, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
-	result, err := exec.ExecContext(
+func refreshExpiredAuthorizations(ctx context.Context, exec sqlExecutor, query app.SearchPaymentsQuery, now time.Time) error {
+	if now.IsZero() {
+		return nil
+	}
+	_, err := exec.ExecContext(
 		ctx,
 		`UPDATE payments
-		    SET status = $2,
-		        bank_authorization_id = $3,
-		        authorization_expires_at = $4,
-		        authorization_bank_operation_key = $5,
-		        authorization_card_fingerprint = $6,
-		        bank_capture_id = $7,
-		        capture_bank_operation_key = $8,
-		        bank_refund_id = $9,
-		        refund_bank_operation_key = $10,
-		        bank_void_id = $11,
-		        void_bank_operation_key = $12,
-		        decline_reason = $13,
-		        updated_at = $14
-		  WHERE id = $1
-		    AND status = $15`,
-		payment.ID(),
-		payment.Status(),
-		nullableString(payment.BankAuthorizationID()),
-		nullableTime(payment.AuthorizationExpiresAt()),
-		payment.AuthorizationBankOperationKey(),
-		payment.AuthorizationCardFingerprint(),
-		nullableString(payment.BankCaptureID()),
-		nullableString(payment.CaptureBankOperationKey()),
-		nullableString(payment.BankRefundID()),
-		nullableString(payment.RefundBankOperationKey()),
-		nullableString(payment.BankVoidID()),
-		nullableString(payment.VoidBankOperationKey()),
-		nullableString(string(payment.DeclineReason())),
-		payment.UpdatedAt(),
-		expectedStatus,
+		    SET status = $4,
+		        capture_bank_operation_key = NULL,
+		        void_bank_operation_key = NULL,
+		        updated_at = $3
+		  WHERE id IN (
+		        SELECT id
+		          FROM payments
+		         WHERE status = $5
+		           AND authorization_expires_at <= $3
+		           AND capture_bank_operation_key IS NULL
+		           AND void_bank_operation_key IS NULL
+		           AND ($1 = '' OR order_id = $1)
+		           AND ($2 = '' OR customer_id = $2)
+		  )`,
+		query.OrderID(),
+		query.CustomerID(),
+		now,
+		domain.PaymentStatusExpired,
+		domain.PaymentStatusAuthorized,
 	)
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return ensurePaymentUpdateAffected(ctx, exec, result, payment.ID())
-}
-
-func ensurePaymentUpdateAffected(ctx context.Context, exec sqlExecutor, result sql.Result, id domain.PaymentID) error {
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if affected == 0 {
-		_, err := findPaymentByID(ctx, exec, id, false)
-		if err != nil {
-			return err
-		}
-		return app.NewPaymentStatusConflictError(nil)
-	}
 	return nil
 }
+
+func refreshReadExpiration(ctx context.Context, exec sqlExecutor, payment *domain.Payment, now time.Time) error {
+	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
+		return nil
+	}
+	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
+		return nil
+	}
+	if err := payment.MarkExpired(now); err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	return updatePayment(ctx, exec, payment, domain.PaymentStatusAuthorized)
+}
+
+// Database boundary conversions.
 
 func nullableString(value string) any {
 	if value == "" {
@@ -1003,19 +1028,6 @@ func nullStringValue(value sql.NullString) string {
 		return ""
 	}
 	return value.String
-}
-
-type paymentResultSnapshot struct {
-	ID                     string    `json:"id"`
-	OrderID                string    `json:"order_id"`
-	CustomerID             string    `json:"customer_id"`
-	AmountCents            int64     `json:"amount"`
-	Currency               string    `json:"currency"`
-	Status                 string    `json:"status"`
-	DeclineReason          string    `json:"decline_reason,omitempty"`
-	AuthorizationExpiresAt time.Time `json:"authorization_expires_at"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 func encodePaymentResultSnapshot(result app.PaymentResult) ([]byte, error) {
