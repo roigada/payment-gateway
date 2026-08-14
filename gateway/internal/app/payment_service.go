@@ -114,8 +114,8 @@ type PaymentCommandResult struct {
 }
 
 type PaymentStore interface {
-	FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error)
-	Search(ctx context.Context, query SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error)
+	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
+	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
 	ClaimAuthorizationStart(ctx context.Context, request AuthorizationStartClaimRequest) (PaymentCommandClaim, error)
 	ClaimExistingPaymentCommand(ctx context.Context, request ExistingPaymentCommandClaimRequest) (PaymentCommandClaim, error)
 	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult, completedAt time.Time) error
@@ -726,7 +726,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
-	payment, err := s.store.FindByID(ctx, query.paymentID, s.clock.Now())
+	payment, err := s.store.FindByID(ctx, query.paymentID)
 	if err != nil {
 		return PaymentResult{}, ensurePaymentError(err)
 	}
@@ -734,7 +734,7 @@ func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) 
 }
 
 func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
-	payments, err := s.store.Search(ctx, query, s.clock.Now())
+	payments, err := s.store.Search(ctx, query)
 	if err != nil {
 		return nil, ensurePaymentError(err)
 	}

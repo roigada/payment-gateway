@@ -191,36 +191,11 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 	}
 	defer tx.Rollback()
 
-	if err := updatePayment(ctx, tx, claim.Payment(), claim.ExpectedStatus()); err != nil {
+	if err := persistPaymentTransition(ctx, tx, claim.Payment(), claim.ExpectedStatus()); err != nil {
 		return err
 	}
-	completion, err := tx.ExecContext(
-		ctx,
-		`UPDATE idempotency_records
-		    SET status = 'completed',
-		        http_status = $4,
-		        payment_result = $5::jsonb,
-		        completed_at = $6
-		  WHERE operation = $1
-		    AND key = $2
-		    AND request_fingerprint = $3
-		    AND status = 'in_progress'`,
-		claim.Operation(),
-		claim.Key(),
-		claim.RequestFingerprint(),
-		result.HTTPStatus,
-		string(paymentResult),
-		completedAt,
-	)
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	rowsAffected, err := completion.RowsAffected()
-	if err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if rowsAffected != 1 {
-		return app.NewPaymentIdempotencyConflictError(nil)
+	if err := completeIdempotencyRecord(ctx, tx, claim, result.HTTPStatus, paymentResult, completedAt); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return app.NewInternalPaymentError(err)
@@ -246,10 +221,7 @@ func (r *PaymentStore) ReleasePaymentCommand(ctx context.Context, claim app.Paym
 
 // Payment queries.
 
-func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
+func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, app.NewInternalPaymentError(err)
@@ -266,10 +238,7 @@ func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now ti
 	return payment, nil
 }
 
-func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
+func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, app.NewInternalPaymentError(err)
@@ -680,7 +649,7 @@ func insertPayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment) err
 	return nil
 }
 
-func updatePayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
+func persistPaymentTransition(ctx context.Context, tx *sql.Tx, payment *domain.Payment, expectedStatus domain.PaymentStatus) error {
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE payments
@@ -718,20 +687,48 @@ func updatePayment(ctx context.Context, tx *sql.Tx, payment *domain.Payment, exp
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
-	return ensurePaymentUpdateAffected(ctx, tx, result, payment.ID())
-}
-
-func ensurePaymentUpdateAffected(ctx context.Context, tx *sql.Tx, result sql.Result, id domain.PaymentID) error {
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return app.NewInternalPaymentError(err)
 	}
 	if affected == 0 {
-		_, err := findPaymentByID(ctx, tx, id, false)
+		_, err := findPaymentByID(ctx, tx, payment.ID(), false)
 		if err != nil {
 			return err
 		}
 		return app.NewPaymentStatusConflictError(nil)
+	}
+	return nil
+}
+
+func completeIdempotencyRecord(ctx context.Context, tx *sql.Tx, claim app.PaymentCommandClaim, httpStatus int, paymentResult []byte, completedAt time.Time) error {
+	completion, err := tx.ExecContext(
+		ctx,
+		`UPDATE idempotency_records
+		    SET status = 'completed',
+		        http_status = $4,
+		        payment_result = $5::jsonb,
+		        completed_at = $6
+		  WHERE operation = $1
+		    AND key = $2
+		    AND request_fingerprint = $3
+		    AND status = 'in_progress'`,
+		claim.Operation(),
+		claim.Key(),
+		claim.RequestFingerprint(),
+		httpStatus,
+		string(paymentResult),
+		completedAt,
+	)
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	rowsAffected, err := completion.RowsAffected()
+	if err != nil {
+		return app.NewInternalPaymentError(err)
+	}
+	if rowsAffected != 1 {
+		return app.NewPaymentIdempotencyConflictError(nil)
 	}
 	return nil
 }

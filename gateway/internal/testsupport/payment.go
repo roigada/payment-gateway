@@ -62,10 +62,7 @@ func (r *PaymentStore) AgeClaim(operation string, key string, claimedAt time.Tim
 	r.records[mapKey] = entry
 }
 
-func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
+func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID) (*domain.Payment, error) {
 	payment, err := r.findPayment(id)
 	if err != nil {
 		return nil, err
@@ -223,10 +220,7 @@ func (r *PaymentStore) CleanupCompletedIdempotencyRecords(_ context.Context, com
 	return removed, nil
 }
 
-func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error) {
-	if now.IsZero() {
-		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
-	}
+func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery) ([]*domain.Payment, error) {
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
 		if query.OrderID() != "" && payment.OrderID() != query.OrderID() {
