@@ -29,7 +29,7 @@ A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and c
 _Avoid_: Approved, held
 
 **Expired**:
-A **Payment** whose authorization was approved by the **Mock Bank** but can no longer be captured or voided because its authorization hold expired.
+A **Payment** whose authorization was approved by the **Mock Bank** and for which the **Mock Bank** has definitively confirmed that the authorization can no longer be captured or voided because its hold expired. The stored **Authorization Expiration Time** predicts this outcome but does not itself transition the **Payment** to Expired.
 _Avoid_: Timed out, stale, failed
 
 **Declined**:

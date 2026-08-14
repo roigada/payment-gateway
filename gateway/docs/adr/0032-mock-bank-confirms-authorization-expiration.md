@@ -1,0 +1,3 @@
+# Mock Bank confirms authorization expiration
+
+The gateway records the Mock Bank's Authorization Expiration Time but treats it as predictive metadata, not proof that an authorization can no longer be used. An Authorized Payment remains Authorized across reads and new Capture or Void commands regardless of that timestamp; those commands always call the Mock Bank, using their persisted Bank Operation Key for safe recovery. The gateway transitions a Payment to Expired only when the Mock Bank definitively returns `authorization_expired`, because synchronization with the bank is more important than avoiding a bank call based on a locally observed time.

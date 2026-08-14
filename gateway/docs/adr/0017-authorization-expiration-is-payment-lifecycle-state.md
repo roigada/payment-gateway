@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0032
+---
+
 # Authorization expiration is Payment lifecycle state
 
 The mock bank returns `expires_at` for approved authorizations, after which the authorization can no longer be captured or voided. The gateway models this as an **Expired** Payment status with a public authorization expiration timestamp, not as a private adapter detail. Expiration is enforced lazily on reads and capture/void commands rather than by a background worker: PaymentStore reads receive the current time and persist Expired before returning Payments when authorization expiration is discovered, commands persist the expired status before rejecting capture or void with the existing invalid-status conflict behavior, and command-time checks remain necessary even if a worker is added later. Brand-new capture and void attempts are blocked after expiration, but a retry with an already-saved bank operation key may still call the bank after expiration so the gateway can recover the result of a pre-expiration bank call after a crash. If the bank reports `authorization_expired` during capture or void despite the gateway pre-check, the gateway treats that as the same lifecycle outcome; other bank conflicts remain bank state conflicts because they indicate local state drift rather than normal time passage.

@@ -442,11 +442,7 @@ func (p *Payment) MarkAuthorized(bankAuthorizationID string, authorizationExpire
 	if authorizationExpiresAt.IsZero() {
 		return ErrInvalidAuthorizationExpirationTime
 	}
-	if !now.Before(authorizationExpiresAt) {
-		p.status = PaymentStatusExpired
-	} else {
-		p.status = PaymentStatusAuthorized
-	}
+	p.status = PaymentStatusAuthorized
 	p.bankAuthorizationID = bankAuthorizationID
 	p.authorizationExpiresAt = authorizationExpiresAt
 	p.declineReason = ""
@@ -466,10 +462,6 @@ func (p *Payment) MarkExpired(now time.Time) error {
 	p.voidBankOperationKey = ""
 	p.updatedAt = now
 	return nil
-}
-
-func (p *Payment) AuthorizationExpired(now time.Time) bool {
-	return p.status == PaymentStatusAuthorized && !now.IsZero() && !now.Before(p.authorizationExpiresAt)
 }
 
 func (p *Payment) MarkDeclined(declineReason DeclineReason, now time.Time) error {

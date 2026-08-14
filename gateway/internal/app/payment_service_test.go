@@ -190,7 +190,7 @@ func TestAuthorizePaymentReturnsPendingPaymentForUnknownBankOutcome(t *testing.T
 	assert.NotContains(t, saved.AuthorizationCardFingerprint(), "123")
 }
 
-func TestAuthorizePaymentStoresExpiredPaymentWhenBankAuthorizationAlreadyExpired(t *testing.T) {
+func TestAuthorizePaymentKeepsAuthorizedPaymentWhenBankAuthorizationExpirationTimeAlreadyPassed(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{
@@ -202,11 +202,11 @@ func TestAuthorizePaymentStoresExpiredPaymentWhenBankAuthorizationAlreadyExpired
 	result, err := service.AuthorizePayment(context.Background(), validAuthorizeCommand())
 	require.NoError(t, err)
 
-	assert.Equal(t, "expired", result.Payment.Status)
+	assert.Equal(t, "authorized", result.Payment.Status)
 	assert.Equal(t, now, result.Payment.AuthorizationExpiresAt)
 	saved, err := repo.FindByID(context.Background(), domain.PaymentID(result.Payment.ID), testNonExpiringStoreReadTime)
 	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 }
 
 func TestAuthorizePaymentStoresCardOnlyFingerprint(t *testing.T) {
@@ -291,7 +291,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToAuthorized(t *testing.T) {
 	}, bank.request)
 }
 
-func TestRetryAuthorizationResolvesPendingPaymentToExpiredWhenApprovedAuthorizationAlreadyExpired(t *testing.T) {
+func TestRetryAuthorizationKeepsAuthorizedPaymentWhenBankAuthorizationExpirationTimeAlreadyPassed(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	service := newPaymentService(repo, &bankAuthorizerFake{err: app.NewPaymentBankUnavailableError(errors.New("500"))}, now)
@@ -307,7 +307,7 @@ func TestRetryAuthorizationResolvesPendingPaymentToExpiredWhenApprovedAuthorizat
 	result, err := service.RetryAuthorization(context.Background(), validRetryAuthorizationCommand("pay_550e8400-e29b-41d4-a716-446655440000"))
 	require.NoError(t, err)
 
-	assert.Equal(t, "expired", result.Payment.Status)
+	assert.Equal(t, "authorized", result.Payment.Status)
 	assert.Equal(t, now.Add(time.Minute), result.Payment.AuthorizationExpiresAt)
 }
 
@@ -739,21 +739,6 @@ func TestPaymentOperationsRecordExpiredOutcomeWhenCaptureOrVoidDurablyExpiresPay
 		run       func(t *testing.T) *paymentOperationMetricsFake
 	}{
 		{
-			name:      "capture expires before bank call",
-			operation: app.CapturePaymentOperation,
-			run: func(t *testing.T) *paymentOperationMetricsFake {
-				t.Helper()
-				repo := testsupport.NewPaymentStore()
-				payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-				require.NoError(t, repo.SeedPayment(context.Background(), payment))
-				metrics := &paymentOperationMetricsFake{}
-				service := newPaymentServiceWithMetrics(repo, &bankFake{}, payment.AuthorizationExpiresAt(), metrics)
-				_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "capture-key-1"))
-				require.Error(t, err)
-				return metrics
-			},
-		},
-		{
 			name:      "capture bank reports expired",
 			operation: app.CapturePaymentOperation,
 			run: func(t *testing.T) *paymentOperationMetricsFake {
@@ -764,21 +749,6 @@ func TestPaymentOperationsRecordExpiredOutcomeWhenCaptureOrVoidDurablyExpiresPay
 				metrics := &paymentOperationMetricsFake{}
 				service := newPaymentServiceWithMetrics(repo, &bankFake{captureErr: app.NewPaymentAuthorizationExpiredError(nil)}, payment.AuthorizationExpiresAt().Add(-time.Minute), metrics)
 				_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "capture-key-1"))
-				require.Error(t, err)
-				return metrics
-			},
-		},
-		{
-			name:      "void expires before bank call",
-			operation: app.VoidPaymentOperation,
-			run: func(t *testing.T) *paymentOperationMetricsFake {
-				t.Helper()
-				repo := testsupport.NewPaymentStore()
-				payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
-				require.NoError(t, repo.SeedPayment(context.Background(), payment))
-				metrics := &paymentOperationMetricsFake{}
-				service := newPaymentServiceWithMetrics(repo, &bankAuthorizerFake{}, payment.AuthorizationExpiresAt(), metrics)
-				_, err := service.VoidPayment(context.Background(), mustVoidPaymentCommand(t, string(payment.ID()), "void-key-1"))
 				require.Error(t, err)
 				return metrics
 			},
@@ -1089,7 +1059,7 @@ func TestAppInputConstructorsReturnPaymentErrors(t *testing.T) {
 	}
 }
 
-func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
+func TestGetPaymentKeepsAuthorizedStatusWhenAuthorizationExpirationTimePasses(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := newAuthorizedDomainPayment(t, authorizedAt)
@@ -1099,12 +1069,12 @@ func TestGetPaymentPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
 	result, err := service.GetPayment(context.Background(), mustGetPaymentQuery(t, string(payment.ID())))
 
 	require.NoError(t, err)
-	assert.Equal(t, "expired", result.Status)
+	assert.Equal(t, "authorized", result.Status)
 	assert.Equal(t, payment.AuthorizationExpiresAt(), result.AuthorizationExpiresAt)
-	assert.Equal(t, payment.AuthorizationExpiresAt(), result.UpdatedAt)
+	assert.Equal(t, authorizedAt, result.UpdatedAt)
 	saved, err := repo.FindByID(context.Background(), payment.ID(), testNonExpiringStoreReadTime)
 	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
 }
 
 func TestVoidPaymentCallsBankStoresVoidedPaymentAndReturnsPublicResult(t *testing.T) {
@@ -1359,7 +1329,7 @@ func TestSearchPaymentsNormalizesFiltersAndReturnsPublicResults(t *testing.T) {
 	assert.Equal(t, "authorized", results[0].Status)
 }
 
-func TestSearchPaymentsRefreshesExpiredAuthorizationsBeforeFiltering(t *testing.T) {
+func TestSearchPaymentsKeepsAuthorizedPaymentsAfterAuthorizationExpirationTime(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	payment := mustAuthorizedPayment(t, "pay_550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", authorizedAt)
@@ -1368,12 +1338,12 @@ func TestSearchPaymentsRefreshesExpiredAuthorizationsBeforeFiltering(t *testing.
 
 	authorized, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-1", "", "authorized"))
 	require.NoError(t, err)
-	assert.Empty(t, authorized)
+	require.Len(t, authorized, 1)
+	assert.Equal(t, "authorized", authorized[0].Status)
 
 	expired, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-1", "", "expired"))
 	require.NoError(t, err)
-	require.Len(t, expired, 1)
-	assert.Equal(t, "expired", expired[0].Status)
+	assert.Empty(t, expired)
 }
 
 func TestNewSearchPaymentsQueryRejectsInvalidFilters(t *testing.T) {
@@ -1447,20 +1417,21 @@ func TestNewCapturePaymentCommandRequiresIdempotencyKey(t *testing.T) {
 	assert.Zero(t, bank.captureRequest)
 }
 
-func TestCapturePaymentExpiresPaymentBeforeNewBankCallWhenAuthorizationExpired(t *testing.T) {
+func TestCapturePaymentCallsBankWhenAuthorizationExpirationTimeHasPassed(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	payment := newAuthorizedDomainPayment(t, time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, repo.SeedPayment(context.Background(), payment))
 	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
 	service := newPaymentService(repo, bank, payment.AuthorizationExpiresAt())
 
-	_, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
+	result, err := service.CapturePayment(context.Background(), mustCapturePaymentCommand(t, string(payment.ID()), "public-capture-key-1"))
 
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
-	assert.Zero(t, bank.captureCalls)
+	require.NoError(t, err)
+	assert.Equal(t, "captured", result.Payment.Status)
+	assert.Equal(t, 1, bank.captureCalls)
 	saved, findErr := repo.FindByID(context.Background(), payment.ID(), testNonExpiringStoreReadTime)
 	require.NoError(t, findErr)
-	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
+	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Equal(t, payment.AuthorizationExpiresAt(), saved.UpdatedAt())
 }
 
@@ -1694,7 +1665,7 @@ func TestCapturePaymentRecoveredClaimPaymentStatusConflictRecordsConflict(t *tes
 	}, metrics.recoveryRecords)
 }
 
-func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(t *testing.T) {
+func TestSearchPaymentsKeepsAllMatchingAuthorizedPaymentsAfterAuthorizationExpirationTime(t *testing.T) {
 	repo := testsupport.NewPaymentStore()
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	var expiresAt time.Time
@@ -1707,12 +1678,12 @@ func TestSearchPaymentsRefreshesAllMatchingExpiredAuthorizationsBeforeFiltering(
 
 	authorized, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-expired", "", "authorized"))
 	require.NoError(t, err)
-	assert.Empty(t, authorized)
+	require.Len(t, authorized, 100)
+	assert.Equal(t, "authorized", authorized[0].Status)
 
 	expired, err := service.SearchPayments(context.Background(), mustSearchPaymentsQuery(t, "order-expired", "", "expired"))
 	require.NoError(t, err)
-	require.Len(t, expired, 100)
-	assert.Equal(t, "expired", expired[0].Status)
+	assert.Empty(t, expired)
 }
 
 func TestCapturePaymentReplaysCapturedPaymentForSameIdempotencyKeyAndPayment(t *testing.T) {

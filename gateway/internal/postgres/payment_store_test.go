@@ -334,7 +334,7 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 	assert.Equal(t, otherOrder.ID(), byCustomer[1].ID())
 }
 
-func TestPaymentStoreFindByIDPersistsExpiredStatusWhenAuthorizationExpires(t *testing.T) {
+func TestPaymentStoreFindByIDKeepsAuthorizedStatusWhenAuthorizationExpirationTimePasses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -349,16 +349,16 @@ func TestPaymentStoreFindByIDPersistsExpiredStatusWhenAuthorizationExpires(t *te
 	saved, err := store.FindByID(ctx, payment.ID(), payment.AuthorizationExpiresAt())
 	require.NoError(t, err)
 
-	assert.Equal(t, domain.PaymentStatusExpired, saved.Status())
-	assert.True(t, saved.UpdatedAt().Equal(payment.AuthorizationExpiresAt()), "updated_at should be the read expiration instant")
+	assert.Equal(t, domain.PaymentStatusAuthorized, saved.Status())
+	assert.True(t, saved.UpdatedAt().Equal(authorizedAt), "a read must not change the payment")
 
 	persisted, err := store.FindByID(ctx, payment.ID(), testNonExpiringBusinessTime)
 	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusExpired, persisted.Status())
-	assert.True(t, persisted.UpdatedAt().Equal(payment.AuthorizationExpiresAt()), "expired status should be persisted by the read")
+	assert.Equal(t, domain.PaymentStatusAuthorized, persisted.Status())
+	assert.True(t, persisted.UpdatedAt().Equal(authorizedAt), "a read must not persist an expiry transition")
 }
 
-func TestPaymentStoreSearchRefreshesExpiredAuthorizationsBeforeStatusFilter(t *testing.T) {
+func TestPaymentStoreSearchKeepsAuthorizedPaymentsAfterAuthorizationExpirationTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -373,19 +373,13 @@ func TestPaymentStoreSearchRefreshesExpiredAuthorizationsBeforeStatusFilter(t *t
 	insertPaymentFixture(t, db, stillAuthorized)
 	readNow := expiredBeforeRead.AuthorizationExpiresAt()
 
-	expiredQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "expired")
-	require.NoError(t, err)
-	expired, err := store.Search(ctx, expiredQuery, readNow)
-	require.NoError(t, err)
-	require.Len(t, expired, 1)
-	assert.Equal(t, expiredBeforeRead.ID(), expired[0].ID())
-	assert.Equal(t, domain.PaymentStatusExpired, expired[0].Status())
-
 	authorizedQuery, err := app.NewSearchPaymentsQuery("order-1", "customer-1", "authorized")
 	require.NoError(t, err)
 	authorized, err := store.Search(ctx, authorizedQuery, readNow)
 	require.NoError(t, err)
-	assert.Empty(t, authorized)
+	require.Len(t, authorized, 1)
+	assert.Equal(t, expiredBeforeRead.ID(), authorized[0].ID())
+	assert.Equal(t, domain.PaymentStatusAuthorized, authorized[0].Status())
 
 	outOfScope, err := store.FindByID(ctx, stillAuthorized.ID(), testNonExpiringBusinessTime)
 	require.NoError(t, err)

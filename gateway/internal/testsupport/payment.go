@@ -70,9 +70,6 @@ func (r *PaymentStore) FindByID(_ context.Context, id domain.PaymentID, now time
 	if err != nil {
 		return nil, err
 	}
-	if err := r.refreshReadExpiration(payment, now); err != nil {
-		return nil, err
-	}
 	return clonePayment(payment)
 }
 
@@ -91,34 +88,6 @@ func (r *PaymentStore) saveIfStatus(_ context.Context, payment *domain.Payment, 
 	}
 	if existing.Status() != expectedStatus {
 		return app.NewPaymentStatusConflictError(nil)
-	}
-	return r.update(payment)
-}
-
-func (r *PaymentStore) refreshExpiredAuthorizations(query app.SearchPaymentsQuery, now time.Time) error {
-	for _, payment := range r.payments {
-		if query.OrderID() != "" && payment.OrderID() != query.OrderID() {
-			continue
-		}
-		if query.CustomerID() != "" && payment.CustomerID() != query.CustomerID() {
-			continue
-		}
-		if err := r.refreshReadExpiration(payment, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *PaymentStore) refreshReadExpiration(payment *domain.Payment, now time.Time) error {
-	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
-		return nil
-	}
-	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
-		return nil
-	}
-	if err := payment.MarkExpired(now); err != nil {
-		return err
 	}
 	return r.update(payment)
 }
@@ -221,18 +190,6 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
 		return app.PaymentCommandClaim{}, app.NewPaymentStatusConflictError(nil)
 	}
-	if shouldExpireBeforeNewBankCall(request, payment) {
-		if err := payment.MarkExpired(request.Now()); err != nil {
-			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-			return app.PaymentCommandClaim{}, app.NewInternalPaymentError(err)
-		}
-		if err := r.saveIfStatus(context.Background(), payment, domain.PaymentStatusAuthorized); err != nil {
-			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-			return app.PaymentCommandClaim{}, err
-		}
-		delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
-		return app.PaymentCommandClaim{}, app.NewPaymentAuthorizationExpiredError(nil)
-	}
 	if request.BankOperationKeyKind() != "" {
 		if err := setBankOperationKey(payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
 			delete(r.records, idempotencyMapKey(request.Operation(), request.Key()))
@@ -244,20 +201,6 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(_ context.Context, request ap
 		}
 	}
 	return app.NewClaimedPaymentCommand(request, payment), nil
-}
-
-func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) bool {
-	if request.Now().IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(request.Now()) {
-		return false
-	}
-	switch request.BankOperationKeyKind() {
-	case app.BankOperationKeyCapture:
-		return payment.CaptureBankOperationKey() == ""
-	case app.BankOperationKeyVoid:
-		return payment.VoidBankOperationKey() == ""
-	default:
-		return false
-	}
 }
 
 func (r *PaymentStore) CompletePaymentCommand(_ context.Context, claim app.PaymentCommandClaim, result app.PaymentCommandResult, completedAt time.Time) error {
@@ -293,10 +236,6 @@ func (r *PaymentStore) Search(_ context.Context, query app.SearchPaymentsQuery, 
 	if now.IsZero() {
 		return nil, app.NewInternalPaymentError(errors.New("payment store business time is required"))
 	}
-	if err := r.refreshExpiredAuthorizations(query, now); err != nil {
-		return nil, err
-	}
-
 	var matches []*domain.Payment
 	for _, payment := range r.payments {
 		if query.OrderID() != "" && payment.OrderID() != query.OrderID() {

@@ -154,12 +154,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 		if err := validateAcquiredPaymentCommand(request, payment); err != nil {
 			return app.PaymentCommandClaim{}, err
 		}
-		if shouldExpireBeforeNewBankCall(request, payment) {
-			if err := expirePaymentBeforeNewBankCall(ctx, tx, request, payment); err != nil {
-				return app.PaymentCommandClaim{}, err
-			}
-			claimErr = app.NewPaymentAuthorizationExpiredError(nil)
-		} else if request.BankOperationKeyKind() != "" {
+		if request.BankOperationKeyKind() != "" {
 			if err := ensureBankOperationKey(ctx, tx, payment, request.BankOperationKeyKind(), request.BankOperationKey()); err != nil {
 				return app.PaymentCommandClaim{}, err
 			}
@@ -168,9 +163,7 @@ func (r *PaymentStore) ClaimExistingPaymentCommand(ctx context.Context, request 
 				return app.PaymentCommandClaim{}, err
 			}
 		}
-		if claimErr == nil {
-			claim = app.NewClaimedPaymentCommand(request, payment)
-		}
+		claim = app.NewClaimedPaymentCommand(request, payment)
 	case idempotencyClaimRecovered:
 		payment, err = findRecoveredPayment(ctx, tx, record.paymentID, true)
 		if err != nil {
@@ -282,9 +275,6 @@ func (r *PaymentStore) FindByID(ctx context.Context, id domain.PaymentID, now ti
 	if err != nil {
 		return nil, err
 	}
-	if err := refreshReadExpiration(ctx, tx, payment, now); err != nil {
-		return nil, err
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, app.NewInternalPaymentError(err)
 	}
@@ -300,10 +290,6 @@ func (r *PaymentStore) Search(ctx context.Context, query app.SearchPaymentsQuery
 		return nil, app.NewInternalPaymentError(err)
 	}
 	defer tx.Rollback()
-
-	if err := refreshExpiredAuthorizations(ctx, tx, query, now); err != nil {
-		return nil, app.NewInternalPaymentError(err)
-	}
 
 	rows, err := tx.QueryContext(
 		ctx,
@@ -561,30 +547,6 @@ func validateAcquiredPaymentCommand(request app.ExistingPaymentCommandClaimReque
 		return app.NewPaymentStatusConflictError(nil)
 	}
 	return nil
-}
-
-func expirePaymentBeforeNewBankCall(ctx context.Context, tx *sql.Tx, request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) error {
-	if err := payment.MarkExpired(request.Now()); err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	if err := updatePayment(ctx, tx, payment, domain.PaymentStatusAuthorized); err != nil {
-		return err
-	}
-	return deleteIdempotencyClaim(ctx, tx, request.Operation(), request.Key())
-}
-
-func shouldExpireBeforeNewBankCall(request app.ExistingPaymentCommandClaimRequest, payment *domain.Payment) bool {
-	if request.Now().IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(request.Now()) {
-		return false
-	}
-	switch request.BankOperationKeyKind() {
-	case app.BankOperationKeyCapture:
-		return payment.CaptureBankOperationKey() == ""
-	case app.BankOperationKeyVoid:
-		return payment.VoidBankOperationKey() == ""
-	default:
-		return false
-	}
 }
 
 func ensureBankOperationKey(ctx context.Context, tx *sql.Tx, payment *domain.Payment, operation app.BankOperationKeyKind, newKey string) error {
@@ -958,52 +920,6 @@ func scanPayment(rows *sql.Rows) (*domain.Payment, error) {
 		return nil, err
 	}
 	return payment, nil
-}
-
-func refreshExpiredAuthorizations(ctx context.Context, tx *sql.Tx, query app.SearchPaymentsQuery, now time.Time) error {
-	if now.IsZero() {
-		return nil
-	}
-	_, err := tx.ExecContext(
-		ctx,
-		`UPDATE payments
-		    SET status = $4,
-		        capture_bank_operation_key = NULL,
-		        void_bank_operation_key = NULL,
-		        updated_at = $3
-		  WHERE id IN (
-		        SELECT id
-		          FROM payments
-		         WHERE status = $5
-		           AND authorization_expires_at <= $3
-		           AND capture_bank_operation_key IS NULL
-		           AND void_bank_operation_key IS NULL
-		           AND ($1 = '' OR order_id = $1)
-		           AND ($2 = '' OR customer_id = $2)
-		  )`,
-		query.OrderID(),
-		query.CustomerID(),
-		now,
-		domain.PaymentStatusExpired,
-		domain.PaymentStatusAuthorized,
-	)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func refreshReadExpiration(ctx context.Context, tx *sql.Tx, payment *domain.Payment, now time.Time) error {
-	if now.IsZero() || payment.Status() != domain.PaymentStatusAuthorized || !payment.AuthorizationExpired(now) {
-		return nil
-	}
-	if payment.CaptureBankOperationKey() != "" || payment.VoidBankOperationKey() != "" {
-		return nil
-	}
-	if err := payment.MarkExpired(now); err != nil {
-		return app.NewInternalPaymentError(err)
-	}
-	return updatePayment(ctx, tx, payment, domain.PaymentStatusAuthorized)
 }
 
 // Database boundary conversions.
