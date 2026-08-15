@@ -15,7 +15,7 @@ import (
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
-	"github.com/roigada/payment-gateway/internal/testsupport"
+	"github.com/roigada/payment-gateway/internal/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,9 +115,7 @@ func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
 	metricsListener := newTestListener(t)
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
 	publicHandler := newRuntimeHandler(t, readiness)
-	metricsHandler := newMetricsHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("# gateway metrics\n"))
-	}))
+	metricsHandler := observability.NewHandler(observability.NewRegistry())
 	shutdownSignals := make(chan os.Signal, 1)
 	result := make(chan error, 1)
 	go func() {
@@ -138,7 +136,7 @@ func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
 	body, err := io.ReadAll(metrics.Body)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, metrics.StatusCode)
-	assert.Equal(t, "# gateway metrics\n", string(body))
+	assert.NotEmpty(t, body)
 	metricsFallback, err := http.Get("http://" + metricsListener.Addr().String() + "/not-metrics")
 	require.NoError(t, err)
 	defer metricsFallback.Body.Close()
@@ -174,14 +172,12 @@ func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 		require.Equal(t, http.StatusTooManyRequests, response.Code)
 	}
 
-	metricsHandler := newMetricsHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("# gateway metrics\n"))
-	}))
+	metricsHandler := observability.NewHandler(observability.NewRegistry())
 	metrics := httptest.NewRecorder()
 	metricsHandler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	assert.Equal(t, http.StatusOK, metrics.Code)
-	assert.Equal(t, "# gateway metrics\n", metrics.Body.String())
+	assert.NotEmpty(t, metrics.Body.String())
 }
 
 func TestServeUntilShutdownStopsPeerWhenListenerFails(t *testing.T) {
@@ -242,81 +238,9 @@ func TestServeUntilShutdownRequiresLogger(t *testing.T) {
 	require.EqualError(t, err, "runtime logger is required")
 }
 
-func TestRunIdempotencyReplayCleanupUsesReplayWindowRecordsOutcomesAndStopsWithContext(t *testing.T) {
-	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
-	cutoffs := make(chan time.Time, 3)
-	cleanupCalls := 0
-	store := cleanupPaymentStore{
-		PaymentStore: testsupport.NewPaymentStore(),
-		cleanup: func(_ context.Context, completedBefore time.Time) (int, error) {
-			cutoffs <- completedBefore
-			cleanupCalls++
-			switch cleanupCalls {
-			case 1:
-				return 0, assert.AnError
-			case 2:
-				return 0, nil
-			default:
-				return 3, nil
-			}
-		},
-	}
-	logs := &bytes.Buffer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	ticker := &cleanupTickerFake{ticks: make(chan time.Time, 3)}
-	metrics := &cleanupMetricsFake{}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runIdempotencyReplayCleanup(ctx, store, testsupport.FixedClock{Time: now}, slog.New(slog.NewJSONHandler(logs, nil)), metrics, defaultIdempotencyReplayWindow, ticker)
-	}()
-
-	ticker.ticks <- now
-	ticker.ticks <- now
-	ticker.ticks <- now
-	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
-	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
-	assert.Equal(t, now.Add(-defaultIdempotencyReplayWindow), requireReceive(t, cutoffs))
-	cancel()
-	requireReceive(t, done)
-	assert.True(t, ticker.stopped)
-	assert.Equal(t, []cleanupMetricCall{{result: idempotencyReplayCleanupFailed}, {result: idempotencyReplayCleanupEmpty}, {result: idempotencyReplayCleanupCompleted, removed: 3}}, metrics.calls)
-	assert.Contains(t, logs.String(), "idempotency replay cleanup failed")
-	assert.Contains(t, logs.String(), "idempotency replay cleanup completed")
-	assert.NotContains(t, logs.String(), assert.AnError.Error())
-}
-
 type readinessCheckerFunc func(context.Context) error
 
 func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }
-
-type cleanupPaymentStore struct {
-	app.PaymentStore
-	cleanup func(context.Context, time.Time) (int, error)
-}
-
-func (s cleanupPaymentStore) CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error) {
-	return s.cleanup(ctx, completedBefore)
-}
-
-type cleanupTickerFake struct {
-	ticks   chan time.Time
-	stopped bool
-}
-
-func (t *cleanupTickerFake) Chan() <-chan time.Time { return t.ticks }
-func (t *cleanupTickerFake) Stop()                  { t.stopped = true }
-
-type cleanupMetricCall struct {
-	result  string
-	removed int
-}
-
-type cleanupMetricsFake struct{ calls []cleanupMetricCall }
-
-func (m *cleanupMetricsFake) RecordIdempotencyReplayCleanup(result string, removed int) {
-	m.calls = append(m.calls, cleanupMetricCall{result: result, removed: removed})
-}
 
 type runtimeHTTPAPIMetricsFake struct{}
 

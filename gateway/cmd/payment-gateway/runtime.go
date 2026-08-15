@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
+	"github.com/roigada/payment-gateway/internal/idempotencycleanup"
 	"github.com/roigada/payment-gateway/internal/mockbank"
 	"github.com/roigada/payment-gateway/internal/observability"
 	"github.com/roigada/payment-gateway/internal/postgres"
@@ -36,15 +36,24 @@ func run(cfg config, logger *slog.Logger) error {
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	paymentStore := postgres.NewPaymentStore(db)
 	paymentClock := app.SystemClock{}
-	httpRuntime, err := buildHTTPRuntime(db, paymentStore, readiness, logger, cfg.httpHandler(), paymentClock)
+	metricsRuntime, err := buildMetricsRuntime(db, paymentStore)
 	if err != nil {
 		return err
 	}
+	paymentService, err := buildPaymentService(paymentStore, metricsRuntime, cfg.httpHandler(), paymentClock)
+	if err != nil {
+		return err
+	}
+	httpRuntime, err := buildHTTPRuntime(readiness, logger, cfg.httpHandler(), paymentService, metricsRuntime)
+	if err != nil {
+		return err
+	}
+	cleanupRunner := idempotencycleanup.New(paymentService, metricsRuntime.cleanupMetrics, logger, cfg.Runtime.IdempotencyReplayCleanupInterval)
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	cleanupDone := make(chan struct{})
 	go func() {
 		defer close(cleanupDone)
-		runIdempotencyReplayCleanup(cleanupCtx, paymentStore, paymentClock, logger, httpRuntime.cleanupMetrics, cfg.Runtime.IdempotencyReplayWindow, timeTicker{time.NewTicker(cfg.Runtime.IdempotencyReplayCleanupInterval)})
+		cleanupRunner.Run(cleanupCtx)
 	}()
 	defer func() {
 		cancelCleanup()
@@ -67,13 +76,12 @@ func run(cfg config, logger *slog.Logger) error {
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.HTTP)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
+	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP.ServerConfig)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.Metrics.ServerConfig)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
 }
 
 type httpRuntime struct {
 	handler        http.Handler
 	metricsHandler http.Handler
-	cleanupMetrics *observability.IdempotencyReplayCleanupMetrics
 }
 
 type httpAPIMetrics struct {
@@ -81,22 +89,11 @@ type httpAPIMetrics struct {
 	*observability.RateLimitMetrics
 }
 
-func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentClock app.Clock) (httpRuntime, error) {
+func buildHTTPRuntime(readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentService *app.PaymentService, metricsRuntime metricsRuntime) (httpRuntime, error) {
 	authenticator, err := cfg.Auth.authenticator()
 	if err != nil {
 		return httpRuntime{}, err
 	}
-	metricsRuntime, err := buildMetricsRuntime(db, paymentStore)
-	if err != nil {
-		return httpRuntime{}, err
-	}
-
-	mockBank, err := newMockBankClient(cfg.MockBank, metricsRuntime.mockBankMetrics)
-	if err != nil {
-		return httpRuntime{}, err
-	}
-
-	paymentService := app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metricsRuntime.paymentOperationMetrics, paymentClock, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter)
 	rateLimiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
 	if err != nil {
 		return httpRuntime{}, err
@@ -112,7 +109,15 @@ func buildHTTPRuntime(db *sql.DB, paymentStore *postgres.PaymentStore, readiness
 	if err != nil {
 		return httpRuntime{}, err
 	}
-	return httpRuntime{handler: handler, metricsHandler: metricsRuntime.handler, cleanupMetrics: metricsRuntime.cleanupMetrics}, nil
+	return httpRuntime{handler: handler, metricsHandler: metricsRuntime.handler}, nil
+}
+
+func buildPaymentService(paymentStore *postgres.PaymentStore, metrics metricsRuntime, cfg httpHandlerConfig, clock app.Clock) (*app.PaymentService, error) {
+	mockBank, err := newMockBankClient(cfg.MockBank, metrics.mockBankMetrics)
+	if err != nil {
+		return nil, err
+	}
+	return app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metrics.paymentOperationMetrics, clock, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter), nil
 }
 
 type metricsRuntime struct {
@@ -161,7 +166,7 @@ func buildMetricsRuntime(db *sql.DB, paymentStore *postgres.PaymentStore) (metri
 		return metricsRuntime{}, err
 	}
 	return metricsRuntime{
-		handler:                 newMetricsHandler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{})),
+		handler:                 observability.NewHandler(registry),
 		httpMetrics:             httpMetrics,
 		rateLimitMetrics:        rateLimitMetrics,
 		mockBankMetrics:         mockBankMetrics,
@@ -185,17 +190,11 @@ func newMockBankClient(cfg MockBankConfig, metrics *observability.MockBankMetric
 	})
 }
 
-func newHTTPServer(handler http.Handler, cfg HTTPConfig) *http.Server {
+func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {
 	return &http.Server{
 		Handler: handler, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
 	}
-}
-
-func newMetricsHandler(metrics http.Handler) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", metrics)
-	return mux
 }
 
 type readinessChecker interface {

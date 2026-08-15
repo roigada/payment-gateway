@@ -63,13 +63,16 @@ HTTP_READ_HEADER_TIMEOUT           optional HTTP header-read timeout, defaults t
 HTTP_READ_TIMEOUT                  optional HTTP read timeout, defaults to 15s
 HTTP_WRITE_TIMEOUT                 optional HTTP write timeout, defaults to 15s
 HTTP_IDLE_TIMEOUT                  optional HTTP idle timeout, defaults to 60s
+METRICS_READ_HEADER_TIMEOUT        optional metrics header-read timeout, defaults to 5s
+METRICS_READ_TIMEOUT               optional metrics read timeout, defaults to 5s
+METRICS_WRITE_TIMEOUT              optional metrics write timeout, defaults to 10s
+METRICS_IDLE_TIMEOUT               optional metrics idle timeout, defaults to 30s
 HTTP_MAX_REQUEST_BODY_BYTES        optional request body limit, defaults to 65536
 RATE_LIMIT_READ_REQUESTS_PER_SECOND  optional read quota refill rate, defaults to 30
 RATE_LIMIT_READ_BURST                optional read quota burst, defaults to 60
 RATE_LIMIT_WRITE_REQUESTS_PER_SECOND optional write quota refill rate, defaults to 5
 RATE_LIMIT_WRITE_BURST               optional write quota burst, defaults to 10
 IDEMPOTENCY_CLAIM_STUCK_AFTER     optional stuck idempotency claim threshold, defaults to 5m
-IDEMPOTENCY_REPLAY_WINDOW          optional Idempotency Replay Window, defaults to 24h
 IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL optional completed replay cleanup interval, defaults to 1h
 SHUTDOWN_TIMEOUT                  optional graceful shutdown deadline, defaults to 30s
 MOCK_BANK_BASE_URL                required Mock Bank base URL
@@ -89,7 +92,6 @@ export DATABASE_CONNECTION_MAX_LIFETIME='30m'
 export DATABASE_CONNECTION_MAX_IDLE_TIME='5m'
 export DATABASE_STARTUP_TIMEOUT='5s'
 export IDEMPOTENCY_CLAIM_STUCK_AFTER='5m'
-export IDEMPOTENCY_REPLAY_WINDOW='24h'
 export IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL='1h'
 export SHUTDOWN_TIMEOUT='30s'
 export LOG_LEVEL='info'
@@ -108,6 +110,10 @@ export HTTP_READ_HEADER_TIMEOUT='5s'
 export HTTP_READ_TIMEOUT='15s'
 export HTTP_WRITE_TIMEOUT='15s'
 export HTTP_IDLE_TIMEOUT='60s'
+export METRICS_READ_HEADER_TIMEOUT='5s'
+export METRICS_READ_TIMEOUT='5s'
+export METRICS_WRITE_TIMEOUT='10s'
+export METRICS_IDLE_TIMEOUT='30s'
 export HTTP_MAX_REQUEST_BODY_BYTES='65536'
 export FINGERPRINT_SECRET='local-development-secret'
 export SERVICE_CREDENTIAL_HMAC_KEY='replace-with-a-base64url-encoded-32-byte-key'
@@ -133,7 +139,7 @@ go run ./cmd/service-credential -hmac-key "$SERVICE_CREDENTIAL_HMAC_KEY"
 
 Store the printed raw credential only in the Order Service secret store. Put its printed `digest=scopes` entry in `ORDER_SERVICE_CREDENTIALS`; comma-separate entries to keep overlapping active credentials during planned rotation. The gateway never needs the raw credential. Revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; the HTTP-only root Compose demo is a trusted local-development exception.
 
-Completed payment commands have a 24-hour Idempotency Replay Window by default. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
+Completed payment commands have an Idempotency Replay Window of at least 24 hours. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
 ## Database
 
@@ -170,7 +176,6 @@ DATABASE_CONNECTION_MAX_LIFETIME=30m
 DATABASE_CONNECTION_MAX_IDLE_TIME=5m
 DATABASE_STARTUP_TIMEOUT=5s
 IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
-IDEMPOTENCY_REPLAY_WINDOW=24h
 IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL=1h
 SHUTDOWN_TIMEOUT=30s
 LOG_LEVEL=info
@@ -189,6 +194,10 @@ HTTP_READ_HEADER_TIMEOUT=5s
 HTTP_READ_TIMEOUT=15s
 HTTP_WRITE_TIMEOUT=15s
 HTTP_IDLE_TIMEOUT=60s
+METRICS_READ_HEADER_TIMEOUT=5s
+METRICS_READ_TIMEOUT=5s
+METRICS_WRITE_TIMEOUT=10s
+METRICS_IDLE_TIMEOUT=30s
 HTTP_MAX_REQUEST_BODY_BYTES=65536
 FINGERPRINT_SECRET=${FINGERPRINT_SECRET}
 SERVICE_CREDENTIAL_HMAC_KEY=${SERVICE_CREDENTIAL_HMAC_KEY}

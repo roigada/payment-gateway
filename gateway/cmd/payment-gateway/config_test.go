@@ -19,10 +19,10 @@ const (
 
 func validConfig() config {
 	return config{
-		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout, IdempotencyReplayWindow: defaultIdempotencyReplayWindow, IdempotencyReplayCleanupInterval: defaultIdempotencyReplayCleanupInterval},
+		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout, IdempotencyReplayCleanupInterval: defaultIdempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
-		HTTP:     HTTPConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}},
-		Metrics:  MetricsConfig{Addr: defaultMetricsAddr},
+		HTTP:     HTTPConfig{ServerConfig: ServerConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout}, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}},
+		Metrics:  MetricsConfig{ServerConfig: ServerConfig{Addr: defaultMetricsAddr, ReadHeaderTimeout: defaultMetricsReadHeaderTimeout, ReadTimeout: defaultMetricsReadTimeout, WriteTimeout: defaultMetricsWriteTimeout, IdleTimeout: defaultMetricsIdleTimeout}},
 		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
 		Auth: AuthConfig{HMACKey: []byte(validCredentialKey), Credentials: []serviceauth.Credential{
 			{Digest: serviceauth.Digest([]byte(validCredentialKey), "test-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
@@ -60,8 +60,8 @@ func TestConfigValidate(t *testing.T) {
 		{"mock bank retry attempt", func(c *config) { c.MockBank.RetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank retry budget", func(c *config) { c.MockBank.RetryAttemptTimeout = c.Payment.CommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
 		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.Payment.CommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
+		{"metrics read timeout", func(c *config) { c.Metrics.ReadTimeout = 0 }, "METRICS_READ_TIMEOUT must be a positive duration"},
 		{"log level", func(c *config) { c.Runtime.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
-		{"idempotency replay window", func(c *config) { c.Runtime.IdempotencyReplayWindow = 0 }, "IDEMPOTENCY_REPLAY_WINDOW must be a positive duration"},
 		{"idempotency replay cleanup interval", func(c *config) { c.Runtime.IdempotencyReplayCleanupInterval = 0 }, "IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration"},
 	}
 	for _, tt := range tests {
@@ -85,6 +85,7 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
 	assert.Equal(t, defaultMetricsAddr, cfg.Metrics.Addr)
+	assert.Equal(t, ServerConfig{Addr: defaultMetricsAddr, ReadHeaderTimeout: defaultMetricsReadHeaderTimeout, ReadTimeout: defaultMetricsReadTimeout, WriteTimeout: defaultMetricsWriteTimeout, IdleTimeout: defaultMetricsIdleTimeout}, cfg.Metrics.ServerConfig)
 	assert.Equal(t, validDatabaseURL, cfg.Database.URL)
 	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
@@ -95,7 +96,6 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultMockBankRetryAttemptTimeout, cfg.MockBank.RetryAttemptTimeout)
 	assert.Equal(t, defaultLogLevel, cfg.Runtime.LogLevel)
 	assert.Equal(t, defaultShutdownTimeout, cfg.Runtime.ShutdownTimeout)
-	assert.Equal(t, defaultIdempotencyReplayWindow, cfg.Runtime.IdempotencyReplayWindow)
 	assert.Equal(t, defaultIdempotencyReplayCleanupInterval, cfg.Runtime.IdempotencyReplayCleanupInterval)
 }
 
@@ -114,8 +114,8 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	t.Setenv("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND", "6")
 	t.Setenv("RATE_LIMIT_WRITE_BURST", "11")
 	t.Setenv("METRICS_ADDR", "127.0.0.1:9191")
+	t.Setenv("METRICS_READ_TIMEOUT", "4s")
 	t.Setenv("LOG_LEVEL", "debug")
-	t.Setenv("IDEMPOTENCY_REPLAY_WINDOW", "48h")
 	t.Setenv("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL", "30m")
 	cfg, err := loadConfig()
 	require.NoError(t, err)
@@ -129,8 +129,8 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, int64(32768), cfg.HTTP.MaxRequestBodyBytes)
 	assert.Equal(t, httpapi.RateLimitConfig{ReadRequestsPerSecond: 31, ReadBurst: 61, WriteRequestsPerSecond: 6, WriteBurst: 11}, cfg.HTTP.RateLimit)
 	assert.Equal(t, "127.0.0.1:9191", cfg.Metrics.Addr)
+	assert.Equal(t, 4*time.Second, cfg.Metrics.ReadTimeout)
 	assert.Equal(t, "debug", cfg.Runtime.LogLevel)
-	assert.Equal(t, 48*time.Hour, cfg.Runtime.IdempotencyReplayWindow)
 	assert.Equal(t, 30*time.Minute, cfg.Runtime.IdempotencyReplayCleanupInterval)
 }
 
@@ -146,7 +146,7 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 		{"RATE_LIMIT_WRITE_REQUESTS_PER_SECOND", "many"},
 		{"RATE_LIMIT_WRITE_BURST", "many"},
 		{"MOCK_BANK_CONNECT_TIMEOUT", "forever"},
-		{"IDEMPOTENCY_REPLAY_WINDOW", "forever"},
+		{"METRICS_READ_TIMEOUT", "forever"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			setRequiredConfigEnv(t)
