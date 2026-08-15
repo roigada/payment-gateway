@@ -4,14 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
@@ -75,30 +72,72 @@ func run(cfg config, logger *slog.Logger) error {
 		<-cleanupDone
 	}()
 
-	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	metricsListener, err := net.Listen("tcp", cfg.Metrics.Addr)
-	if err != nil {
-		return err
-	}
-	defer metricsListener.Close()
+	publicServer := newHTTPServer(handler, cfg.HTTP.ServerConfig)
+	metricsServer := newHTTPServer(metrics.Handler, cfg.Metrics.ServerConfig)
+	serveResults := make(chan error, 2)
+	go listenAndServe(publicServer, serveResults)
+	go listenAndServe(metricsServer, serveResults)
 
 	shutdownSignals := make(chan os.Signal, 2)
 	signal.Notify(shutdownSignals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(handler, cfg.HTTP.ServerConfig)}, {listener: metricsListener, server: newHTTPServer(metrics.Handler, cfg.Metrics.ServerConfig)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
+	select {
+	case err := <-serveResults:
+		readiness.beginDrain()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout)
+		shutdownErr := shutdownServers(shutdownCtx, publicServer, metricsServer)
+		cancel()
+		if shutdownErr != nil {
+			return shutdownErr
+		}
+		return err
+	case receivedSignal := <-shutdownSignals:
+		logger.Info("payment-gateway shutdown signal received", "signal", receivedSignal.String())
+	}
+
+	readiness.beginDrain()
+	logger.Info("payment-gateway shutdown drain started", "timeout", cfg.Runtime.ShutdownTimeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout)
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- shutdownServers(ctx, publicServer, metricsServer) }()
+
+	select {
+	case err := <-shutdownResult:
+		cancel()
+		if err == nil {
+			logger.Info("payment-gateway shutdown completed")
+			return <-serveResults
+		}
+		logger.Warn("payment-gateway shutdown drain timed out", "error", err)
+	case receivedSignal := <-shutdownSignals:
+		logger.Warn("payment-gateway shutdown force requested", "signal", receivedSignal.String())
+		cancel()
+		<-shutdownResult
+	}
+
+	if closeErr := closeServers(publicServer, metricsServer); closeErr != nil {
+		return closeErr
+	}
+	logger.Warn("payment-gateway shutdown forced connections closed")
+	return <-serveResults
 }
 
 func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {
 	return &http.Server{
-		Handler: handler, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout,
+		Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
 	}
+}
+
+func listenAndServe(server *http.Server, results chan<- error) {
+	err := server.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	results <- err
 }
 
 type readinessChecker interface {
@@ -125,92 +164,25 @@ func (r *shutdownReadiness) beginDrain() {
 	r.draining.Store(true)
 }
 
-type runtimeServer struct {
-	listener net.Listener
-	server   *http.Server
+func shutdownServers(ctx context.Context, publicServer, metricsServer *http.Server) error {
+	results := make(chan error, 2)
+	go func() { results <- publicServer.Shutdown(ctx) }()
+	go func() { results <- metricsServer.Shutdown(ctx) }()
+	firstErr, secondErr := <-results, <-results
+	if firstErr != nil {
+		return firstErr
+	}
+	return secondErr
 }
 
-func serveUntilShutdownAll(servers []runtimeServer, readiness *shutdownReadiness, shutdownTimeout time.Duration, shutdownSignals <-chan os.Signal, logger *slog.Logger) error {
-	if logger == nil {
-		return errors.New("runtime logger is required")
+func closeServers(publicServer, metricsServer *http.Server) error {
+	publicErr := publicServer.Close()
+	metricsErr := metricsServer.Close()
+	if errors.Is(publicErr, http.ErrServerClosed) {
+		publicErr = nil
 	}
-	serveResult := make(chan error, len(servers))
-	for _, runtimeServer := range servers {
-		go func(server *http.Server, listener net.Listener) {
-			err := server.Serve(listener)
-			if errors.Is(err, http.ErrServerClosed) {
-				err = nil
-			}
-			serveResult <- err
-		}(runtimeServer.server, runtimeServer.listener)
+	if errors.Is(metricsErr, http.ErrServerClosed) {
+		metricsErr = nil
 	}
-
-	select {
-	case err := <-serveResult:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		shutdownErr := shutdownServers(shutdownCtx, servers)
-		cancel()
-		if shutdownErr != nil {
-			return shutdownErr
-		}
-		return err
-	case receivedSignal := <-shutdownSignals:
-		logger.Info("payment-gateway shutdown signal received", "signal", receivedSignal.String())
-	}
-
-	readiness.beginDrain()
-	logger.Info("payment-gateway shutdown drain started", "timeout", shutdownTimeout)
-
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	shutdownResult := make(chan error, 1)
-	go func() { shutdownResult <- shutdownServers(ctx, servers) }()
-
-	select {
-	case err := <-shutdownResult:
-		cancel()
-		if err == nil {
-			logger.Info("payment-gateway shutdown completed")
-			return <-serveResult
-		}
-		logger.Warn("payment-gateway shutdown drain timed out", "error", err)
-	case receivedSignal := <-shutdownSignals:
-		logger.Warn("payment-gateway shutdown force requested", "signal", receivedSignal.String())
-		cancel()
-		<-shutdownResult
-	}
-
-	if closeErr := closeServers(servers); closeErr != nil {
-		return closeErr
-	}
-	logger.Warn("payment-gateway shutdown forced connections closed")
-	return <-serveResult
-}
-
-func shutdownServers(ctx context.Context, servers []runtimeServer) error {
-	results := make(chan error, len(servers))
-	var group sync.WaitGroup
-	for _, runtimeServer := range servers {
-		group.Add(1)
-		go func(server *http.Server) {
-			defer group.Done()
-			results <- server.Shutdown(ctx)
-		}(runtimeServer.server)
-	}
-	group.Wait()
-	close(results)
-	for err := range results {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func closeServers(servers []runtimeServer) error {
-	for _, runtimeServer := range servers {
-		if err := runtimeServer.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-	}
-	return nil
+	return errors.Join(publicErr, metricsErr)
 }

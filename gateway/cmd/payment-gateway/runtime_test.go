@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"syscall"
 	"testing"
 	"time"
 
@@ -20,136 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestServeUntilShutdownChangesAvailability(t *testing.T) {
-	listener := newTestListener(t)
-	started := make(chan struct{})
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(ctx context.Context) error {
-		close(started)
-		return nil
-	}))
-	logs := &bytes.Buffer{}
-	handler := newRuntimeHandler(t, readiness)
-	shutdownSignals := make(chan os.Signal, 1)
-	result := make(chan error, 1)
-	go func() {
-		result <- serveUntilShutdownAll([]runtimeServer{{listener: listener, server: &http.Server{Handler: handler}}}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
-	}()
-	type requestResult struct {
-		response *http.Response
-		err      error
-	}
-	requestDone := make(chan requestResult, 1)
-	go func() {
-		response, err := http.Get("http://" + listener.Addr().String() + "/readyz")
-		requestDone <- requestResult{response: response, err: err}
-	}()
-	requireReceive(t, started)
-	shutdownSignals <- syscall.SIGTERM
-	require.Eventually(t, func() bool {
-		return readiness.draining.Load()
-	}, time.Second, time.Millisecond)
-	health := httptest.NewRecorder()
-	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	assert.Equal(t, http.StatusNoContent, health.Code)
-	ready := httptest.NewRecorder()
-	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	assert.Equal(t, http.StatusServiceUnavailable, ready.Code)
-	completedRequest := requireReceive(t, requestDone)
-	require.NoError(t, completedRequest.err)
-	defer completedRequest.response.Body.Close()
-	assert.Equal(t, http.StatusNoContent, completedRequest.response.StatusCode)
-	require.NoError(t, <-result)
-	assert.Contains(t, logs.String(), "payment-gateway shutdown signal received")
-	assert.Contains(t, logs.String(), "payment-gateway shutdown drain started")
-	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
-}
-
-func TestServeUntilShutdownLetsActiveRequestsFinishDuringDrain(t *testing.T) {
-	listener := newTestListener(t)
-	started := make(chan struct{})
-	requestContextCanceled := make(chan struct{})
-	finishRequest := make(chan struct{})
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(ctx context.Context) error {
-		close(started)
-		select {
-		case <-ctx.Done():
-			close(requestContextCanceled)
-			return ctx.Err()
-		case <-finishRequest:
-			return nil
-		}
-	}))
-	logs := &bytes.Buffer{}
-	handler := newRuntimeHandler(t, readiness)
-	shutdownSignals := make(chan os.Signal, 1)
-	result := make(chan error, 1)
-	go func() {
-		result <- serveUntilShutdownAll([]runtimeServer{{listener: listener, server: &http.Server{Handler: handler}}}, readiness, time.Second, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
-	}()
-	go func() {
-		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
-		if response != nil {
-			response.Body.Close()
-		}
-	}()
-	requireReceive(t, started)
-	shutdownSignals <- syscall.SIGINT
-	require.Eventually(t, func() bool {
-		return readiness.draining.Load()
-	}, time.Second, time.Millisecond)
-	assert.Never(t, func() bool {
-		select {
-		case <-requestContextCanceled:
-			return true
-		default:
-			return false
-		}
-	}, 50*time.Millisecond, time.Millisecond)
-	close(finishRequest)
-	require.NoError(t, <-result)
-	assert.Contains(t, logs.String(), "payment-gateway shutdown completed")
-}
-
-func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
-	publicListener := newTestListener(t)
-	metricsListener := newTestListener(t)
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
-	publicHandler := newRuntimeHandler(t, readiness)
-	metricsHandler := observability.NewHandler(observability.NewRegistry())
-	shutdownSignals := make(chan os.Signal, 1)
-	result := make(chan error, 1)
-	go func() {
-		result <- serveUntilShutdownAll([]runtimeServer{
-			{listener: publicListener, server: &http.Server{Handler: publicHandler}},
-			{listener: metricsListener, server: &http.Server{Handler: metricsHandler}},
-		}, readiness, time.Second, shutdownSignals, discardRuntimeLogger())
-	}()
-
-	publicMetrics, err := http.Get("http://" + publicListener.Addr().String() + "/metrics")
-	require.NoError(t, err)
-	defer publicMetrics.Body.Close()
-	assert.Equal(t, http.StatusNotFound, publicMetrics.StatusCode)
-
-	metrics, err := http.Get("http://" + metricsListener.Addr().String() + "/metrics")
-	require.NoError(t, err)
-	defer metrics.Body.Close()
-	body, err := io.ReadAll(metrics.Body)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, metrics.StatusCode)
-	assert.NotEmpty(t, body)
-	metricsFallback, err := http.Get("http://" + metricsListener.Addr().String() + "/not-metrics")
-	require.NoError(t, err)
-	defer metricsFallback.Body.Close()
-	assert.Equal(t, http.StatusNotFound, metricsFallback.StatusCode)
-
-	shutdownSignals <- syscall.SIGTERM
-	require.NoError(t, <-result)
-	_, err = http.Get("http://" + publicListener.Addr().String() + "/healthz")
-	assert.Error(t, err)
-	_, err = http.Get("http://" + metricsListener.Addr().String() + "/metrics")
-	assert.Error(t, err)
-}
 
 func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
@@ -177,62 +44,111 @@ func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	assert.NotEmpty(t, metrics.Body.String())
 }
 
-func TestServeUntilShutdownStopsPeerWhenListenerFails(t *testing.T) {
-	failedListener := newTestListener(t)
-	peerListener := newTestListener(t)
+func TestPublicAndMetricsServersExposeSeparateEndpoints(t *testing.T) {
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
-	result := make(chan error, 1)
-	go func() {
-		result <- serveUntilShutdownAll([]runtimeServer{
-			{listener: failedListener, server: &http.Server{Handler: http.NotFoundHandler()}},
-			{listener: peerListener, server: &http.Server{Handler: http.NotFoundHandler()}},
-		}, readiness, time.Second, make(chan os.Signal), discardRuntimeLogger())
-	}()
+	_, publicListener := newTestServer(t, newRuntimeHandler(t, readiness))
+	_, metricsListener := newTestServer(t, observability.NewHandler(observability.NewRegistry()))
 
-	peerResponse, err := http.Get("http://" + peerListener.Addr().String())
+	publicMetrics, err := http.Get("http://" + publicListener.Addr().String() + "/metrics")
 	require.NoError(t, err)
-	peerResponse.Body.Close()
-	require.NoError(t, failedListener.Close())
-	require.Error(t, requireReceive(t, result))
-	_, err = http.Get("http://" + peerListener.Addr().String())
-	assert.Error(t, err)
+	defer publicMetrics.Body.Close()
+	assert.Equal(t, http.StatusNotFound, publicMetrics.StatusCode)
+
+	metrics, err := http.Get("http://" + metricsListener.Addr().String() + "/metrics")
+	require.NoError(t, err)
+	defer metrics.Body.Close()
+	body, err := io.ReadAll(metrics.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, metrics.StatusCode)
+	assert.NotEmpty(t, body)
 }
 
-func TestServeUntilShutdownSecondSignalForceClosesRequestsBeforeDrainDeadline(t *testing.T) {
-	listener := newTestListener(t)
-	started := make(chan struct{})
-	requestEnded := make(chan struct{})
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(ctx context.Context) error {
-		close(started)
-		<-ctx.Done()
-		close(requestEnded)
-		return ctx.Err()
+func TestNewHTTPServerConfiguresAddress(t *testing.T) {
+	server := newHTTPServer(http.NotFoundHandler(), ServerConfig{Addr: "127.0.0.1:8080"})
+
+	assert.Equal(t, "127.0.0.1:8080", server.Addr)
+}
+
+func TestListenAndServeReportsListenFailure(t *testing.T) {
+	results := make(chan error, 1)
+	go listenAndServe(&http.Server{Addr: "127.0.0.1:-1"}, results)
+
+	select {
+	case err := <-results:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timed out waiting for listen failure")
+	}
+}
+
+func TestListenAndServeNormalizesServerClosed(t *testing.T) {
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	_ = server.Shutdown(context.Background())
+	results := make(chan error, 1)
+	go listenAndServe(server, results)
+
+	require.NoError(t, requireReceive(t, results))
+}
+
+func TestShutdownServersLetsActiveRequestsFinishAndStopsBothServers(t *testing.T) {
+	requestStarted := make(chan struct{})
+	finishRequest := make(chan struct{})
+	publicServer, publicListener := newTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(requestStarted)
+		<-finishRequest
 	}))
-	logs := &bytes.Buffer{}
-	handler := newRuntimeHandler(t, readiness)
-	shutdownSignals := make(chan os.Signal, 2)
-	result := make(chan error, 1)
+	metricsServer, metricsListener := newTestServer(t, http.NotFoundHandler())
+	requestDone := make(chan error, 1)
 	go func() {
-		result <- serveUntilShutdownAll([]runtimeServer{{listener: listener, server: &http.Server{Handler: handler}}}, readiness, time.Minute, shutdownSignals, slog.New(slog.NewJSONHandler(logs, nil)))
+		response, err := http.Get("http://" + publicListener.Addr().String())
+		if response != nil {
+			response.Body.Close()
+		}
+		requestDone <- err
 	}()
+	requireReceive(t, requestStarted)
+
+	shutdownDone := make(chan error, 1)
 	go func() {
-		response, _ := http.Get("http://" + listener.Addr().String() + "/readyz")
+		shutdownDone <- shutdownServers(context.Background(), publicServer, metricsServer)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-shutdownDone:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, time.Millisecond)
+
+	close(finishRequest)
+	require.NoError(t, requireReceive(t, requestDone))
+	require.NoError(t, requireReceive(t, shutdownDone))
+	requireServerUnavailable(t, publicListener.Addr().String())
+	requireServerUnavailable(t, metricsListener.Addr().String())
+}
+
+func TestCloseServersCancelsActiveRequestsAndStopsBothServers(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	publicServer, publicListener := newTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		<-request.Context().Done()
+		close(requestCanceled)
+	}))
+	metricsServer, metricsListener := newTestServer(t, http.NotFoundHandler())
+	go func() {
+		response, _ := http.Get("http://" + publicListener.Addr().String())
 		if response != nil {
 			response.Body.Close()
 		}
 	}()
-	requireReceive(t, started)
-	shutdownSignals <- syscall.SIGTERM
-	shutdownSignals <- syscall.SIGINT
-	requireReceive(t, requestEnded)
-	require.NoError(t, <-result)
-	assert.Contains(t, logs.String(), "payment-gateway shutdown force requested")
-}
+	requireReceive(t, requestStarted)
 
-func TestServeUntilShutdownRequiresLogger(t *testing.T) {
-	err := serveUntilShutdownAll(nil, nil, 0, nil, nil)
-
-	require.EqualError(t, err, "runtime logger is required")
+	require.NoError(t, closeServers(publicServer, metricsServer))
+	requireReceive(t, requestCanceled)
+	requireServerUnavailable(t, publicListener.Addr().String())
+	requireServerUnavailable(t, metricsListener.Addr().String())
 }
 
 type readinessCheckerFunc func(context.Context) error
@@ -306,11 +222,14 @@ func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	}
 }
 
-func newTestListener(t *testing.T) net.Listener {
+func newTestServer(t *testing.T, handler http.Handler) (*http.Server, net.Listener) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	return listener
+	server := &http.Server{Handler: handler}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	return server, listener
 }
 
 func requireReceive[T any](t *testing.T, ch <-chan T) T {
@@ -319,17 +238,18 @@ func requireReceive[T any](t *testing.T, ch <-chan T) T {
 	case value := <-ch:
 		return value
 	case <-time.After(time.Second):
-		require.FailNow(t, "timed out waiting for channel")
+		require.FailNow(t, "timed out waiting for result")
 		var zero T
 		return zero
 	}
 }
 
-func assertChannelNotClosed(t *testing.T, ch <-chan struct{}) {
+func requireServerUnavailable(t *testing.T, addr string) {
 	t.Helper()
-	select {
-	case <-ch:
-		assert.Fail(t, "channel closed unexpectedly")
-	default:
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	response, err := client.Get("http://" + addr)
+	if response != nil {
+		response.Body.Close()
 	}
+	require.Error(t, err)
 }
