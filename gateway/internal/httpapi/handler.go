@@ -24,15 +24,6 @@ type Handler struct {
 	options       HandlerOptions
 }
 
-type HandlerDependencies struct {
-	Payments      paymentApplication
-	Readiness     readinessChecker
-	Logger        *slog.Logger
-	Metrics       httpMetrics
-	Authenticator *serviceauth.Authenticator
-	Clock         Clock
-}
-
 type HandlerOptions struct {
 	PaymentCommandTimeout time.Duration
 	PaymentReadTimeout    time.Duration
@@ -60,33 +51,33 @@ type httpMetrics interface {
 	RecordRateLimitRejection(routeClass string)
 }
 
-func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Handler, error) {
-	if dependencies.Payments == nil {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, authenticator *serviceauth.Authenticator, clock Clock, options HandlerOptions) (*Handler, error) {
+	if payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
-	if dependencies.Readiness == nil {
+	if readiness == nil {
 		return nil, errors.New("httpapi handler: readiness checker is required")
 	}
-	if dependencies.Logger == nil {
+	if logger == nil {
 		return nil, errors.New("httpapi handler: logger is required")
 	}
-	if dependencies.Metrics == nil {
+	if metrics == nil {
 		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
 	}
-	if dependencies.Authenticator == nil {
+	if authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	rateLimiter, err := NewRateLimiter(dependencies.Clock, options.RateLimit)
+	rateLimiter, err := NewRateLimiter(clock, options.RateLimit)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi handler: %w", err)
 	}
 
 	handler := &Handler{
-		logger:        dependencies.Logger,
-		metrics:       dependencies.Metrics,
-		payments:      dependencies.Payments,
-		readiness:     dependencies.Readiness,
-		authenticator: dependencies.Authenticator,
+		logger:        logger,
+		metrics:       metrics,
+		payments:      payments,
+		readiness:     readiness,
+		authenticator: authenticator,
 		rateLimiter:   rateLimiter,
 		options:       options,
 	}

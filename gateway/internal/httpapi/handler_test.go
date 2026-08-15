@@ -164,9 +164,7 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{{Digest: serviceauth.Digest(key, "write-only-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsWrite}}})
 	require.NoError(t, err)
 	options := testHandlerOptions(t)
-	dependencies := testHandlerDependencies(t, api.payments, api.readiness, discardLogger(), api.metrics)
-	dependencies.Authenticator = authenticator
-	handler, err := httpapi.NewHandler(dependencies, options)
+	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, authenticator, &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, options)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
@@ -328,53 +326,42 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 			name:     "payment application",
 			expected: "httpapi handler: payment application is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Payments = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(nil, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerOptions(t))
 			},
 		},
 		{
 			name:     "readiness checker",
 			expected: "httpapi handler: readiness checker is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Readiness = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, nil, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerOptions(t))
 			},
 		},
 		{
 			name:     "logger",
 			expected: "httpapi handler: logger is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{})
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerOptions(t))
 			},
 		},
 		{
 			name:     "HTTP metrics recorder",
 			expected: "httpapi handler: HTTP metrics recorder is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Metrics = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), nil, testAuthenticator(t), &testClock{}, testHandlerOptions(t))
 			},
 		},
 		{
 			name:     "service authenticator",
 			expected: "httpapi handler: service authenticator is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Authenticator = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, &testClock{}, testHandlerOptions(t))
 			},
 		},
 		{
 			name:     "rate limit clock",
 			expected: "httpapi handler: rate limit clock is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Clock = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), nil, testHandlerOptions(t))
 			},
 		},
 	}
@@ -1252,21 +1239,9 @@ func testHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	}
 }
 
-func testHandlerDependencies(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics) httpapi.HandlerDependencies {
-	t.Helper()
-	return httpapi.HandlerDependencies{
-		Payments:      payments,
-		Readiness:     readiness,
-		Logger:        logger,
-		Metrics:       metrics,
-		Authenticator: testAuthenticator(t),
-		Clock:         &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-	}
-}
-
 func newTestHandler(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics, options httpapi.HandlerOptions) (*httpapi.Handler, error) {
 	t.Helper()
-	return httpapi.NewHandler(testHandlerDependencies(t, payments, readiness, logger, metrics), options)
+	return httpapi.NewHandler(payments, readiness, logger, metrics, testAuthenticator(t), &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, options)
 }
 
 type testClock struct{ now time.Time }
@@ -1280,10 +1255,7 @@ func newRateLimitedPaymentAPITest(t *testing.T, clock *testClock, config httpapi
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	dependencies := testHandlerDependencies(t, payments, readiness, discardLogger(), metrics)
-	dependencies.Authenticator = authenticator
-	dependencies.Clock = clock
-	handler, err := httpapi.NewHandler(dependencies, options)
+	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, authenticator, clock, options)
 	require.NoError(t, err)
 	return &paymentAPITest{payments: payments, readiness: readiness, handler: handler, metrics: metrics}
 }

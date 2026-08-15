@@ -9,7 +9,6 @@ import (
 type Metrics struct {
 	Handler                  http.Handler
 	HTTP                     *HTTPMetrics
-	RateLimit                *RateLimitMetrics
 	MockBank                 *MockBankMetrics
 	PaymentOperations        *PaymentOperationMetrics
 	IdempotencyReplayCleanup *IdempotencyReplayCleanupMetrics
@@ -19,10 +18,6 @@ type Metrics struct {
 func NewMetrics(db *sql.DB, pendingPayments PendingPaymentReader) (Metrics, error) {
 	registry := NewRegistry()
 	httpMetrics, err := NewHTTPMetrics(registry)
-	if err != nil {
-		return Metrics{}, err
-	}
-	rateLimitMetrics, err := NewRateLimitMetrics(registry)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -56,7 +51,6 @@ func NewMetrics(db *sql.DB, pendingPayments PendingPaymentReader) (Metrics, erro
 	return Metrics{
 		Handler:                  NewHandler(registry),
 		HTTP:                     httpMetrics,
-		RateLimit:                rateLimitMetrics,
 		MockBank:                 mockBankMetrics,
 		PaymentOperations:        paymentOperationMetrics,
 		IdempotencyReplayCleanup: cleanupMetrics,

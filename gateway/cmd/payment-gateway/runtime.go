@@ -19,6 +19,7 @@ import (
 	"github.com/roigada/payment-gateway/internal/mockbank"
 	"github.com/roigada/payment-gateway/internal/observability"
 	"github.com/roigada/payment-gateway/internal/postgres"
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/roigada/payment-gateway/internal/uuidgen"
 )
 
@@ -53,24 +54,12 @@ func run(cfg config, logger *slog.Logger) error {
 		cfg.Payment.FingerprintSecret,
 		cfg.Payment.IdempotencyClaimStuckAfter,
 	)
-	authenticator, err := cfg.Auth.authenticator()
+
+	authenticator, err := serviceauth.NewAuthenticator(cfg.Auth.HMACKey, cfg.Auth.Credentials)
 	if err != nil {
 		return err
 	}
-	handler, err := httpapi.NewHandler(httpapi.HandlerDependencies{
-		Payments:      paymentService,
-		Readiness:     readiness,
-		Logger:        logger,
-		Metrics:       httpAPIMetrics{HTTPMetrics: metrics.HTTP, RateLimitMetrics: metrics.RateLimit},
-		Authenticator: authenticator,
-		Clock:         app.SystemClock{},
-	}, httpapi.HandlerOptions{
-		PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
-		ReadinessTimeout:      readinessCheckTimeout,
-		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
-		RateLimit:             cfg.HTTP.RateLimit,
-	})
+	handler, err := httpapi.NewHandler(paymentService, readiness, logger, metrics.HTTP, authenticator, app.SystemClock{}, cfg.HTTP.handlerOptions())
 	if err != nil {
 		return err
 	}
@@ -103,11 +92,6 @@ func run(cfg config, logger *slog.Logger) error {
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
 	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(handler, cfg.HTTP.ServerConfig)}, {listener: metricsListener, server: newHTTPServer(metrics.Handler, cfg.Metrics.ServerConfig)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
-}
-
-type httpAPIMetrics struct {
-	*observability.HTTPMetrics
-	*observability.RateLimitMetrics
 }
 
 func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {

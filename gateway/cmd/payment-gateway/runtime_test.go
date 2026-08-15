@@ -16,6 +16,7 @@ import (
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/observability"
+	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,10 +154,8 @@ func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
 func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
 	options := testRuntimeHandlerOptions(t)
-	dependencies := testRuntimeHandlerDependencies(t, runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{})
 	options.RateLimit = httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}
-	publicHandler, err := httpapi.NewHandler(dependencies, options)
-	require.NoError(t, err)
+	publicHandler := newRuntimeHandlerWithOptions(t, readiness, options)
 
 	for requestNumber := range 2 {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
@@ -278,7 +277,15 @@ func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchP
 func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
 	t.Helper()
 
-	handler, err := httpapi.NewHandler(testRuntimeHandlerDependencies(t, runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}), testRuntimeHandlerOptions(t))
+	return newRuntimeHandlerWithOptions(t, readiness, testRuntimeHandlerOptions(t))
+}
+
+func newRuntimeHandlerWithOptions(t *testing.T, readiness *shutdownReadiness, options httpapi.HandlerOptions) *httpapi.Handler {
+	t.Helper()
+	cfg := validConfig()
+	authenticator, err := serviceauth.NewAuthenticator(cfg.Auth.HMACKey, cfg.Auth.Credentials)
+	require.NoError(t, err)
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}, authenticator, app.SystemClock{}, options)
 	require.NoError(t, err)
 	return handler
 }
@@ -293,26 +300,12 @@ func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	return httpapi.HandlerOptions{
 		PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
 		PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
-		ReadinessTimeout:      readinessCheckTimeout,
+		ReadinessTimeout:      cfg.HTTP.ReadinessTimeout,
 		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
 		RateLimit:             cfg.HTTP.RateLimit,
 	}
 }
 
-func testRuntimeHandlerDependencies(t *testing.T, payments runtimePaymentApplicationFake, readiness *shutdownReadiness, logger *slog.Logger, metrics runtimeHTTPAPIMetricsFake) httpapi.HandlerDependencies {
-	t.Helper()
-	cfg := validConfig()
-	authenticator, err := cfg.Auth.authenticator()
-	require.NoError(t, err)
-	return httpapi.HandlerDependencies{
-		Payments:      payments,
-		Readiness:     readiness,
-		Logger:        logger,
-		Metrics:       metrics,
-		Authenticator: authenticator,
-		Clock:         app.SystemClock{},
-	}
-}
 func newTestListener(t *testing.T) net.Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

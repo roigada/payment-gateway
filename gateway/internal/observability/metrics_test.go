@@ -15,7 +15,6 @@ func TestNewMetricsRegistersGatewayMetricsAndCollectors(t *testing.T) {
 
 	require.NotNil(t, metrics.Handler)
 	require.NotNil(t, metrics.HTTP)
-	require.NotNil(t, metrics.RateLimit)
 	require.NotNil(t, metrics.MockBank)
 	require.NotNil(t, metrics.PaymentOperations)
 	require.NotNil(t, metrics.IdempotencyReplayCleanup)
