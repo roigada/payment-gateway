@@ -146,10 +146,14 @@ func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAu
 		result = mockBankRequestResultSuccess
 		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID, AuthorizationExpiresAt: payload.ExpiresAt}, nil
 	case http.StatusBadRequest:
-		reason, err := decodeBadRequestInvalidInputReason(response)
+		reason, declineReason, err := decodeBadRequestAuthorizationOutcome(response)
 		if err != nil {
 			result = mockBankRequestResultUnavailable
 			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(err)
+		}
+		if declineReason != "" {
+			result = mockBankRequestResultDeclined
+			return app.BankAuthorizationResult{DeclineReason: declineReason}, nil
 		}
 		if reason != "" {
 			result = mockBankRequestResultInvalidInput
@@ -510,9 +514,13 @@ type authorizationErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func decodeBadRequestInvalidInputReason(response *http.Response) (string, error) {
-	reason, _, _, err := decodeBadRequestReason(response)
-	return reason, err
+func decodeBadRequestAuthorizationOutcome(response *http.Response) (string, domain.DeclineReason, error) {
+	var payload authorizationErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return "", "", err
+	}
+
+	return invalidInputReasonForBadRequest(payload.Error), declineReasonForBadRequest(payload.Error), nil
 }
 
 func decodeBadRequestReason(response *http.Response) (string, bool, bool, error) {
@@ -530,8 +538,6 @@ func invalidInputReasonForBadRequest(code string) string {
 		return "card details are invalid"
 	case "invalid_cvv":
 		return "card details are invalid"
-	case "card_expired":
-		return "card details are invalid"
 	case "invalid_amount":
 		return "amount must be greater than zero"
 	case "amount_mismatch":
@@ -545,13 +551,20 @@ func invalidInputReasonForBadRequest(code string) string {
 	}
 }
 
+func declineReasonForBadRequest(code string) domain.DeclineReason {
+	if strings.EqualFold(strings.TrimSpace(code), "card_expired") {
+		return domain.DeclineReasonExpiredCard
+	}
+	return ""
+}
+
 func isAuthorizationExpired(code string) bool {
 	return strings.EqualFold(strings.TrimSpace(code), "authorization_expired")
 }
 
 func isBankStateConflict(code string) bool {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "authorization_already_used", "already_captured", "already_voided", "already_refunded":
+	case "authorization_not_found", "capture_not_found", "amount_mismatch", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
 		return true
 	default:
 		return false

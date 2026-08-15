@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,17 +43,28 @@ func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 	assert.Equal(t, "bok_123", request.Header.Get("Idempotency-Key"))
 }
 
-func TestDecodeBadRequestInvalidInputReasonReturnsGatewayReason(t *testing.T) {
-	reason, err := decodeBadRequestInvalidInputReason(&http.Response{
+func TestDecodeBadRequestAuthorizationOutcomeReturnsGatewayReason(t *testing.T) {
+	reason, declineReason, err := decodeBadRequestAuthorizationOutcome(&http.Response{
 		Body: io.NopCloser(strings.NewReader(`{"error":"invalid_card"}`)),
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "card details are invalid", reason)
+	assert.Empty(t, declineReason)
 }
 
-func TestDecodeBadRequestInvalidInputReasonReturnsRawDecodeFailure(t *testing.T) {
-	_, err := decodeBadRequestInvalidInputReason(&http.Response{
+func TestDecodeBadRequestAuthorizationOutcomeReturnsExpiredCardDecline(t *testing.T) {
+	reason, declineReason, err := decodeBadRequestAuthorizationOutcome(&http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"error":"card_expired"}`)),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, reason)
+	assert.Equal(t, domain.DeclineReasonExpiredCard, declineReason)
+}
+
+func TestDecodeBadRequestAuthorizationOutcomeReturnsRawDecodeFailure(t *testing.T) {
+	_, _, err := decodeBadRequestAuthorizationOutcome(&http.Response{
 		Body: io.NopCloser(strings.NewReader(`{`)),
 	})
 

@@ -125,10 +125,6 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 			name: "invalid cvv",
 			body: `{"error":"invalid_cvv","message":"invalid cvv"}`,
 		},
-		{
-			name: "expired card",
-			body: `{"error":"card_expired","message":"expired card"}`,
-		},
 	}
 
 	for _, tt := range tests {
@@ -148,6 +144,21 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
 		})
 	}
+}
+
+func TestAuthorizePaymentMapsExpiredCardToGatewayDeclineReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"card_expired","message":"expired card"}`))
+	}))
+	defer server.Close()
+
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), nil, ClientConfig{})
+	require.NoError(t, err)
+
+	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
+	require.NoError(t, err)
+	assert.Equal(t, domain.DeclineReasonExpiredCard, result.DeclineReason)
 }
 
 func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -269,7 +280,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 			result:    "state_conflict",
 		},
 		{
-			name: "refund invalid input",
+			name: "refund state conflict",
 			call: func(client *Client) error {
 				_, err := client.RefundPayment(context.Background(), validRefundRequest())
 				return err
@@ -279,7 +290,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":"capture_not_found","message":"capture not found"}`))
 			},
 			operation: "refund",
-			result:    "invalid_input",
+			result:    "state_conflict",
 		},
 		{
 			name: "authorization unavailable",
@@ -635,7 +646,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 		kind app.PaymentErrorKind
 		call func(*Client) error
 	}{
-		{name: "capture invalid input", body: `{"error":"amount_mismatch","message":"amount mismatch"}`, kind: app.PaymentErrorInvalidInput, call: func(client *Client) error {
+		{name: "capture bank state conflict", body: `{"error":"amount_mismatch","message":"amount mismatch"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
 			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
 			return err
 		}},
@@ -647,7 +658,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
 			return err
 		}},
-		{name: "void invalid input", body: `{"error":"authorization_not_found","message":"authorization not found"}`, kind: app.PaymentErrorInvalidInput, call: func(client *Client) error {
+		{name: "void bank state conflict", body: `{"error":"authorization_not_found","message":"authorization not found"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
 			_, err := client.VoidPayment(context.Background(), validVoidRequest())
 			return err
 		}},
@@ -659,7 +670,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 			_, err := client.VoidPayment(context.Background(), validVoidRequest())
 			return err
 		}},
-		{name: "refund invalid input", body: `{"error":"capture_not_found","message":"capture not found"}`, kind: app.PaymentErrorInvalidInput, call: func(client *Client) error {
+		{name: "refund bank state conflict", body: `{"error":"capture_not_found","message":"capture not found"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
 			_, err := client.RefundPayment(context.Background(), validRefundRequest())
 			return err
 		}},
@@ -867,8 +878,8 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 		code string
 		kind app.PaymentErrorKind
 	}{
-		{name: "amount mismatch", code: "amount_mismatch", kind: app.PaymentErrorInvalidInput},
-		{name: "authorization not found", code: "authorization_not_found", kind: app.PaymentErrorInvalidInput},
+		{name: "amount mismatch", code: "amount_mismatch", kind: app.PaymentErrorBankStateConflict},
+		{name: "authorization not found", code: "authorization_not_found", kind: app.PaymentErrorBankStateConflict},
 		{name: "authorization already used", code: "authorization_already_used", kind: app.PaymentErrorBankStateConflict},
 		{name: "already captured", code: "already_captured", kind: app.PaymentErrorBankStateConflict},
 		{name: "internal", code: "internal_error", kind: app.PaymentErrorBankUnavailable},
@@ -1113,7 +1124,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 			name:   "capture not found",
 			status: http.StatusBadRequest,
 			body:   `{"error":"capture_not_found","message":"capture not found"}`,
-			kind:   app.PaymentErrorInvalidInput,
+			kind:   app.PaymentErrorBankStateConflict,
 		},
 		{
 			name:   "already refunded",

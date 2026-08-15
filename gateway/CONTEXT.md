@@ -37,7 +37,7 @@ A **Payment** whose authorization was refused by the **Mock Bank**.
 _Avoid_: Rejected, failed
 
 **Decline Reason**:
-A gateway-owned explanation for a **Declined** **Payment**.
+A gateway-owned explanation for a **Declined** **Payment**, such as insufficient funds or an expired card.
 _Avoid_: Bank error, failure reason
 
 **Captured**:
@@ -59,6 +59,10 @@ _Avoid_: State
 **Payment Status Conflict**:
 A command outcome where the requested payment operation is valid in shape but not allowed by the current **Payment Status**.
 _Avoid_: Invalid status conflict, transition error
+
+**Bank State Conflict**:
+A command outcome where the **Mock Bank** definitively disagrees with bank references or the **Amount** stored for a **Payment**. It is not a caller input error.
+_Avoid_: Invalid input, bank failure, payment status conflict
 
 **Order ID**:
 The identity of the order that a **Payment** belongs to. The payment gateway treats it as an external reference owned by the order service.
