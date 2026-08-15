@@ -46,14 +46,6 @@ func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
 		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
 		IdleConnTimeout:       config.IdleConnectionTimeout,
 	}
-	return NewClientWithHTTPClient(config.BaseURL, &http.Client{Transport: transport}, metrics, config)
-}
-
-// NewClientWithHTTPClient constructs a Mock Bank client with a caller-provided
-// HTTP client. It is useful when tests or another composition root need to
-// customize HTTP behavior.
-func NewClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics metrics, config ClientConfig) (*Client, error) {
-	config.BaseURL = baseURL
 	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
 	if err != nil {
 		return nil, err
@@ -61,10 +53,7 @@ func NewClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics me
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("mock bank base URL must be absolute")
 	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	return &Client{baseURL: parsed, httpClient: httpClient, metrics: metrics, config: config}, nil
+	return &Client{baseURL: parsed, httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
 }
 
 func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
