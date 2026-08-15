@@ -1531,7 +1531,6 @@ func newTestDatabase(t *testing.T) *sql.DB {
 		tcpostgres.WithPassword("payment_gateway"),
 		tcpostgres.WithInitScripts(
 			filepath.Join("..", "..", "migrations", "000001_create_payments.up.sql"),
-			filepath.Join("..", "..", "migrations", "000002_add_idempotency_completion_time.up.sql"),
 		),
 		tcpostgres.BasicWaitStrategies(),
 	)
