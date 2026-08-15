@@ -35,7 +35,6 @@ The dependency direction is inward: adapters depend on the application and domai
 - Postgres
 - A Mock Bank service reachable through `MOCK_BANK_BASE_URL`
 - A tool for applying plain SQL migrations, such as `migrate`
-- Docker, if using the local Compose environment
 
 ## Configuration
 
@@ -121,8 +120,6 @@ export ORDER_SERVICE_CREDENTIALS='replace-with-a-configured-credential-digest=pa
 export ADDR=':8080'
 ```
 
-For the root Compose demo, `make demo` generates an ignored root `.env` file with a throwaway `FINGERPRINT_SECRET`, `SERVICE_CREDENTIAL_HMAC_KEY`, `ORDER_SERVICE_CREDENTIALS`, and `ORDER_SERVICE_CREDENTIAL`. Do not commit, copy, or reuse that file outside local development. Delete `.env` before the next `make demo` to rotate the local credential. The gateway refuses to start without the first three values, while Compose cleanup and log commands remain usable without them.
-
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
 Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
@@ -131,7 +128,7 @@ Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness ch
 
 Every `/api/v1/` route requires an opaque `Authorization: Bearer <credential>` header. Payment search and lookup require `payments:read`; Payment commands require `payments:write`. Missing, malformed, or invalid credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`; valid credentials without the route's scope return `403 Forbidden`.
 
-`make demo` generates a throwaway local credential, its verification key, and its configured digest in the ignored root `.env` file. The raw `ORDER_SERVICE_CREDENTIAL` is used only by local demo requests; the gateway receives `SERVICE_CREDENTIAL_HMAC_KEY` and `ORDER_SERVICE_CREDENTIALS`. Delete `.env` before the next `make demo` to rotate the local credential. In a deployed environment, provision raw credentials only to the Order Service secret store, configure their `digest=scopes` entries in `ORDER_SERVICE_CREDENTIALS`, overlap active credential digests during planned rotation, and revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; the HTTP-only root Compose demo is a trusted local-development exception.
+Provision raw credentials only to the Order Service secret store, configure their `digest=scopes` entries in `ORDER_SERVICE_CREDENTIALS`, overlap active credential digests during planned rotation, and revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway.
 
 Completed payment commands have an Idempotency Replay Window of at least 24 hours. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
@@ -151,55 +148,6 @@ Migration files use the `000001_name.up.sql` and `000001_name.down.sql` naming c
 go run ./cmd/payment-gateway
 ```
 
-## Run With Docker Compose
-
-From the repository root, start Postgres, apply migrations, and run the API for local development:
-
-```sh
-docker compose up
-```
-
-The root Compose environment starts the gateway API on `http://localhost:8080` and the bundled Mock Bank on the Compose network with:
-
-```text
-ADDR=:8080
-DATABASE_URL=postgres://payment_gateway:payment_gateway@postgres:5432/payment_gateway?sslmode=disable
-DATABASE_MAX_OPEN_CONNECTIONS=10
-DATABASE_MAX_IDLE_CONNECTIONS=5
-DATABASE_CONNECTION_MAX_LIFETIME=30m
-DATABASE_CONNECTION_MAX_IDLE_TIME=5m
-DATABASE_STARTUP_TIMEOUT=5s
-IDEMPOTENCY_CLAIM_STUCK_AFTER=5m
-IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL=1h
-SHUTDOWN_TIMEOUT=30s
-LOG_LEVEL=info
-MOCK_BANK_BASE_URL=http://mock-bank:9090
-MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT=2s
-MOCK_BANK_RETRY_DELAY=250ms
-MOCK_BANK_RETRY_ATTEMPT_TIMEOUT=5s
-MOCK_BANK_TIMEOUT=7s
-MOCK_BANK_CONNECT_TIMEOUT=2s
-MOCK_BANK_TLS_HANDSHAKE_TIMEOUT=2s
-MOCK_BANK_RESPONSE_HEADER_TIMEOUT=6s
-MOCK_BANK_IDLE_CONNECTION_TIMEOUT=60s
-PAYMENT_COMMAND_TIMEOUT=10s
-PAYMENT_READ_TIMEOUT=3s
-HTTP_READ_HEADER_TIMEOUT=5s
-HTTP_READ_TIMEOUT=15s
-HTTP_WRITE_TIMEOUT=15s
-HTTP_IDLE_TIMEOUT=60s
-METRICS_READ_HEADER_TIMEOUT=5s
-METRICS_READ_TIMEOUT=5s
-METRICS_WRITE_TIMEOUT=10s
-METRICS_IDLE_TIMEOUT=30s
-HTTP_MAX_REQUEST_BODY_BYTES=65536
-FINGERPRINT_SECRET=${FINGERPRINT_SECRET}
-SERVICE_CREDENTIAL_HMAC_KEY=${SERVICE_CREDENTIAL_HMAC_KEY}
-ORDER_SERVICE_CREDENTIALS=${ORDER_SERVICE_CREDENTIALS}
-```
-
-The bundled Mock Bank documentation is exposed on `http://localhost:8787/docs` when the root demo stack is running. For standalone gateway development outside root Compose, set `MOCK_BANK_BASE_URL` to a reachable Mock Bank URL.
-
 ## Operational Endpoints
 
 Process health does not check Postgres or the Mock Bank:
@@ -214,7 +162,7 @@ Readiness checks Postgres and does not require Mock Bank availability:
 curl -i http://localhost:8080/readyz
 ```
 
-Prometheus-format metrics are served from the separate operational listener. It defaults to `:9091` and must be reachable only from the private operational network; it is not exposed as a Compose host port. In non-Compose deployments, enforce this with firewall rules or a Kubernetes `NetworkPolicy` that permits only the monitoring network, and never expose this listener through a public load balancer:
+Prometheus-format metrics are served from the separate operational listener. It defaults to `:9091` and must be reachable only from the private operational network. Enforce this with firewall rules or a Kubernetes `NetworkPolicy` that permits only the monitoring network, and never expose this listener through a public load balancer:
 
 ```sh
 curl -i http://localhost:9091/metrics
@@ -294,8 +242,6 @@ Route labels use bounded route patterns, such as `/api/v1/payments/{payment_id}`
 ## Public API
 
 Mutating endpoints require an `Idempotency-Key` header. Reusing the same key for the same operation and same request fingerprint replays the original response snapshot. Reusing it with different request values returns `409 Conflict`.
-
-The formal OpenAPI contract is published at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). The runnable request collection in [`../demo/payment-gateway.http`](../demo/payment-gateway.http) remains the companion artifact for manual exploration against a running demo stack; it reads the ignored local `ORDER_SERVICE_CREDENTIAL` from `.env`.
 
 ### Authorize a Payment
 

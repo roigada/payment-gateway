@@ -8,8 +8,6 @@ The Mock Bank HTTP transport has positive, configurable two-second connection an
 
 Request-owned work, including persistence after a Mock Bank call, continues to use the request context. The gateway does not create a detached context to complete a timed-out command; caller retry with the same Idempotency Key and the stored Bank Operation Key performs recovery. New root contexts are reserved for independently owned application lifecycles such as startup and shutdown.
 
-The local Compose runtime explicitly supplies every non-secret timeout and database-pool setting, even when its value matches the gateway default, so the local operational contract is visible and reproducible.
-
 The gateway emits structured JSON logs and accepts a `LOG_LEVEL` setting with an `info` default. Valid levels are `debug`, `info`, `warn`, and `error`; invalid values fail startup.
 
 Inbound HTTP request bodies are capped by the positive `HTTP_MAX_REQUEST_BODY_BYTES` setting, defaulting to 64 KiB. Oversized bodies receive `413 Request Entity Too Large`.
