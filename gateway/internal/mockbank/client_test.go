@@ -448,6 +448,7 @@ func TestAuthorizePaymentCancellationStopsRetryDelay(t *testing.T) {
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() {
 		_, err := client.AuthorizePayment(ctx, validAuthorizationRequest())
@@ -723,6 +724,7 @@ func TestPaymentOperationsCancellationStopsRetryDelay(t *testing.T) {
 			client, err := testClientWithHTTPClient(server.URL, server.Client(), nil, config)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			result := make(chan error, 1)
 			go func() { result <- tt.call(ctx, client) }()
 			select {
