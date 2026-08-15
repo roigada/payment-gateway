@@ -29,11 +29,17 @@ func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 	assert.Equal(t, time.Duration(4), transport.IdleConnTimeout)
 }
 
-func TestNewAuthorizationHTTPRequestReturnsBuildFailure(t *testing.T) {
-	_, err := newAuthorizationHTTPRequest(context.Background(), "\n", &bytes.Buffer{}, "bok_123")
+func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
+	client, err := NewClient(nil, ClientConfig{BaseURL: "https://mockbank.example"})
+	require.NoError(t, err)
 
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "internal server error")
+	request, err := client.newHTTPRequest(context.Background(), "/api/v1/authorizations", &bytes.Buffer{}, "bok_123")
+
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodPost, request.Method)
+	assert.Equal(t, "https://mockbank.example/api/v1/authorizations", request.URL.String())
+	assert.Equal(t, "application/json", request.Header.Get("Content-Type"))
+	assert.Equal(t, "bok_123", request.Header.Get("Idempotency-Key"))
 }
 
 func TestDecodeBadRequestInvalidInputReasonReturnsGatewayReason(t *testing.T) {
