@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/serviceauth"
@@ -14,7 +15,13 @@ type principalContextKey struct{}
 
 func (s *Handler) requireAuthentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, ok := s.authenticator.Authenticate(r)
+		credential, ok := bearerCredential(r.Header.Get("Authorization"))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized))
+			return
+		}
+		principal, ok := s.authenticator.Authenticate(credential)
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized))
@@ -22,6 +29,14 @@ func (s *Handler) requireAuthentication(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 	})
+}
+
+func bearerCredential(header string) (string, bool) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func (s *Handler) requireScope(scope serviceauth.Scope, next http.HandlerFunc) http.HandlerFunc {

@@ -290,7 +290,13 @@ func discardRuntimeLogger() *slog.Logger {
 func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 	t.Helper()
 	cfg := validConfig()
-	return cfg.httpHandler().Options
+	return httpapi.HandlerOptions{
+		PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
+		PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
+		ReadinessTimeout:      readinessCheckTimeout,
+		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
+		RateLimit:             cfg.HTTP.RateLimit,
+	}
 }
 
 func testRuntimeHandlerDependencies(t *testing.T, payments runtimePaymentApplicationFake, readiness *shutdownReadiness, logger *slog.Logger, metrics runtimeHTTPAPIMetricsFake) httpapi.HandlerDependencies {

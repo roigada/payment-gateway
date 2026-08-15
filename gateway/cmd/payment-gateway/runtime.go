@@ -53,7 +53,24 @@ func run(cfg config, logger *slog.Logger) error {
 		cfg.Payment.FingerprintSecret,
 		cfg.Payment.IdempotencyClaimStuckAfter,
 	)
-	httpRuntime, err := buildHTTPRuntime(readiness, logger, cfg.httpHandler(), paymentService, metrics)
+	authenticator, err := cfg.Auth.authenticator()
+	if err != nil {
+		return err
+	}
+	handler, err := httpapi.NewHandler(httpapi.HandlerDependencies{
+		Payments:      paymentService,
+		Readiness:     readiness,
+		Logger:        logger,
+		Metrics:       httpAPIMetrics{HTTPMetrics: metrics.HTTP, RateLimitMetrics: metrics.RateLimit},
+		Authenticator: authenticator,
+		Clock:         app.SystemClock{},
+	}, httpapi.HandlerOptions{
+		PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
+		PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
+		ReadinessTimeout:      readinessCheckTimeout,
+		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
+		RateLimit:             cfg.HTTP.RateLimit,
+	})
 	if err != nil {
 		return err
 	}
@@ -85,36 +102,12 @@ func run(cfg config, logger *slog.Logger) error {
 	defer signal.Stop(shutdownSignals)
 
 	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
-	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(httpRuntime.handler, cfg.HTTP.ServerConfig)}, {listener: metricsListener, server: newHTTPServer(httpRuntime.metricsHandler, cfg.Metrics.ServerConfig)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
-}
-
-type httpRuntime struct {
-	handler        http.Handler
-	metricsHandler http.Handler
+	return serveUntilShutdownAll([]runtimeServer{{listener: listener, server: newHTTPServer(handler, cfg.HTTP.ServerConfig)}, {listener: metricsListener, server: newHTTPServer(metrics.Handler, cfg.Metrics.ServerConfig)}}, readiness, cfg.Runtime.ShutdownTimeout, shutdownSignals, logger)
 }
 
 type httpAPIMetrics struct {
 	*observability.HTTPMetrics
 	*observability.RateLimitMetrics
-}
-
-func buildHTTPRuntime(readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentService *app.PaymentService, metrics observability.Metrics) (httpRuntime, error) {
-	authenticator, err := cfg.Auth.authenticator()
-	if err != nil {
-		return httpRuntime{}, err
-	}
-	handler, err := httpapi.NewHandler(httpapi.HandlerDependencies{
-		Payments:      paymentService,
-		Readiness:     readiness,
-		Logger:        logger,
-		Metrics:       httpAPIMetrics{HTTPMetrics: metrics.HTTP, RateLimitMetrics: metrics.RateLimit},
-		Authenticator: authenticator,
-		Clock:         app.SystemClock{},
-	}, cfg.Options)
-	if err != nil {
-		return httpRuntime{}, err
-	}
-	return httpRuntime{handler: handler, metricsHandler: metrics.Handler}, nil
 }
 
 func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {

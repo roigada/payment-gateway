@@ -121,24 +121,6 @@ type MockBankConfig struct {
 	IdleConnectionTimeout time.Duration
 }
 
-type httpHandlerConfig struct {
-	Options httpapi.HandlerOptions
-	Auth    AuthConfig
-}
-
-func (cfg config) httpHandler() httpHandlerConfig {
-	return httpHandlerConfig{
-		Options: httpapi.HandlerOptions{
-			PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
-			PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
-			ReadinessTimeout:      readinessCheckTimeout,
-			MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
-			RateLimit:             cfg.HTTP.RateLimit,
-		},
-		Auth: cfg.Auth,
-	}
-}
-
 func (cfg AuthConfig) authenticator() (*serviceauth.Authenticator, error) {
 	return serviceauth.NewAuthenticator(cfg.HMACKey, cfg.Credentials)
 }

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"net/http"
 	"strings"
 )
 
@@ -99,9 +98,8 @@ func ValidateHMACKey(key []byte) error {
 	return nil
 }
 
-func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
-	credential, ok := bearerCredential(r.Header.Get("Authorization"))
-	if !ok {
+func (a *Authenticator) Authenticate(credential string) (Principal, bool) {
+	if credential == "" {
 		return Principal{}, false
 	}
 	mac := hmac.New(sha256.New, a.key)
@@ -127,12 +125,4 @@ func (p Principal) ID() string { return p.id }
 func (p Principal) HasScope(scope Scope) bool {
 	_, ok := p.scopes[scope]
 	return ok
-}
-
-func bearerCredential(header string) (string, bool) {
-	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-		return "", false
-	}
-	return parts[1], true
 }

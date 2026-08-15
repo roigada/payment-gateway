@@ -13,6 +13,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBearerCredential(t *testing.T) {
+	for _, tt := range []struct {
+		name, header, credential string
+		ok                       bool
+	}{
+		{name: "valid", header: "Bearer credential", credential: "credential", ok: true},
+		{name: "case insensitive scheme", header: "bearer credential", credential: "credential", ok: true},
+		{name: "missing", header: "", ok: false},
+		{name: "wrong scheme", header: "Basic credential", ok: false},
+		{name: "missing credential", header: "Bearer", ok: false},
+		{name: "too many fields", header: "Bearer credential extra", ok: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			credential, ok := bearerCredential(tt.header)
+
+			assert.Equal(t, tt.credential, credential)
+			assert.Equal(t, tt.ok, ok)
+		})
+	}
+}
+
 func TestRecoverPanicWritesInternalServerErrorBeforeResponseStarts(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")

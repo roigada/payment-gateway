@@ -1,8 +1,6 @@
 package serviceauth
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,21 +18,18 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
-		name, header              string
+		name, credential          string
 		scope                     Scope
 		authenticated, authorized bool
 	}{
-		{"read credential", "Bearer " + readCredential, ScopePaymentsRead, true, true},
-		{"read credential lacks write", "Bearer " + readCredential, ScopePaymentsWrite, true, false},
-		{"rotated credential", "Bearer " + writeCredential, ScopePaymentsWrite, true, true},
+		{"read credential", readCredential, ScopePaymentsRead, true, true},
+		{"read credential lacks write", readCredential, ScopePaymentsWrite, true, false},
+		{"rotated credential", writeCredential, ScopePaymentsWrite, true, true},
 		{"missing", "", ScopePaymentsRead, false, false},
-		{"malformed", "Basic " + readCredential, ScopePaymentsRead, false, false},
-		{"invalid", "Bearer not-configured", ScopePaymentsRead, false, false},
+		{"invalid", "not-configured", ScopePaymentsRead, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments", nil)
-			req.Header.Set("Authorization", tt.header)
-			principal, authenticated := authenticator.Authenticate(req)
+			principal, authenticated := authenticator.Authenticate(tt.credential)
 			authorized := authenticated && principal.HasScope(tt.scope)
 			assert.Equal(t, tt.authenticated, authenticated)
 			assert.Equal(t, tt.authorized, authorized)

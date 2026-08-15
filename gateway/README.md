@@ -131,13 +131,7 @@ Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness ch
 
 Every `/api/v1/` route requires an opaque `Authorization: Bearer <credential>` header. Payment search and lookup require `payments:read`; Payment commands require `payments:write`. Missing, malformed, or invalid credentials return `401 Unauthorized` with `WWW-Authenticate: Bearer`; valid credentials without the route's scope return `403 Forbidden`.
 
-Generate a high-entropy credential and its configuration digest with a locally supplied HMAC key:
-
-```sh
-go run ./cmd/service-credential -hmac-key "$SERVICE_CREDENTIAL_HMAC_KEY"
-```
-
-Store the printed raw credential only in the Order Service secret store. Put its printed `digest=scopes` entry in `ORDER_SERVICE_CREDENTIALS`; comma-separate entries to keep overlapping active credentials during planned rotation. The gateway never needs the raw credential. Revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; the HTTP-only root Compose demo is a trusted local-development exception.
+`make demo` generates a throwaway local credential, its verification key, and its configured digest in the ignored root `.env` file. The raw `ORDER_SERVICE_CREDENTIAL` is used only by local demo requests; the gateway receives `SERVICE_CREDENTIAL_HMAC_KEY` and `ORDER_SERVICE_CREDENTIALS`. Delete `.env` before the next `make demo` to rotate the local credential. In a deployed environment, provision raw credentials only to the Order Service secret store, configure their `digest=scopes` entries in `ORDER_SERVICE_CREDENTIALS`, overlap active credential digests during planned rotation, and revoke a credential through a configuration rollout that removes its digest. Non-local deployments must terminate TLS before traffic reaches the gateway; the HTTP-only root Compose demo is a trusted local-development exception.
 
 Completed payment commands have an Idempotency Replay Window of at least 24 hours. Retrying the same operation with the same Idempotency Key and request values during that window returns the saved response. The gateway cleans completed replay snapshots on its configured schedule; after cleanup removes a completed snapshot, that key may start a new command. Use a fresh Idempotency Key for each logical payment command. In-progress claims are never removed by this cleanup.
 
