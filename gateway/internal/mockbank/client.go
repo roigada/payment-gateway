@@ -56,13 +56,6 @@ func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
 	return &Client{baseURL: parsed, httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
 }
 
-func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, timeout)
-}
-
 type metrics interface {
 	RecordMockBankRequest(operation string, result string, duration time.Duration)
 	RecordMockBankRetry(operation string, result string)
@@ -72,13 +65,6 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 	return retryTransient(c, ctx, "authorize", func(ctx context.Context, timeout time.Duration) (app.BankAuthorizationResult, error) {
 		return c.authorizePaymentAttempt(ctx, request, timeout)
 	})
-}
-
-func (c *Client) initialAttemptTimeout() time.Duration {
-	if c.config.InitialAttemptTimeout > 0 {
-		return c.config.InitialAttemptTimeout
-	}
-	return c.config.Timeout
 }
 
 func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAuthorizationRequest, timeout time.Duration) (app.BankAuthorizationResult, error) {
@@ -390,6 +376,13 @@ func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefun
 	return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank refund failed: status %d", response.StatusCode))
 }
 
+func (c *Client) initialAttemptTimeout() time.Duration {
+	if c.config.InitialAttemptTimeout > 0 {
+		return c.config.InitialAttemptTimeout
+	}
+	return c.config.Timeout
+}
+
 func (c *Client) recordRequest(operation string, result string, duration time.Duration) {
 	if c.metrics == nil {
 		return
@@ -446,6 +439,13 @@ func retryWaitError(err error) error {
 		return app.NewPaymentBankTimeoutError(err)
 	}
 	return app.NewPaymentBankUnavailableError(err)
+}
+
+func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func isTimeout(err error) bool {
