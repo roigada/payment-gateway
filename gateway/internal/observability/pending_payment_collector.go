@@ -7,9 +7,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// PendingPaymentMetricsSource supplies aggregate visibility into current Pending
-// Payments. It deliberately exposes no Payment or customer identifiers.
-type PendingPaymentMetricsSource interface {
+// PendingPaymentReader supplies aggregate visibility into current Pending Payments.
+// It deliberately exposes no Payment or customer identifiers.
+type PendingPaymentReader interface {
 	PendingPaymentMetrics(ctx context.Context) (count int64, oldestAgeSeconds float64, err error)
 }
 
@@ -17,18 +17,18 @@ type PendingPaymentMetricsSource interface {
 // Payments at scrape time. It does not modify Payment state or contact the Mock
 // Bank.
 type PendingPaymentCollector struct {
-	source          PendingPaymentMetricsSource
+	reader          PendingPaymentReader
 	pendingPayments *prometheus.Desc
 	oldestPending   *prometheus.Desc
 }
 
-func NewPendingPaymentCollector(source PendingPaymentMetricsSource) (*PendingPaymentCollector, error) {
-	if source == nil {
-		return nil, fmt.Errorf("pending payment metrics source is required")
+func NewPendingPaymentCollector(reader PendingPaymentReader) (*PendingPaymentCollector, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("pending payment reader is required")
 	}
 
 	return &PendingPaymentCollector{
-		source: source,
+		reader: reader,
 		pendingPayments: prometheus.NewDesc(
 			"payment_gateway_pending_payments_total",
 			"Current number of Pending Payments in the payment gateway.",
@@ -50,7 +50,7 @@ func (c *PendingPaymentCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *PendingPaymentCollector) Collect(ch chan<- prometheus.Metric) {
-	count, oldestAgeSeconds, err := c.source.PendingPaymentMetrics(context.Background())
+	count, oldestAgeSeconds, err := c.reader.PendingPaymentMetrics(context.Background())
 	if err != nil {
 		return
 	}

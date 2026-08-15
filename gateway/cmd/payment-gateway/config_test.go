@@ -21,9 +21,9 @@ func validConfig() config {
 	return config{
 		Runtime:  RuntimeConfig{LogLevel: defaultLogLevel, ShutdownTimeout: defaultShutdownTimeout, IdempotencyReplayCleanupInterval: defaultIdempotencyReplayCleanupInterval},
 		Database: DatabaseConfig{URL: validDatabaseURL, MaxOpenConnections: defaultDatabaseMaxOpenConnections, MaxIdleConnections: defaultDatabaseMaxIdleConnections, ConnectionMaxLifetime: defaultDatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: defaultDatabaseConnectionMaxIdleTime, StartupTimeout: defaultDatabaseStartupTimeout},
-		HTTP:     HTTPConfig{ServerConfig: ServerConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout}, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}},
+		HTTP:     HTTPConfig{ServerConfig: ServerConfig{Addr: defaultHTTPAddr, ReadHeaderTimeout: defaultHTTPReadHeaderTimeout, ReadTimeout: defaultHTTPReadTimeout, WriteTimeout: defaultHTTPWriteTimeout, IdleTimeout: defaultHTTPIdleTimeout}, MaxRequestBodyBytes: defaultHTTPMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}, PaymentCommandTimeout: defaultPaymentCommandTimeout, PaymentReadTimeout: defaultPaymentReadTimeout},
 		Metrics:  MetricsConfig{ServerConfig: ServerConfig{Addr: defaultMetricsAddr, ReadHeaderTimeout: defaultMetricsReadHeaderTimeout, ReadTimeout: defaultMetricsReadTimeout, WriteTimeout: defaultMetricsWriteTimeout, IdleTimeout: defaultMetricsIdleTimeout}},
-		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter, CommandTimeout: defaultPaymentCommandTimeout, ReadTimeout: defaultPaymentReadTimeout},
+		Payment:  PaymentConfig{FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter},
 		Auth: AuthConfig{HMACKey: []byte(validCredentialKey), Credentials: []serviceauth.Credential{
 			{Digest: serviceauth.Digest([]byte(validCredentialKey), "test-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}},
 		}},
@@ -54,12 +54,12 @@ func TestConfigValidate(t *testing.T) {
 		{"service credentials", func(c *config) { c.Auth.Credentials = nil }, "service credential configuration is invalid"},
 		{"mock bank initial attempt", func(c *config) { c.MockBank.InitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank timeout", func(c *config) { c.MockBank.Timeout = 0 }, "MOCK_BANK_TIMEOUT must be a positive duration"},
-		{"idempotency claim stuck-after budget", func(c *config) { c.Payment.IdempotencyClaimStuckAfter = c.Payment.CommandTimeout }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT"},
-		{"mock bank timeout budget", func(c *config) { c.MockBank.Timeout = c.Payment.CommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
+		{"idempotency claim stuck-after budget", func(c *config) { c.Payment.IdempotencyClaimStuckAfter = c.HTTP.PaymentCommandTimeout }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT"},
+		{"mock bank timeout budget", func(c *config) { c.MockBank.Timeout = c.HTTP.PaymentCommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
 		{"mock bank retry delay", func(c *config) { c.MockBank.RetryDelay = 0 }, "MOCK_BANK_RETRY_DELAY must be a positive duration"},
 		{"mock bank retry attempt", func(c *config) { c.MockBank.RetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
-		{"mock bank retry budget", func(c *config) { c.MockBank.RetryAttemptTimeout = c.Payment.CommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
-		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.Payment.CommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
+		{"mock bank retry budget", func(c *config) { c.MockBank.RetryAttemptTimeout = c.HTTP.PaymentCommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
+		{"HTTP write budget", func(c *config) { c.HTTP.WriteTimeout = c.HTTP.PaymentCommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"metrics read timeout", func(c *config) { c.Metrics.ReadTimeout = 0 }, "METRICS_READ_TIMEOUT must be a positive duration"},
 		{"log level", func(c *config) { c.Runtime.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
 		{"idempotency replay cleanup interval", func(c *config) { c.Runtime.IdempotencyReplayCleanupInterval = 0 }, "IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration"},
@@ -89,7 +89,7 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, validDatabaseURL, cfg.Database.URL)
 	assert.Equal(t, defaultDatabaseMaxOpenConnections, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.Database.ConnectionMaxIdleTime)
-	assert.Equal(t, defaultPaymentCommandTimeout, cfg.Payment.CommandTimeout)
+	assert.Equal(t, defaultPaymentCommandTimeout, cfg.HTTP.PaymentCommandTimeout)
 	assert.Equal(t, httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}, cfg.HTTP.RateLimit)
 	assert.Equal(t, defaultMockBankInitialAttemptTimeout, cfg.MockBank.InitialAttemptTimeout)
 	assert.Equal(t, defaultMockBankRetryDelay, cfg.MockBank.RetryDelay)
@@ -122,7 +122,7 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, 20, cfg.Database.MaxOpenConnections)
 	assert.Equal(t, 8, cfg.Database.MaxIdleConnections)
 	assert.Equal(t, 45*time.Minute, cfg.Database.ConnectionMaxLifetime)
-	assert.Equal(t, 12*time.Second, cfg.Payment.CommandTimeout)
+	assert.Equal(t, 12*time.Second, cfg.HTTP.PaymentCommandTimeout)
 	assert.Equal(t, 3*time.Second, cfg.MockBank.InitialAttemptTimeout)
 	assert.Equal(t, 500*time.Millisecond, cfg.MockBank.RetryDelay)
 	assert.Equal(t, 6*time.Second, cfg.MockBank.RetryAttemptTimeout)

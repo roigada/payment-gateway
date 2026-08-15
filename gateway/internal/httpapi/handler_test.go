@@ -369,11 +369,11 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 			},
 		},
 		{
-			name:     "rate limiter",
-			expected: "httpapi handler: rate limiter is required",
+			name:     "rate limit clock",
+			expected: "httpapi handler: rate limit clock is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
 				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.RateLimiter = nil
+				dependencies.Clock = nil
 				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
 			},
 		},
@@ -1248,20 +1248,19 @@ func testHandlerOptions(t *testing.T) httpapi.HandlerOptions {
 		PaymentReadTimeout:    time.Second,
 		ReadinessTimeout:      time.Second,
 		MaxRequestBodyBytes:   64 * 1024,
+		RateLimit:             httpapi.RateLimitConfig{ReadRequestsPerSecond: 30, ReadBurst: 60, WriteRequestsPerSecond: 5, WriteBurst: 10},
 	}
 }
 
 func testHandlerDependencies(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics) httpapi.HandlerDependencies {
 	t.Helper()
-	limiter, err := httpapi.NewRateLimiter(&testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, httpapi.RateLimitConfig{ReadRequestsPerSecond: 30, ReadBurst: 60, WriteRequestsPerSecond: 5, WriteBurst: 10})
-	require.NoError(t, err)
 	return httpapi.HandlerDependencies{
 		Payments:      payments,
 		Readiness:     readiness,
 		Logger:        logger,
 		Metrics:       metrics,
 		Authenticator: testAuthenticator(t),
-		RateLimiter:   limiter,
+		Clock:         &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	}
 }
 
@@ -1276,15 +1275,14 @@ func (c *testClock) Now() time.Time { return c.now }
 
 func newRateLimitedPaymentAPITest(t *testing.T, clock *testClock, config httpapi.RateLimitConfig, authenticator *serviceauth.Authenticator) *paymentAPITest {
 	t.Helper()
-	limiter, err := httpapi.NewRateLimiter(clock, config)
-	require.NoError(t, err)
 	options := testHandlerOptions(t)
+	options.RateLimit = config
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
 	dependencies := testHandlerDependencies(t, payments, readiness, discardLogger(), metrics)
 	dependencies.Authenticator = authenticator
-	dependencies.RateLimiter = limiter
+	dependencies.Clock = clock
 	handler, err := httpapi.NewHandler(dependencies, options)
 	require.NoError(t, err)
 	return &paymentAPITest{payments: payments, readiness: readiness, handler: handler, metrics: metrics}

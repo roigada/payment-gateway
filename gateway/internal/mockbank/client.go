@@ -26,14 +26,35 @@ type Client struct {
 // ClientConfig contains all Mock Bank call budgets. A zero value disables
 // deadlines and automatic retries, which is useful for isolated adapter tests.
 type ClientConfig struct {
+	BaseURL               string
 	Timeout               time.Duration
 	InitialAttemptTimeout time.Duration
 	RetryDelay            time.Duration
 	RetryAttemptTimeout   time.Duration
+	ConnectTimeout        time.Duration
+	TLSHandshakeTimeout   time.Duration
+	ResponseHeaderTimeout time.Duration
+	IdleConnectionTimeout time.Duration
 }
 
-func NewClient(baseURL string, httpClient *http.Client, metrics metrics, config ClientConfig) (*Client, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+// NewClient constructs a Mock Bank client with its HTTP transport configured
+// from the supplied call budgets.
+func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: config.ConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   config.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
+		IdleConnTimeout:       config.IdleConnectionTimeout,
+	}
+	return NewClientWithHTTPClient(config.BaseURL, &http.Client{Transport: transport}, metrics, config)
+}
+
+// NewClientWithHTTPClient constructs a Mock Bank client with a caller-provided
+// HTTP client. It is useful when tests or another composition root need to
+// customize HTTP behavior.
+func NewClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics metrics, config ClientConfig) (*Client, error) {
+	config.BaseURL = baseURL
+	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
 	if err != nil {
 		return nil, err
 	}

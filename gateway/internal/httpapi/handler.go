@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -29,7 +30,7 @@ type HandlerDependencies struct {
 	Logger        *slog.Logger
 	Metrics       httpMetrics
 	Authenticator *serviceauth.Authenticator
-	RateLimiter   *RateLimiter
+	Clock         Clock
 }
 
 type HandlerOptions struct {
@@ -37,6 +38,7 @@ type HandlerOptions struct {
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
+	RateLimit             RateLimitConfig
 }
 
 type paymentApplication interface {
@@ -74,8 +76,9 @@ func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Hand
 	if dependencies.Authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	if dependencies.RateLimiter == nil {
-		return nil, errors.New("httpapi handler: rate limiter is required")
+	rateLimiter, err := NewRateLimiter(dependencies.Clock, options.RateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("httpapi handler: %w", err)
 	}
 
 	handler := &Handler{
@@ -84,7 +87,7 @@ func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Hand
 		payments:      dependencies.Payments,
 		readiness:     dependencies.Readiness,
 		authenticator: dependencies.Authenticator,
-		rateLimiter:   dependencies.RateLimiter,
+		rateLimiter:   rateLimiter,
 		options:       options,
 	}
 	handler.handler = handler.routes()

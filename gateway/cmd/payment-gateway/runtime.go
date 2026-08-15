@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net"
@@ -36,19 +35,29 @@ func run(cfg config, logger *slog.Logger) error {
 	readiness := newShutdownReadiness(postgres.NewReadinessChecker(db))
 	paymentStore := postgres.NewPaymentStore(db)
 	paymentClock := app.SystemClock{}
-	metricsRuntime, err := buildMetricsRuntime(db, paymentStore)
+	metrics, err := observability.NewMetrics(db, paymentStore)
 	if err != nil {
 		return err
 	}
-	paymentService, err := buildPaymentService(paymentStore, metricsRuntime, cfg.httpHandler(), paymentClock)
+	mockBank, err := mockbank.NewClient(metrics.MockBank, cfg.MockBank.clientConfig())
 	if err != nil {
 		return err
 	}
-	httpRuntime, err := buildHTTPRuntime(readiness, logger, cfg.httpHandler(), paymentService, metricsRuntime)
+	paymentService := app.NewPaymentService(
+		paymentStore,
+		uuidgen.NewPaymentIDGenerator(),
+		uuidgen.NewBankOperationKeyGenerator(),
+		mockBank,
+		metrics.PaymentOperations,
+		paymentClock,
+		cfg.Payment.FingerprintSecret,
+		cfg.Payment.IdempotencyClaimStuckAfter,
+	)
+	httpRuntime, err := buildHTTPRuntime(readiness, logger, cfg.httpHandler(), paymentService, metrics)
 	if err != nil {
 		return err
 	}
-	cleanupRunner := idempotencycleanup.New(paymentService, metricsRuntime.cleanupMetrics, logger, cfg.Runtime.IdempotencyReplayCleanupInterval)
+	cleanupRunner := idempotencycleanup.New(paymentService, metrics.IdempotencyReplayCleanup, logger, cfg.Runtime.IdempotencyReplayCleanupInterval)
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -89,12 +98,8 @@ type httpAPIMetrics struct {
 	*observability.RateLimitMetrics
 }
 
-func buildHTTPRuntime(readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentService *app.PaymentService, metricsRuntime metricsRuntime) (httpRuntime, error) {
+func buildHTTPRuntime(readiness readinessChecker, logger *slog.Logger, cfg httpHandlerConfig, paymentService *app.PaymentService, metrics observability.Metrics) (httpRuntime, error) {
 	authenticator, err := cfg.Auth.authenticator()
-	if err != nil {
-		return httpRuntime{}, err
-	}
-	rateLimiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.RateLimit)
 	if err != nil {
 		return httpRuntime{}, err
 	}
@@ -102,92 +107,14 @@ func buildHTTPRuntime(readiness readinessChecker, logger *slog.Logger, cfg httpH
 		Payments:      paymentService,
 		Readiness:     readiness,
 		Logger:        logger,
-		Metrics:       httpAPIMetrics{HTTPMetrics: metricsRuntime.httpMetrics, RateLimitMetrics: metricsRuntime.rateLimitMetrics},
+		Metrics:       httpAPIMetrics{HTTPMetrics: metrics.HTTP, RateLimitMetrics: metrics.RateLimit},
 		Authenticator: authenticator,
-		RateLimiter:   rateLimiter,
+		Clock:         app.SystemClock{},
 	}, cfg.Options)
 	if err != nil {
 		return httpRuntime{}, err
 	}
-	return httpRuntime{handler: handler, metricsHandler: metricsRuntime.handler}, nil
-}
-
-func buildPaymentService(paymentStore *postgres.PaymentStore, metrics metricsRuntime, cfg httpHandlerConfig, clock app.Clock) (*app.PaymentService, error) {
-	mockBank, err := newMockBankClient(cfg.MockBank, metrics.mockBankMetrics)
-	if err != nil {
-		return nil, err
-	}
-	return app.NewPaymentService(paymentStore, uuidgen.NewPaymentIDGenerator(), uuidgen.NewBankOperationKeyGenerator(), mockBank, metrics.paymentOperationMetrics, clock, cfg.Payment.FingerprintSecret, cfg.Payment.IdempotencyClaimStuckAfter), nil
-}
-
-type metricsRuntime struct {
-	handler                 http.Handler
-	httpMetrics             *observability.HTTPMetrics
-	rateLimitMetrics        *observability.RateLimitMetrics
-	mockBankMetrics         *observability.MockBankMetrics
-	paymentOperationMetrics *observability.PaymentOperationMetrics
-	cleanupMetrics          *observability.IdempotencyReplayCleanupMetrics
-}
-
-func buildMetricsRuntime(db *sql.DB, paymentStore *postgres.PaymentStore) (metricsRuntime, error) {
-	registry := observability.NewRegistry()
-	httpMetrics, err := observability.NewHTTPMetrics(registry)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	rateLimitMetrics, err := observability.NewRateLimitMetrics(registry)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	mockBankMetrics, err := observability.NewMockBankMetrics(registry)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	paymentOperationMetrics, err := observability.NewPaymentOperationMetrics(registry)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	cleanupMetrics, err := observability.NewIdempotencyReplayCleanupMetrics(registry)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	postgresPoolCollector, err := observability.NewPostgresPoolCollector(db)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	if err := registry.Register(postgresPoolCollector); err != nil {
-		return metricsRuntime{}, err
-	}
-	pendingPaymentCollector, err := observability.NewPendingPaymentCollector(paymentStore)
-	if err != nil {
-		return metricsRuntime{}, err
-	}
-	if err := registry.Register(pendingPaymentCollector); err != nil {
-		return metricsRuntime{}, err
-	}
-	return metricsRuntime{
-		handler:                 observability.NewHandler(registry),
-		httpMetrics:             httpMetrics,
-		rateLimitMetrics:        rateLimitMetrics,
-		mockBankMetrics:         mockBankMetrics,
-		paymentOperationMetrics: paymentOperationMetrics,
-		cleanupMetrics:          cleanupMetrics,
-	}, nil
-}
-
-func newMockBankClient(cfg MockBankConfig, metrics *observability.MockBankMetrics) (*mockbank.Client, error) {
-	transport := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: cfg.ConnectTimeout}).DialContext,
-		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
-		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
-		IdleConnTimeout:       cfg.IdleConnectionTimeout,
-	}
-	return mockbank.NewClient(cfg.BaseURL, &http.Client{Transport: transport}, metrics, mockbank.ClientConfig{
-		Timeout:               cfg.Timeout,
-		InitialAttemptTimeout: cfg.InitialAttemptTimeout,
-		RetryDelay:            cfg.RetryDelay,
-		RetryAttemptTimeout:   cfg.RetryAttemptTimeout,
-	})
+	return httpRuntime{handler: handler, metricsHandler: metrics.Handler}, nil
 }
 
 func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {

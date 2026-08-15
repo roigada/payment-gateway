@@ -153,10 +153,8 @@ func TestServeUntilShutdownSeparatesMetricsAndStopsBothListeners(t *testing.T) {
 func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
 	options := testRuntimeHandlerOptions(t)
-	limiter, err := httpapi.NewRateLimiter(app.SystemClock{}, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1})
-	require.NoError(t, err)
 	dependencies := testRuntimeHandlerDependencies(t, runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{})
-	dependencies.RateLimiter = limiter
+	options.RateLimit = httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}
 	publicHandler, err := httpapi.NewHandler(dependencies, options)
 	require.NoError(t, err)
 
@@ -300,15 +298,13 @@ func testRuntimeHandlerDependencies(t *testing.T, payments runtimePaymentApplica
 	cfg := validConfig()
 	authenticator, err := cfg.Auth.authenticator()
 	require.NoError(t, err)
-	limiter, err := httpapi.NewRateLimiter(app.SystemClock{}, cfg.HTTP.RateLimit)
-	require.NoError(t, err)
 	return httpapi.HandlerDependencies{
 		Payments:      payments,
 		Readiness:     readiness,
 		Logger:        logger,
 		Metrics:       metrics,
 		Authenticator: authenticator,
-		RateLimiter:   limiter,
+		Clock:         app.SystemClock{},
 	}
 }
 func newTestListener(t *testing.T) net.Listener {

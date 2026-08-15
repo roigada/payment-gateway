@@ -45,12 +45,12 @@ func TestPendingPaymentCollectorReportsZeroOldestAgeWhenNoPendingPaymentsExist(t
 	assert.Equal(t, float64(0), metricFamilyByName(t, families, "payment_gateway_oldest_pending_payment_age_seconds").GetMetric()[0].GetGauge().GetValue())
 }
 
-func TestNewPendingPaymentCollectorRequiresMetricsSource(t *testing.T) {
+func TestNewPendingPaymentCollectorRequiresPendingPaymentReader(t *testing.T) {
 	collector, err := NewPendingPaymentCollector(nil)
 
 	require.Error(t, err)
 	assert.Nil(t, collector)
-	assert.Contains(t, err.Error(), "pending payment metrics source is required")
+	assert.Contains(t, err.Error(), "pending payment reader is required")
 }
 
 type pendingPaymentMetricsSource struct {

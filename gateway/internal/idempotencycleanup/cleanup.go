@@ -13,8 +13,8 @@ const (
 	failed    = "failed"
 )
 
-// Cleaner removes completed Idempotency Replays outside their retention window.
-type Cleaner interface {
+// CompletedReplayCleaner removes completed Idempotency Replays outside their retention window.
+type CompletedReplayCleaner interface {
 	CleanupCompletedIdempotencyReplays(context.Context) (int, error)
 }
 
@@ -34,7 +34,7 @@ func (t timeTicker) Chan() <-chan time.Time { return t.C }
 
 // Runner periodically removes completed Idempotency Replays outside their retention window.
 type Runner struct {
-	cleaner   Cleaner
+	cleaner   CompletedReplayCleaner
 	logger    *slog.Logger
 	metrics   Metrics
 	interval  time.Duration
@@ -42,7 +42,7 @@ type Runner struct {
 }
 
 // New constructs an Idempotency Replay cleanup runner.
-func New(cleaner Cleaner, metrics Metrics, logger *slog.Logger, interval time.Duration) *Runner {
+func New(cleaner CompletedReplayCleaner, metrics Metrics, logger *slog.Logger, interval time.Duration) *Runner {
 	return &Runner{
 		cleaner:  cleaner,
 		logger:   logger,
