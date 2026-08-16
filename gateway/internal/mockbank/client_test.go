@@ -796,14 +796,14 @@ func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) 
 	}
 }
 
-func TestMockBankTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(t *testing.T) {
+func TestMockBankAttemptTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		time.Sleep(50 * time.Millisecond)
 	}))
 	defer server.Close()
 
 	config := retryConfig()
-	config.Timeout = time.Millisecond
+	config.InitialAttemptTimeout = time.Millisecond
 	config.RetryAttemptTimeout = time.Millisecond
 	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, config)
 	require.NoError(t, err)
@@ -1277,7 +1277,6 @@ func testClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics m
 
 func retryConfig() Config {
 	return Config{
-		Timeout:               time.Second,
 		InitialAttemptTimeout: time.Second,
 		RetryDelay:            time.Millisecond,
 		RetryAttemptTimeout:   time.Second,

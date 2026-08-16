@@ -22,7 +22,6 @@ func TestConfigPostgresConfig(t *testing.T) {
 func TestConfigMockBankConfig(t *testing.T) {
 	cfg := validConfig()
 	cfg.MockBankBaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
-	cfg.MockBankTimeout = time.Minute
 	cfg.MockBankInitialAttemptTimeout = 10 * time.Second
 	cfg.MockBankRetryDelay = time.Second
 	cfg.MockBankRetryAttemptTimeout = 5 * time.Second
@@ -31,5 +30,5 @@ func TestConfigMockBankConfig(t *testing.T) {
 	cfg.MockBankResponseHeaderTimeout = 4 * time.Second
 	cfg.MockBankIdleConnectionTimeout = 30 * time.Second
 
-	assert.Equal(t, mockbank.Config{BaseURL: url.URL{Scheme: "https", Host: "mockbank.example"}, Timeout: time.Minute, InitialAttemptTimeout: 10 * time.Second, RetryDelay: time.Second, RetryAttemptTimeout: 5 * time.Second, ConnectTimeout: 2 * time.Second, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 4 * time.Second, IdleConnectionTimeout: 30 * time.Second}, cfg.mockBankConfig())
+	assert.Equal(t, mockbank.Config{BaseURL: url.URL{Scheme: "https", Host: "mockbank.example"}, InitialAttemptTimeout: 10 * time.Second, RetryDelay: time.Second, RetryAttemptTimeout: 5 * time.Second, ConnectTimeout: 2 * time.Second, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 4 * time.Second, IdleConnectionTimeout: 30 * time.Second}, cfg.mockBankConfig())
 }

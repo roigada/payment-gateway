@@ -50,7 +50,6 @@ type Client struct {
 // must be positive.
 type Config struct {
 	BaseURL               url.URL
-	Timeout               time.Duration
 	InitialAttemptTimeout time.Duration
 	RetryDelay            time.Duration
 	RetryAttemptTimeout   time.Duration
@@ -83,9 +82,6 @@ func (config Config) validate() error {
 		return fmt.Errorf("mock bank base URL must be absolute")
 	}
 
-	if config.Timeout <= 0 {
-		return fmt.Errorf("mock bank timeout must be positive")
-	}
 	if config.InitialAttemptTimeout <= 0 {
 		return fmt.Errorf("mock bank initial attempt timeout must be positive")
 	}
@@ -122,7 +118,7 @@ func (c *Client) AuthorizePayment(ctx context.Context, request app.BankAuthoriza
 }
 
 func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAuthorizationRequest, timeout time.Duration) (app.BankAuthorizationResult, error) {
-	ctx, cancel := requestContext(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
@@ -205,7 +201,7 @@ func (c *Client) CapturePayment(ctx context.Context, request app.BankCaptureRequ
 }
 
 func (c *Client) capturePaymentAttempt(ctx context.Context, request app.BankCaptureRequest, timeout time.Duration) (app.BankCaptureResult, error) {
-	ctx, cancel := requestContext(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
@@ -281,7 +277,7 @@ func (c *Client) VoidPayment(ctx context.Context, request app.BankVoidRequest) (
 }
 
 func (c *Client) voidPaymentAttempt(ctx context.Context, request app.BankVoidRequest, timeout time.Duration) (app.BankVoidResult, error) {
-	ctx, cancel := requestContext(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
@@ -356,7 +352,7 @@ func (c *Client) RefundPayment(ctx context.Context, request app.BankRefundReques
 }
 
 func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefundRequest, timeout time.Duration) (app.BankRefundResult, error) {
-	ctx, cancel := requestContext(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
@@ -459,13 +455,6 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, timeout)
 }
 
 func isTimeout(err error) bool {

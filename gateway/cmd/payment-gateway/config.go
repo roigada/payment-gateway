@@ -33,7 +33,6 @@ const (
 	defaultMockBankInitialAttemptTimeout                = 2 * time.Second
 	defaultMockBankRetryDelay                           = 250 * time.Millisecond
 	defaultMockBankRetryAttemptTimeout                  = 5 * time.Second
-	defaultMockBankTimeout                              = 7 * time.Second
 	defaultHTTPReadHeaderTimeout                        = 5 * time.Second
 	defaultHTTPAddr                                     = ":8080"
 	defaultMetricsAddr                                  = ":9091"
@@ -90,7 +89,6 @@ type config struct {
 	ServiceCredentialHMACKey         []byte
 	ServiceCredentials               []serviceauth.Credential
 	MockBankBaseURL                  url.URL
-	MockBankTimeout                  time.Duration
 	MockBankInitialAttemptTimeout    time.Duration
 	MockBankRetryDelay               time.Duration
 	MockBankRetryAttemptTimeout      time.Duration
@@ -105,7 +103,7 @@ func (cfg config) postgresConfig() postgres.Config {
 }
 
 func (cfg config) mockBankConfig() mockbank.Config {
-	return mockbank.Config{BaseURL: cfg.MockBankBaseURL, Timeout: cfg.MockBankTimeout, InitialAttemptTimeout: cfg.MockBankInitialAttemptTimeout, RetryDelay: cfg.MockBankRetryDelay, RetryAttemptTimeout: cfg.MockBankRetryAttemptTimeout, ConnectTimeout: cfg.MockBankConnectTimeout, TLSHandshakeTimeout: cfg.MockBankTLSHandshakeTimeout, ResponseHeaderTimeout: cfg.MockBankResponseHeaderTimeout, IdleConnectionTimeout: cfg.MockBankIdleConnectionTimeout}
+	return mockbank.Config{BaseURL: cfg.MockBankBaseURL, InitialAttemptTimeout: cfg.MockBankInitialAttemptTimeout, RetryDelay: cfg.MockBankRetryDelay, RetryAttemptTimeout: cfg.MockBankRetryAttemptTimeout, ConnectTimeout: cfg.MockBankConnectTimeout, TLSHandshakeTimeout: cfg.MockBankTLSHandshakeTimeout, ResponseHeaderTimeout: cfg.MockBankResponseHeaderTimeout, IdleConnectionTimeout: cfg.MockBankIdleConnectionTimeout}
 }
 
 func (cfg config) handlerConfig() httpapi.HandlerConfig {
@@ -182,10 +180,6 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	mockBankRetryAttemptTimeout, err := envDuration("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT", defaultMockBankRetryAttemptTimeout)
-	if err != nil {
-		return config{}, err
-	}
-	mockBankTimeout, err := envDuration("MOCK_BANK_TIMEOUT", defaultMockBankTimeout)
 	if err != nil {
 		return config{}, err
 	}
@@ -272,7 +266,7 @@ func loadConfig() (config, error) {
 		HTTPAddr: envString("ADDR", defaultHTTPAddr), HTTPReadHeaderTimeout: httpReadHeaderTimeout, HTTPReadTimeout: httpReadTimeout, HTTPWriteTimeout: httpWriteTimeout, HTTPIdleTimeout: httpIdleTimeout, HTTPMaxRequestBodyBytes: httpMaxRequestBodyBytes, RateLimitReadRequestsPerSecond: readRateLimitRequestsPerSecond, RateLimitReadBurst: readRateLimitBurst, RateLimitWriteRequestsPerSecond: writeRateLimitRequestsPerSecond, RateLimitWriteBurst: writeRateLimitBurst, PaymentCommandTimeout: paymentCommandTimeout, PaymentReadTimeout: paymentReadTimeout, ReadinessTimeout: readinessTimeout,
 		MetricsAddr: envString("METRICS_ADDR", defaultMetricsAddr), MetricsReadHeaderTimeout: metricsReadHeaderTimeout, MetricsReadTimeout: metricsReadTimeout, MetricsWriteTimeout: metricsWriteTimeout, MetricsIdleTimeout: metricsIdleTimeout,
 		FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, ServiceCredentialHMACKey: serviceCredentialHMACKey, ServiceCredentials: serviceCredentials,
-		MockBankBaseURL: mockBankBaseURL, MockBankTimeout: mockBankTimeout, MockBankInitialAttemptTimeout: mockBankInitialAttemptTimeout, MockBankRetryDelay: mockBankRetryDelay, MockBankRetryAttemptTimeout: mockBankRetryAttemptTimeout, MockBankConnectTimeout: mockBankConnectTimeout, MockBankTLSHandshakeTimeout: mockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: mockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: mockBankIdleConnectionTimeout,
+		MockBankBaseURL: mockBankBaseURL, MockBankInitialAttemptTimeout: mockBankInitialAttemptTimeout, MockBankRetryDelay: mockBankRetryDelay, MockBankRetryAttemptTimeout: mockBankRetryAttemptTimeout, MockBankConnectTimeout: mockBankConnectTimeout, MockBankTLSHandshakeTimeout: mockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: mockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: mockBankIdleConnectionTimeout,
 	}
 	return cfg, nil
 }
@@ -340,12 +334,6 @@ func (cfg config) validate() error {
 	}
 	if cfg.MockBankInitialAttemptTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration")
-	}
-	if cfg.MockBankTimeout <= 0 {
-		return fmt.Errorf("MOCK_BANK_TIMEOUT must be a positive duration")
-	}
-	if cfg.MockBankTimeout >= cfg.PaymentCommandTimeout {
-		return fmt.Errorf("MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT")
 	}
 	if cfg.MockBankRetryDelay <= 0 {
 		return fmt.Errorf("MOCK_BANK_RETRY_DELAY must be a positive duration")

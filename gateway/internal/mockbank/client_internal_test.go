@@ -60,7 +60,6 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 		wantErr string
 	}{
 		{"base URL", func(config *Config) { config.BaseURL = url.URL{Path: "relative"} }, "mock bank base URL must be absolute"},
-		{"timeout", func(config *Config) { config.Timeout = 0 }, "mock bank timeout must be positive"},
 		{"initial attempt timeout", func(config *Config) { config.InitialAttemptTimeout = 0 }, "mock bank initial attempt timeout must be positive"},
 		{"retry delay", func(config *Config) { config.RetryDelay = 0 }, "mock bank retry delay must be positive"},
 		{"retry attempt timeout", func(config *Config) { config.RetryAttemptTimeout = 0 }, "mock bank retry attempt timeout must be positive"},

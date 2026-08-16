@@ -27,7 +27,7 @@ func validConfig() config {
 		MetricsAddr: defaultMetricsAddr, MetricsReadHeaderTimeout: defaultMetricsReadHeaderTimeout, MetricsReadTimeout: defaultMetricsReadTimeout, MetricsWriteTimeout: defaultMetricsWriteTimeout, MetricsIdleTimeout: defaultMetricsIdleTimeout,
 		FingerprintSecret: validFingerprintSecret, IdempotencyClaimStuckAfter: defaultIdempotencyClaimStuckAfter,
 		ServiceCredentialHMACKey: []byte(validCredentialKey), ServiceCredentials: []serviceauth.Credential{{Digest: serviceauth.Digest([]byte(validCredentialKey), "test-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsRead, serviceauth.ScopePaymentsWrite}}},
-		MockBankBaseURL: validMockBankBaseURL, MockBankTimeout: defaultMockBankTimeout, MockBankInitialAttemptTimeout: defaultMockBankInitialAttemptTimeout, MockBankRetryDelay: defaultMockBankRetryDelay, MockBankRetryAttemptTimeout: defaultMockBankRetryAttemptTimeout, MockBankConnectTimeout: defaultMockBankConnectTimeout, MockBankTLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: defaultMockBankIdleConnectionTimeout,
+		MockBankBaseURL: validMockBankBaseURL, MockBankInitialAttemptTimeout: defaultMockBankInitialAttemptTimeout, MockBankRetryDelay: defaultMockBankRetryDelay, MockBankRetryAttemptTimeout: defaultMockBankRetryAttemptTimeout, MockBankConnectTimeout: defaultMockBankConnectTimeout, MockBankTLSHandshakeTimeout: defaultMockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: defaultMockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: defaultMockBankIdleConnectionTimeout,
 	}
 }
 
@@ -54,9 +54,7 @@ func TestConfigValidate(t *testing.T) {
 		{"write rate", func(c *config) { c.RateLimitWriteRequestsPerSecond = 0 }, "RATE_LIMIT_WRITE_REQUESTS_PER_SECOND must be a positive integer"},
 		{"write burst", func(c *config) { c.RateLimitWriteBurst = 0 }, "RATE_LIMIT_WRITE_BURST must be a positive integer"},
 		{"mock bank initial attempt", func(c *config) { c.MockBankInitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
-		{"mock bank timeout", func(c *config) { c.MockBankTimeout = 0 }, "MOCK_BANK_TIMEOUT must be a positive duration"},
 		{"idempotency claim stuck-after budget", func(c *config) { c.IdempotencyClaimStuckAfter = c.PaymentCommandTimeout }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT"},
-		{"mock bank timeout budget", func(c *config) { c.MockBankTimeout = c.PaymentCommandTimeout }, "MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT"},
 		{"mock bank retry delay", func(c *config) { c.MockBankRetryDelay = 0 }, "MOCK_BANK_RETRY_DELAY must be a positive duration"},
 		{"mock bank retry attempt", func(c *config) { c.MockBankRetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank retry budget", func(c *config) { c.MockBankRetryAttemptTimeout = c.PaymentCommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},

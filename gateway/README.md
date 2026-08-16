@@ -53,7 +53,6 @@ PAYMENT_READ_TIMEOUT               optional Payment read deadline, defaults to 3
 MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT  optional initial Mock Bank attempt deadline, defaults to 2s
 MOCK_BANK_RETRY_DELAY              optional cancellable delay before one Mock Bank retry, defaults to 250ms
 MOCK_BANK_RETRY_ATTEMPT_TIMEOUT    optional second Mock Bank attempt deadline, defaults to 5s
-MOCK_BANK_TIMEOUT                  optional non-retried Mock Bank call deadline, defaults to 7s
 MOCK_BANK_CONNECT_TIMEOUT          optional Mock Bank connect timeout, defaults to 2s
 MOCK_BANK_TLS_HANDSHAKE_TIMEOUT    optional Mock Bank TLS handshake timeout, defaults to 2s
 MOCK_BANK_RESPONSE_HEADER_TIMEOUT  optional Mock Bank response-header timeout, defaults to 6s
@@ -98,7 +97,6 @@ export MOCK_BANK_BASE_URL='http://localhost:9090'
 export MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT='2s'
 export MOCK_BANK_RETRY_DELAY='250ms'
 export MOCK_BANK_RETRY_ATTEMPT_TIMEOUT='5s'
-export MOCK_BANK_TIMEOUT='7s'
 export MOCK_BANK_CONNECT_TIMEOUT='2s'
 export MOCK_BANK_TLS_HANDSHAKE_TIMEOUT='2s'
 export MOCK_BANK_RESPONSE_HEADER_TIMEOUT='6s'
