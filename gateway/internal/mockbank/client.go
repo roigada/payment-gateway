@@ -430,7 +430,10 @@ func retryTransient[T any](c *Client, ctx context.Context, operation string, att
 	}
 
 	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
-		return zero, retryWaitError(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return zero, app.NewPaymentBankTimeoutError(err)
+		}
+		return zero, app.NewPaymentBankUnavailableError(err)
 	}
 
 	c.metrics.RecordMockBankRetry(operation, mockBankRetryAttempted)
@@ -456,13 +459,6 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func retryWaitError(err error) error {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return app.NewPaymentBankTimeoutError(err)
-	}
-	return app.NewPaymentBankUnavailableError(err)
 }
 
 func requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
