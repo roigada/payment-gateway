@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 
 func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 	config := retryConfig()
-	config.BaseURL = "https://mockbank.example"
+	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
 	config.TLSHandshakeTimeout = 2
 	config.ResponseHeaderTimeout = 3
 	config.IdleConnectionTimeout = 4
@@ -32,7 +33,7 @@ func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 
 func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 	config := retryConfig()
-	config.BaseURL = "https://mockbank.example"
+	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
 	client, err := NewClient(noopMockBankMetrics{}, config)
 	require.NoError(t, err)
 
@@ -46,7 +47,7 @@ func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 }
 
 func TestNewClientRejectsNilMetrics(t *testing.T) {
-	client, err := NewClient(nil, Config{BaseURL: "https://mockbank.example"})
+	client, err := NewClient(nil, Config{BaseURL: url.URL{Scheme: "https", Host: "mockbank.example"}})
 
 	require.Nil(t, client)
 	require.EqualError(t, err, "mock bank metrics are required")
@@ -58,7 +59,7 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 		mutate  func(*Config)
 		wantErr string
 	}{
-		{"base URL", func(config *Config) { config.BaseURL = "relative" }, "mock bank base URL must be absolute"},
+		{"base URL", func(config *Config) { config.BaseURL = url.URL{Path: "relative"} }, "mock bank base URL must be absolute"},
 		{"timeout", func(config *Config) { config.Timeout = 0 }, "mock bank timeout must be positive"},
 		{"initial attempt timeout", func(config *Config) { config.InitialAttemptTimeout = 0 }, "mock bank initial attempt timeout must be positive"},
 		{"retry delay", func(config *Config) { config.RetryDelay = 0 }, "mock bank retry delay must be positive"},
@@ -70,7 +71,7 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			config := retryConfig()
-			config.BaseURL = "https://mockbank.example"
+			config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
 			tt.mutate(&config)
 
 			client, err := NewClient(noopMockBankMetrics{}, config)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
@@ -12,10 +13,11 @@ import (
 
 const (
 	validDatabaseURL       = "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable"
-	validMockBankBaseURL   = "http://localhost:9090"
 	validFingerprintSecret = "secret"
 	validCredentialKey     = "01234567890123456789012345678901"
 )
+
+var validMockBankBaseURL = url.URL{Scheme: "http", Host: "localhost:9090"}
 
 func validConfig() config {
 	return config{
@@ -42,6 +44,7 @@ func TestConfigValidate(t *testing.T) {
 		{"metrics listener port range", func(c *config) { c.MetricsAddr = ":65536" }, "METRICS_ADDR must use a port between 1 and 65535"},
 		{"shared listener address", func(c *config) { c.MetricsAddr = c.HTTPAddr }, "METRICS_ADDR must differ from ADDR"},
 		{"database URL", func(c *config) { c.DatabaseURL = "" }, "DATABASE_URL is required"},
+		{"mock bank URL", func(c *config) { c.MockBankBaseURL = url.URL{Path: "relative"} }, "MOCK_BANK_BASE_URL must be an absolute URL"},
 		{"pool size", func(c *config) { c.DatabaseMaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
 		{"pool relationship", func(c *config) { c.DatabaseMaxIdleConnections = c.DatabaseMaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
 		{"payment secret", func(c *config) { c.FingerprintSecret = "" }, "FINGERPRINT_SECRET is required"},
@@ -107,6 +110,7 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultMockBankInitialAttemptTimeout, cfg.MockBankInitialAttemptTimeout)
 	assert.Equal(t, defaultMockBankRetryDelay, cfg.MockBankRetryDelay)
 	assert.Equal(t, defaultMockBankRetryAttemptTimeout, cfg.MockBankRetryAttemptTimeout)
+	assert.Equal(t, validMockBankBaseURL, cfg.MockBankBaseURL)
 	assert.Equal(t, defaultLogLevel, cfg.LogLevel)
 	assert.Equal(t, defaultShutdownTimeout, cfg.ShutdownTimeout)
 	assert.Equal(t, defaultIdempotencyReplayCleanupInterval, cfg.IdempotencyReplayCleanupInterval)
@@ -156,6 +160,7 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 		{"PAYMENT_COMMAND_TIMEOUT", "forever"},
 		{"READINESS_CHECK_TIMEOUT", "forever"},
 		{"MOCK_BANK_RETRY_DELAY", "later"},
+		{"MOCK_BANK_BASE_URL", "https://%"},
 		{"HTTP_MAX_REQUEST_BODY_BYTES", "large"},
 		{"RATE_LIMIT_READ_REQUESTS_PER_SECOND", "many"},
 		{"RATE_LIMIT_READ_BURST", "many"},
@@ -177,7 +182,7 @@ func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 func setRequiredConfigEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", validDatabaseURL)
-	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL)
+	t.Setenv("MOCK_BANK_BASE_URL", validMockBankBaseURL.String())
 	t.Setenv("FINGERPRINT_SECRET", validFingerprintSecret)
 	t.Setenv("SERVICE_CREDENTIAL_HMAC_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE")
 	t.Setenv("ORDER_SERVICE_CREDENTIALS", serviceauth.Digest([]byte(validCredentialKey), "test-credential")+"=payments:read+payments:write")

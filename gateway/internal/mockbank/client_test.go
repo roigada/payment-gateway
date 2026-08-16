@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -1259,7 +1260,11 @@ type recordedMockBankRetry struct {
 // testClientWithHTTPClient keeps transport control local to adapter tests while
 // exercising the production constructor for configuration and URL validation.
 func testClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics metrics, config Config) (*Client, error) {
-	config.BaseURL = baseURL
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	config.BaseURL = *parsed
 	client, err := NewClient(metrics, config)
 	if err != nil {
 		return nil, err

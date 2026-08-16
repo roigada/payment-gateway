@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -88,7 +89,7 @@ type config struct {
 	IdempotencyClaimStuckAfter       time.Duration
 	ServiceCredentialHMACKey         []byte
 	ServiceCredentials               []serviceauth.Credential
-	MockBankBaseURL                  string
+	MockBankBaseURL                  url.URL
 	MockBankTimeout                  time.Duration
 	MockBankInitialAttemptTimeout    time.Duration
 	MockBankRetryDelay               time.Duration
@@ -260,6 +261,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	mockBankBaseURL, err := envURL("MOCK_BANK_BASE_URL")
+	if err != nil {
+		return config{}, err
+	}
 
 	cfg := config{
 		LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval,
@@ -267,7 +272,7 @@ func loadConfig() (config, error) {
 		HTTPAddr: envString("ADDR", defaultHTTPAddr), HTTPReadHeaderTimeout: httpReadHeaderTimeout, HTTPReadTimeout: httpReadTimeout, HTTPWriteTimeout: httpWriteTimeout, HTTPIdleTimeout: httpIdleTimeout, HTTPMaxRequestBodyBytes: httpMaxRequestBodyBytes, RateLimitReadRequestsPerSecond: readRateLimitRequestsPerSecond, RateLimitReadBurst: readRateLimitBurst, RateLimitWriteRequestsPerSecond: writeRateLimitRequestsPerSecond, RateLimitWriteBurst: writeRateLimitBurst, PaymentCommandTimeout: paymentCommandTimeout, PaymentReadTimeout: paymentReadTimeout, ReadinessTimeout: readinessTimeout,
 		MetricsAddr: envString("METRICS_ADDR", defaultMetricsAddr), MetricsReadHeaderTimeout: metricsReadHeaderTimeout, MetricsReadTimeout: metricsReadTimeout, MetricsWriteTimeout: metricsWriteTimeout, MetricsIdleTimeout: metricsIdleTimeout,
 		FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, ServiceCredentialHMACKey: serviceCredentialHMACKey, ServiceCredentials: serviceCredentials,
-		MockBankBaseURL: os.Getenv("MOCK_BANK_BASE_URL"), MockBankTimeout: mockBankTimeout, MockBankInitialAttemptTimeout: mockBankInitialAttemptTimeout, MockBankRetryDelay: mockBankRetryDelay, MockBankRetryAttemptTimeout: mockBankRetryAttemptTimeout, MockBankConnectTimeout: mockBankConnectTimeout, MockBankTLSHandshakeTimeout: mockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: mockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: mockBankIdleConnectionTimeout,
+		MockBankBaseURL: mockBankBaseURL, MockBankTimeout: mockBankTimeout, MockBankInitialAttemptTimeout: mockBankInitialAttemptTimeout, MockBankRetryDelay: mockBankRetryDelay, MockBankRetryAttemptTimeout: mockBankRetryAttemptTimeout, MockBankConnectTimeout: mockBankConnectTimeout, MockBankTLSHandshakeTimeout: mockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: mockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: mockBankIdleConnectionTimeout,
 	}
 	return cfg, nil
 }
@@ -297,8 +302,8 @@ func (cfg config) validate() error {
 	if cfg.DatabaseConnectionMaxLifetime <= 0 {
 		return fmt.Errorf("DATABASE_CONNECTION_MAX_LIFETIME must be a positive duration")
 	}
-	if cfg.MockBankBaseURL == "" {
-		return fmt.Errorf("MOCK_BANK_BASE_URL is required")
+	if cfg.MockBankBaseURL.Scheme == "" || cfg.MockBankBaseURL.Host == "" {
+		return fmt.Errorf("MOCK_BANK_BASE_URL must be an absolute URL")
 	}
 	if cfg.FingerprintSecret == "" {
 		return fmt.Errorf("FINGERPRINT_SECRET is required")
@@ -435,6 +440,14 @@ func envBase64(name string) ([]byte, error) {
 		return nil, fmt.Errorf("%s must be base64url-encoded", name)
 	}
 	return decoded, nil
+}
+
+func envURL(name string) (url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(os.Getenv(name)))
+	if err != nil {
+		return url.URL{}, fmt.Errorf("%s must be a valid URL", name)
+	}
+	return *parsed, nil
 }
 
 // parseServiceCredentials accepts comma-separated digest=scope+scope entries.

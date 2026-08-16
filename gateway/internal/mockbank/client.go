@@ -41,7 +41,6 @@ const (
 )
 
 type Client struct {
-	baseURL    *url.URL
 	httpClient *http.Client
 	metrics    metrics
 	config     Config
@@ -50,7 +49,7 @@ type Client struct {
 // Config contains the Mock Bank endpoint and call budgets. All budgets
 // must be positive.
 type Config struct {
-	BaseURL               string
+	BaseURL               url.URL
 	Timeout               time.Duration
 	InitialAttemptTimeout time.Duration
 	RetryDelay            time.Duration
@@ -76,22 +75,11 @@ func NewClient(metrics metrics, config Config) (*Client, error) {
 		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
 		IdleConnTimeout:       config.IdleConnectionTimeout,
 	}
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil {
-		return nil, err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("mock bank base URL must be absolute")
-	}
-	return &Client{baseURL: parsed, httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
+	return &Client{httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
 }
 
 func (config Config) validate() error {
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil {
-		return err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
+	if config.BaseURL.Scheme == "" || config.BaseURL.Host == "" {
 		return fmt.Errorf("mock bank base URL must be absolute")
 	}
 
@@ -593,7 +581,7 @@ func isBankStateConflict(code string) bool {
 }
 
 func (c *Client) newHTTPRequest(ctx context.Context, endpointPath string, body *bytes.Buffer, operationKey string) (*http.Request, error) {
-	endpoint := c.baseURL.JoinPath(endpointPath)
+	endpoint := c.config.BaseURL.JoinPath(endpointPath)
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), body)
 	if err != nil {
 		return nil, err
