@@ -35,9 +35,9 @@ const (
 )
 
 const (
-	mockBankRetryResultAttempted = "attempted"
-	mockBankRetryResultExhausted = "exhausted"
-	mockBankRetryResultSucceeded = "succeeded"
+	mockBankRetryAttempted = "attempted"
+	mockBankRetryFailed    = "failed"
+	mockBankRetrySucceeded = "succeeded"
 )
 
 type Client struct {
@@ -47,8 +47,8 @@ type Client struct {
 	config     ClientConfig
 }
 
-// ClientConfig contains all Mock Bank call budgets. A zero value disables
-// deadlines and automatic retries, which is useful for isolated adapter tests.
+// ClientConfig contains the Mock Bank endpoint and call budgets. All budgets
+// must be positive.
 type ClientConfig struct {
 	BaseURL               string
 	Timeout               time.Duration
@@ -67,6 +67,9 @@ func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
 	if metrics == nil {
 		return nil, fmt.Errorf("mock bank metrics are required")
 	}
+	if err := config.validate(); err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: config.ConnectTimeout}).DialContext,
 		TLSHandshakeTimeout:   config.TLSHandshakeTimeout,
@@ -81,6 +84,42 @@ func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("mock bank base URL must be absolute")
 	}
 	return &Client{baseURL: parsed, httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
+}
+
+func (config ClientConfig) validate() error {
+	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("mock bank base URL must be absolute")
+	}
+
+	if config.Timeout <= 0 {
+		return fmt.Errorf("mock bank timeout must be positive")
+	}
+	if config.InitialAttemptTimeout <= 0 {
+		return fmt.Errorf("mock bank initial attempt timeout must be positive")
+	}
+	if config.RetryDelay <= 0 {
+		return fmt.Errorf("mock bank retry delay must be positive")
+	}
+	if config.RetryAttemptTimeout <= 0 {
+		return fmt.Errorf("mock bank retry attempt timeout must be positive")
+	}
+	if config.ConnectTimeout <= 0 {
+		return fmt.Errorf("mock bank connect timeout must be positive")
+	}
+	if config.TLSHandshakeTimeout <= 0 {
+		return fmt.Errorf("mock bank TLS handshake timeout must be positive")
+	}
+	if config.ResponseHeaderTimeout <= 0 {
+		return fmt.Errorf("mock bank response header timeout must be positive")
+	}
+	if config.IdleConnectionTimeout <= 0 {
+		return fmt.Errorf("mock bank idle connection timeout must be positive")
+	}
+	return nil
 }
 
 type metrics interface {
@@ -394,32 +433,25 @@ func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefun
 	return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(fmt.Errorf("mock bank refund failed: status %d", response.StatusCode))
 }
 
-func (c *Client) initialAttemptTimeout() time.Duration {
-	if c.config.InitialAttemptTimeout > 0 {
-		return c.config.InitialAttemptTimeout
-	}
-	return c.config.Timeout
-}
-
 func retryTransient[T any](c *Client, ctx context.Context, operation string, attempt func(context.Context, time.Duration) (T, error)) (T, error) {
-	result, err := attempt(ctx, c.initialAttemptTimeout())
-	if err == nil || !isRetryablePaymentError(err) || c.config.RetryDelay <= 0 || c.config.RetryAttemptTimeout <= 0 {
+	var zero T
+
+	result, err := attempt(ctx, c.config.InitialAttemptTimeout)
+	if err == nil || !isRetryablePaymentError(err) {
 		return result, err
 	}
 
-	c.metrics.RecordMockBankRetry(operation, mockBankRetryResultAttempted)
 	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
-		var zero T
 		return zero, retryWaitError(err)
 	}
 
+	c.metrics.RecordMockBankRetry(operation, mockBankRetryAttempted)
 	result, err = attempt(ctx, c.config.RetryAttemptTimeout)
 	if err != nil {
-		c.metrics.RecordMockBankRetry(operation, mockBankRetryResultExhausted)
-		var zero T
+		c.metrics.RecordMockBankRetry(operation, mockBankRetryFailed)
 		return zero, err
 	}
-	c.metrics.RecordMockBankRetry(operation, mockBankRetryResultSucceeded)
+	c.metrics.RecordMockBankRetry(operation, mockBankRetrySucceeded)
 	return result, nil
 }
 
