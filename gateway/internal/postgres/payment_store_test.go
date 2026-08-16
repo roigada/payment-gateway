@@ -64,6 +64,7 @@ func newDeclinedPayment(
 	return payment, nil
 }
 
+// Verifies that payment store claim existing payment command rejects missing business time.
 func TestPaymentStoreClaimExistingPaymentCommandRejectsMissingBusinessTime(t *testing.T) {
 	store := postgres.NewPaymentStore(nil)
 	request := app.NewCaptureClaimRequest(
@@ -80,6 +81,7 @@ func TestPaymentStoreClaimExistingPaymentCommandRejectsMissingBusinessTime(t *te
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
 }
 
+// Verifies that payment store claim authorization start rejects missing business time.
 func TestPaymentStoreClaimAuthorizationStartRejectsMissingBusinessTime(t *testing.T) {
 	store := postgres.NewPaymentStore(nil)
 
@@ -88,6 +90,7 @@ func TestPaymentStoreClaimAuthorizationStartRejectsMissingBusinessTime(t *testin
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
 }
 
+// Verifies that payment store rejects missing business time for completion and cleanup.
 func TestPaymentStoreRejectsMissingBusinessTimeForCompletionAndCleanup(t *testing.T) {
 	store := postgres.NewPaymentStore(nil)
 	err := store.CompletePaymentCommand(context.Background(), app.PaymentCommandClaim{}, app.PaymentCommandResult{}, time.Time{})
@@ -97,6 +100,7 @@ func TestPaymentStoreRejectsMissingBusinessTimeForCompletionAndCleanup(t *testin
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
 }
 
+// Verifies that payment store persists authorized payment.
 func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -140,6 +144,7 @@ func TestPaymentStorePersistsAuthorizedPayment(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorNotFound))
 }
 
+// Verifies that payment store persists declined payment.
 func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -174,6 +179,7 @@ func TestPaymentStorePersistsDeclinedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should round-trip as the same instant")
 }
 
+// Verifies that payment store reports aggregate pending metrics without changing payment statuses.
 func TestPaymentStoreReportsAggregatePendingMetricsWithoutChangingPaymentStatuses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -217,6 +223,7 @@ func TestPaymentStoreReportsAggregatePendingMetricsWithoutChangingPaymentStatuse
 	assert.Equal(t, domain.PaymentStatusPending, saved.Status())
 }
 
+// Verifies that payment store updates pending authorization result.
 func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -250,6 +257,7 @@ func TestPaymentStoreUpdatesPendingAuthorizationResult(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(now.Add(time.Minute)), "updated_at should round-trip as the transition instant")
 }
 
+// Verifies that payment store updates voided payment.
 func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -289,6 +297,7 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(voidedAt), "updated_at should round-trip as the void transition instant")
 }
 
+// Verifies that payment store saves void bank operation key without changing status.
 func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -323,6 +332,7 @@ func TestPaymentStoreSavesVoidBankOperationKeyWithoutChangingStatus(t *testing.T
 	assert.True(t, saved.UpdatedAt().Equal(now), "updated_at should stay unchanged")
 }
 
+// Verifies that payment store searches payments by filters newest first and capped.
 func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -360,6 +370,7 @@ func TestPaymentStoreSearchesPaymentsByFiltersNewestFirstAndCapped(t *testing.T)
 	assert.Equal(t, otherOrder.ID(), byCustomer[1].ID())
 }
 
+// Verifies that payment store find by id keeps authorized status when authorization expiration time passes.
 func TestPaymentStoreFindByIDKeepsAuthorizedStatusWhenAuthorizationExpirationTimePasses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -384,6 +395,7 @@ func TestPaymentStoreFindByIDKeepsAuthorizedStatusWhenAuthorizationExpirationTim
 	assert.True(t, persisted.UpdatedAt().Equal(authorizedAt), "a read must not persist an expiry transition")
 }
 
+// Verifies that payment store search keeps authorized payments after authorization expiration time.
 func TestPaymentStoreSearchKeepsAuthorizedPaymentsAfterAuthorizationExpirationTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -410,6 +422,7 @@ func TestPaymentStoreSearchKeepsAuthorizedPaymentsAfterAuthorizationExpirationTi
 	assert.Equal(t, domain.PaymentStatusAuthorized, outOfScope.Status())
 }
 
+// Verifies that payment store updates captured payment.
 func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -452,6 +465,7 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should be the capture instant")
 }
 
+// Verifies that payment store saves capture bank operation key without changing status.
 func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -486,6 +500,7 @@ func TestPaymentStoreSavesCaptureBankOperationKeyWithoutChangingStatus(t *testin
 	assert.True(t, saved.UpdatedAt().Equal(authorizedAt), "updated_at should stay unchanged")
 }
 
+// Verifies that payment store updates refunded payment.
 func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -534,6 +549,7 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 	assert.True(t, saved.UpdatedAt().Equal(refundedAt), "updated_at should be the refund instant")
 }
 
+// Verifies that payment store saves refund bank operation key without changing status.
 func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -574,6 +590,7 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 	assert.True(t, saved.UpdatedAt().Equal(capturedAt), "updated_at should stay unchanged")
 }
 
+// Verifies that payment store persists completed declined result.
 func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -645,6 +662,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	assert.Same(t, missingPayment, missing.Payment())
 }
 
+// Verifies that payment store cleans only completed idempotency records before cutoff.
 func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -698,6 +716,7 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	assert.Equal(t, 1, inProgressCount)
 }
 
+// Verifies that payment store returns in progress error for duplicate claim.
 func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -724,6 +743,7 @@ func TestPaymentStoreReturnsInProgressErrorForDuplicateClaim(t *testing.T) {
 	assert.NotNil(t, reclaimed.Payment())
 }
 
+// Verifies that payment store recovers stuck authorization claim and completes replay.
 func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -768,6 +788,7 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 	assert.True(t, replayResult.Payment.UpdatedAt.Equal(result.Payment.UpdatedAt), "updated_at should round-trip as the same instant")
 }
 
+// Verifies that payment store does not recover non stuck authorization claim.
 func TestPaymentStoreDoesNotRecoverNonStuckAuthorizationClaim(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -789,6 +810,7 @@ func TestPaymentStoreDoesNotRecoverNonStuckAuthorizationClaim(t *testing.T) {
 	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now.Add(-4*time.Minute))
 }
 
+// Verifies that payment store rejects authorization fingerprint mismatch without refreshing claimed at.
 func TestPaymentStoreRejectsAuthorizationFingerprintMismatchWithoutRefreshingClaimedAt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -811,6 +833,7 @@ func TestPaymentStoreRejectsAuthorizationFingerprintMismatchWithoutRefreshingCla
 	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", stuckClaimedAt)
 }
 
+// Verifies that payment store returns internal error when recovered authorization payment is missing.
 func TestPaymentStoreReturnsInternalErrorWhenRecoveredAuthorizationPaymentIsMissing(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -833,6 +856,7 @@ func TestPaymentStoreReturnsInternalErrorWhenRecoveredAuthorizationPaymentIsMiss
 	assert.Equal(t, app.IdempotencyRecoveryUnrecoverable, recoveryErr.Result())
 }
 
+// Verifies that payment store recovers stuck authorization retry claim.
 func TestPaymentStoreRecoversStuckAuthorizationRetryClaim(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -863,6 +887,7 @@ func TestPaymentStoreRecoversStuckAuthorizationRetryClaim(t *testing.T) {
 	assertClaimedAt(t, db, app.RetryAuthorizationOperation, "retry-key-1", now)
 }
 
+// Verifies that payment store recovered authorization retry card fingerprint mismatch is idempotency conflict.
 func TestPaymentStoreRecoveredAuthorizationRetryCardFingerprintMismatchIsIdempotencyConflict(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -891,6 +916,7 @@ func TestPaymentStoreRecoveredAuthorizationRetryCardFingerprintMismatchIsIdempot
 	assertClaimedAt(t, db, app.RetryAuthorizationOperation, "retry-key-1", stuckClaimedAt)
 }
 
+// Verifies that payment store recovers stuck command claims using persisted bank operation keys.
 func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -976,6 +1002,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			db := newTestDatabase(t)
 			store := postgres.NewPaymentStore(db)
@@ -999,6 +1026,7 @@ func TestPaymentStoreRecoversStuckCommandClaimsUsingPersistedBankOperationKeys(t
 	}
 }
 
+// Verifies that payment store recovered command missing bank operation key is unrecoverable.
 func TestPaymentStoreRecoveredCommandMissingBankOperationKeyIsUnrecoverable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1023,6 +1051,7 @@ func TestPaymentStoreRecoveredCommandMissingBankOperationKeyIsUnrecoverable(t *t
 	assertClaimedAt(t, db, app.CapturePaymentOperation, "capture-key-1", stuckClaimedAt)
 }
 
+// Verifies that payment store recovered command invalid payment status remains payment status conflict.
 func TestPaymentStoreRecoveredCommandInvalidPaymentStatusRemainsPaymentStatusConflict(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1045,6 +1074,7 @@ func TestPaymentStoreRecoveredCommandInvalidPaymentStatusRemainsPaymentStatusCon
 	assert.Equal(t, app.IdempotencyRecoveryConflict, recoveryErr.Result())
 }
 
+// Verifies that payment store concurrent stuck authorization recovery allows one retriever.
 func TestPaymentStoreConcurrentStuckAuthorizationRecoveryAllowsOneRetriever(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1094,6 +1124,7 @@ func TestPaymentStoreConcurrentStuckAuthorizationRecoveryAllowsOneRetriever(t *t
 	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now)
 }
 
+// Verifies that payment store rejects payment command claim precondition failures.
 func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1145,6 +1176,7 @@ func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T
 	store := postgres.NewPaymentStore(db)
 	ctx := context.Background()
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			insertPaymentFixture(t, db, tt.payment)
 
@@ -1156,6 +1188,7 @@ func TestPaymentStoreRejectsPaymentCommandClaimPreconditionFailures(t *testing.T
 	}
 }
 
+// Verifies that payment store completion rolls back authorization transition when idempotency completion fails.
 func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCompletionFails(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1194,6 +1227,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440000", saved.AuthorizationBankOperationKey())
 }
 
+// Verifies that payment store completion rolls back capture transition when idempotency completion fails.
 func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompletionFails(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -1321,6 +1355,7 @@ func newStorePaymentCommandResult(payment *domain.Payment, httpStatus int) app.P
 	}
 }
 
+// Verifies that payment store returns conflict when completing unclaimed command.
 func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")

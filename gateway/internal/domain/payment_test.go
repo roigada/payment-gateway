@@ -50,6 +50,7 @@ func newDeclinedPayment(
 	return payment, nil
 }
 
+// Verifies that is valid payment status.
 func TestIsValidPaymentStatus(t *testing.T) {
 	validStatuses := []domain.PaymentStatus{
 		domain.PaymentStatusPending,
@@ -62,6 +63,7 @@ func TestIsValidPaymentStatus(t *testing.T) {
 	}
 
 	for _, status := range validStatuses {
+		// Verifies the table-defined scenario for this case.
 		t.Run(string(status), func(t *testing.T) {
 			assert.True(t, domain.IsValidPaymentStatus(status))
 		})
@@ -70,6 +72,7 @@ func TestIsValidPaymentStatus(t *testing.T) {
 	assert.False(t, domain.IsValidPaymentStatus("unknown"))
 }
 
+// Verifies that payment authorization stores private bank authorization id.
 func TestPaymentAuthorizationStoresPrivateBankAuthorizationID(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(time.Hour)
@@ -102,6 +105,7 @@ func TestPaymentAuthorizationStoresPrivateBankAuthorizationID(t *testing.T) {
 	assert.Equal(t, now, payment.UpdatedAt())
 }
 
+// Verifies that new pending payment creates payment with retry private fields.
 func TestNewPendingPaymentCreatesPaymentWithRetryPrivateFields(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
@@ -125,6 +129,7 @@ func TestNewPendingPaymentCreatesPaymentWithRetryPrivateFields(t *testing.T) {
 	assert.Equal(t, now, payment.UpdatedAt())
 }
 
+// Verifies that payment decline stores gateway decline reason.
 func TestPaymentDeclineStoresGatewayDeclineReason(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
@@ -154,6 +159,7 @@ func TestPaymentDeclineStoresGatewayDeclineReason(t *testing.T) {
 	assert.Equal(t, now, payment.UpdatedAt())
 }
 
+// Verifies that capture authorized payment stores private capture fields.
 func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := authorizedAt.Add(time.Hour)
@@ -187,6 +193,7 @@ func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
 	assert.Equal(t, capturedAt, payment.UpdatedAt())
 }
 
+// Verifies that capture payment rejects invalid values.
 func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -204,6 +211,7 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			bankAuthorizationID := ""
 			declineReason := domain.DeclineReasonUnknown
@@ -245,6 +253,7 @@ func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// Verifies that refund captured payment stores private refund fields.
 func TestRefundCapturedPaymentStoresPrivateRefundFields(t *testing.T) {
 	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := createdAt.Add(time.Hour)
@@ -281,6 +290,7 @@ func TestRefundCapturedPaymentStoresPrivateRefundFields(t *testing.T) {
 	assert.Equal(t, refundedAt, payment.UpdatedAt())
 }
 
+// Verifies that refund payment rejects invalid values.
 func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
 	tests := []struct {
@@ -298,6 +308,7 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			var (
 				payment *domain.Payment
@@ -347,6 +358,7 @@ func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// Verifies that payment void moves authorized payment to voided.
 func TestPaymentVoidMovesAuthorizedPaymentToVoided(t *testing.T) {
 	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := createdAt.Add(2 * time.Hour)
@@ -374,6 +386,7 @@ func TestPaymentVoidMovesAuthorizedPaymentToVoided(t *testing.T) {
 	assert.Equal(t, voidedAt, payment.UpdatedAt())
 }
 
+// Verifies that payment void rejects invalid transition.
 func TestPaymentVoidRejectsInvalidTransition(t *testing.T) {
 	payment, err := newDeclinedPayment(
 		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
@@ -392,6 +405,7 @@ func TestPaymentVoidRejectsInvalidTransition(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrInvalidPaymentStatus)
 }
 
+// Verifies that load payment rejects incomplete completed bank operations.
 func TestLoadPaymentRejectsIncompleteCompletedBankOperations(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -414,6 +428,7 @@ func TestLoadPaymentRejectsIncompleteCompletedBankOperations(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := domain.LoadPayment(
 				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
@@ -442,6 +457,7 @@ func TestLoadPaymentRejectsIncompleteCompletedBankOperations(t *testing.T) {
 	}
 }
 
+// Verifies that load payment reports the invalid private field.
 func TestLoadPaymentReportsTheInvalidPrivateField(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -457,6 +473,7 @@ func TestLoadPaymentReportsTheInvalidPrivateField(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			bankAuthorizationID := ""
 			authorizationExpiresAt := time.Time{}
@@ -498,6 +515,7 @@ func TestLoadPaymentReportsTheInvalidPrivateField(t *testing.T) {
 	}
 }
 
+// Verifies that payment authorization rejects invalid values.
 func TestPaymentAuthorizationRejectsInvalidValues(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(time.Hour)
@@ -530,6 +548,7 @@ func TestPaymentAuthorizationRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := newAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankAuthorizationID, tt.expiresAt, tt.bok, tt.fingerprint, tt.now)
 			assert.ErrorIs(t, err, tt.wantErr)
@@ -537,6 +556,7 @@ func TestPaymentAuthorizationRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// Verifies that payment decline rejects invalid values.
 func TestPaymentDeclineRejectsInvalidValues(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 
@@ -555,6 +575,7 @@ func TestPaymentDeclineRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := newDeclinedPayment(
 				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),

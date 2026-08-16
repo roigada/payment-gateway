@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that pending payment collector reports aggregate pending visibility.
 func TestPendingPaymentCollectorReportsAggregatePendingVisibility(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	collector, err := NewPendingPaymentCollector(pendingPaymentMetricsSource{
@@ -32,6 +33,7 @@ func TestPendingPaymentCollectorReportsAggregatePendingVisibility(t *testing.T) 
 	assert.Equal(t, 301.5, oldest.GetMetric()[0].GetGauge().GetValue())
 }
 
+// Verifies that pending payment collector reports zero oldest age when no pending payments exist.
 func TestPendingPaymentCollectorReportsZeroOldestAgeWhenNoPendingPaymentsExist(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	collector, err := NewPendingPaymentCollector(pendingPaymentMetricsSource{})
@@ -45,6 +47,7 @@ func TestPendingPaymentCollectorReportsZeroOldestAgeWhenNoPendingPaymentsExist(t
 	assert.Equal(t, float64(0), metricFamilyByName(t, families, "payment_gateway_oldest_pending_payment_age_seconds").GetMetric()[0].GetGauge().GetValue())
 }
 
+// Verifies that new pending payment collector requires pending payment reader.
 func TestNewPendingPaymentCollectorRequiresPendingPaymentReader(t *testing.T) {
 	collector, err := NewPendingPaymentCollector(nil)
 

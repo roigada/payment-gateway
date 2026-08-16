@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,6 +30,8 @@ func validConfig() config {
 	}
 }
 
+// A configuration may be valid as a whole only when every component has safe values and their
+// timeouts, listener addresses, connection limits, and rate limits agree with one another.
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -47,18 +48,23 @@ func TestConfigValidate(t *testing.T) {
 		{"mock bank URL", func(c *config) { c.MockBankBaseURL = url.URL{Path: "relative"} }, "MOCK_BANK_BASE_URL must be an absolute URL"},
 		{"pool size", func(c *config) { c.DatabaseMaxOpenConnections = 0 }, "DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer"},
 		{"pool relationship", func(c *config) { c.DatabaseMaxIdleConnections = c.DatabaseMaxOpenConnections + 1 }, "DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS"},
+		{"database startup timeout", func(c *config) { c.DatabaseStartupTimeout = 0 }, "DATABASE_STARTUP_TIMEOUT must be a positive duration"},
 		{"payment secret", func(c *config) { c.FingerprintSecret = "" }, "FINGERPRINT_SECRET is required"},
+		{"shutdown timeout", func(c *config) { c.ShutdownTimeout = 0 }, "SHUTDOWN_TIMEOUT must be a positive duration"},
 		{"readiness timeout", func(c *config) { c.ReadinessTimeout = 0 }, "READINESS_CHECK_TIMEOUT must be a positive duration"},
 		{"read rate", func(c *config) { c.RateLimitReadRequestsPerSecond = 0 }, "RATE_LIMIT_READ_REQUESTS_PER_SECOND must be a positive integer"},
 		{"read burst", func(c *config) { c.RateLimitReadBurst = 0 }, "RATE_LIMIT_READ_BURST must be a positive integer"},
 		{"write rate", func(c *config) { c.RateLimitWriteRequestsPerSecond = 0 }, "RATE_LIMIT_WRITE_REQUESTS_PER_SECOND must be a positive integer"},
 		{"write burst", func(c *config) { c.RateLimitWriteBurst = 0 }, "RATE_LIMIT_WRITE_BURST must be a positive integer"},
 		{"mock bank initial attempt", func(c *config) { c.MockBankInitialAttemptTimeout = 0 }, "MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration"},
+		{"idempotency claim stuck-after positive", func(c *config) { c.IdempotencyClaimStuckAfter = 0 }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration"},
 		{"idempotency claim stuck-after budget", func(c *config) { c.IdempotencyClaimStuckAfter = c.PaymentCommandTimeout }, "IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"mock bank retry delay", func(c *config) { c.MockBankRetryDelay = 0 }, "MOCK_BANK_RETRY_DELAY must be a positive duration"},
 		{"mock bank retry attempt", func(c *config) { c.MockBankRetryAttemptTimeout = 0 }, "MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration"},
 		{"mock bank retry budget", func(c *config) { c.MockBankRetryAttemptTimeout = c.PaymentCommandTimeout }, "Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT"},
+		{"HTTP read budget", func(c *config) { c.HTTPReadTimeout = c.PaymentCommandTimeout }, "HTTP_READ_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
 		{"HTTP write budget", func(c *config) { c.HTTPWriteTimeout = c.PaymentCommandTimeout }, "HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT"},
+		{"HTTP body size", func(c *config) { c.HTTPMaxRequestBodyBytes = 0 }, "HTTP_MAX_REQUEST_BODY_BYTES must be a positive integer"},
 		{"metrics read timeout", func(c *config) { c.MetricsReadTimeout = 0 }, "METRICS_READ_TIMEOUT must be a positive duration"},
 		{"log level", func(c *config) { c.LogLevel = "verbose" }, "LOG_LEVEL must be one of debug, info, warn, or error"},
 		{"idempotency replay cleanup interval", func(c *config) { c.IdempotencyReplayCleanupInterval = 0 }, "IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration"},
@@ -78,18 +84,8 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestConfigHandlerConfig(t *testing.T) {
-	cfg := validConfig()
-
-	assert.Equal(t, httpapi.HandlerConfig{
-		PaymentCommandTimeout: cfg.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.PaymentReadTimeout,
-		ReadinessTimeout:      cfg.ReadinessTimeout,
-		MaxRequestBodyBytes:   cfg.HTTPMaxRequestBodyBytes,
-		RateLimit:             cfg.rateLimitConfig(),
-	}, cfg.handlerConfig())
-}
-
+// Required secrets and connection endpoints are enough to start the gateway; all optional
+// operational settings must then receive the documented defaults rather than zero values.
 func TestLoadConfigUsesDefaults(t *testing.T) {
 	setRequiredConfigEnv(t)
 	cfg, err := loadConfig()
@@ -104,7 +100,10 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultDatabaseConnectionMaxIdleTime, cfg.DatabaseConnectionMaxIdleTime)
 	assert.Equal(t, defaultPaymentCommandTimeout, cfg.PaymentCommandTimeout)
 	assert.Equal(t, defaultReadinessCheckTimeout, cfg.ReadinessTimeout)
-	assert.Equal(t, httpapi.RateLimitConfig{ReadRequestsPerSecond: defaultPaymentReadRateLimitRequestsPerSecond, ReadBurst: defaultPaymentReadRateLimitBurst, WriteRequestsPerSecond: defaultPaymentWriteRateLimitRequestsPerSecond, WriteBurst: defaultPaymentWriteRateLimitBurst}, cfg.rateLimitConfig())
+	assert.Equal(t, defaultPaymentReadRateLimitRequestsPerSecond, cfg.RateLimitReadRequestsPerSecond)
+	assert.Equal(t, defaultPaymentReadRateLimitBurst, cfg.RateLimitReadBurst)
+	assert.Equal(t, defaultPaymentWriteRateLimitRequestsPerSecond, cfg.RateLimitWriteRequestsPerSecond)
+	assert.Equal(t, defaultPaymentWriteRateLimitBurst, cfg.RateLimitWriteBurst)
 	assert.Equal(t, defaultMockBankInitialAttemptTimeout, cfg.MockBankInitialAttemptTimeout)
 	assert.Equal(t, defaultMockBankRetryDelay, cfg.MockBankRetryDelay)
 	assert.Equal(t, defaultMockBankRetryAttemptTimeout, cfg.MockBankRetryAttemptTimeout)
@@ -114,6 +113,8 @@ func TestLoadConfigUsesDefaults(t *testing.T) {
 	assert.Equal(t, defaultIdempotencyReplayCleanupInterval, cfg.IdempotencyReplayCleanupInterval)
 }
 
+// Operators may override individual component settings through environment variables, and each
+// textual value must be parsed into the correctly typed configuration field without affecting defaults.
 func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	setRequiredConfigEnv(t)
 	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "20")
@@ -144,13 +145,18 @@ func TestLoadConfigAllowsComponentConfiguration(t *testing.T) {
 	assert.Equal(t, 500*time.Millisecond, cfg.MockBankRetryDelay)
 	assert.Equal(t, 6*time.Second, cfg.MockBankRetryAttemptTimeout)
 	assert.Equal(t, int64(32768), cfg.HTTPMaxRequestBodyBytes)
-	assert.Equal(t, httpapi.RateLimitConfig{ReadRequestsPerSecond: 31, ReadBurst: 61, WriteRequestsPerSecond: 6, WriteBurst: 11}, cfg.rateLimitConfig())
+	assert.Equal(t, 31, cfg.RateLimitReadRequestsPerSecond)
+	assert.Equal(t, 61, cfg.RateLimitReadBurst)
+	assert.Equal(t, 6, cfg.RateLimitWriteRequestsPerSecond)
+	assert.Equal(t, 11, cfg.RateLimitWriteBurst)
 	assert.Equal(t, "127.0.0.1:9191", cfg.MetricsAddr)
 	assert.Equal(t, 4*time.Second, cfg.MetricsReadTimeout)
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.Equal(t, 30*time.Minute, cfg.IdempotencyReplayCleanupInterval)
 }
 
+// A malformed environment value must stop startup before a partly configured gateway can run;
+// loading returns the zero config so callers cannot accidentally use a mixed configuration.
 func TestLoadConfigRejectsMalformedValues(t *testing.T) {
 	for _, tt := range []struct{ name, value string }{
 		{"DATABASE_MAX_OPEN_CONNECTIONS", "many"},
@@ -186,6 +192,8 @@ func setRequiredConfigEnv(t *testing.T) {
 	t.Setenv("ORDER_SERVICE_CREDENTIALS", serviceauth.Digest([]byte(validCredentialKey), "test-credential")+"=payments:read+payments:write")
 }
 
+// Service credentials associate a stored digest with one or more Payment Scopes; valid entries
+// are parsed into that structure, while malformed entries are rejected before authentication starts.
 func TestParseServiceCredentials(t *testing.T) {
 	credentials, err := parseServiceCredentials("first=payments:read,second=payments:read+payments:write")
 	require.NoError(t, err)

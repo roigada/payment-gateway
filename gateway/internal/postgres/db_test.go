@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Verifies that config validate.
 func TestConfigValidate(t *testing.T) {
 	valid := Config{
 		URL:                   "postgres://localhost/payment_gateway",
@@ -27,6 +28,7 @@ func TestConfigValidate(t *testing.T) {
 		{"connection max idle time", func(c *Config) { c.ConnectionMaxIdleTime = 0 }},
 	}
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			config := valid
 			tt.mutate(&config)

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that payment operation metrics records operation count and duration.
 func TestPaymentOperationMetricsRecordsOperationCountAndDuration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)
@@ -37,6 +38,7 @@ func TestPaymentOperationMetricsRecordsOperationCountAndDuration(t *testing.T) {
 	})
 }
 
+// Verifies that payment operation metrics records idempotency recovery.
 func TestPaymentOperationMetricsRecordsIdempotencyRecovery(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)
@@ -56,6 +58,7 @@ func TestPaymentOperationMetricsRecordsIdempotencyRecovery(t *testing.T) {
 	})
 }
 
+// Verifies that payment operation metrics records payment command release failure.
 func TestPaymentOperationMetricsRecordsPaymentCommandReleaseFailure(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)
@@ -74,6 +77,7 @@ func TestPaymentOperationMetricsRecordsPaymentCommandReleaseFailure(t *testing.T
 	})
 }
 
+// Verifies that payment operation metrics only records bounded idempotency recovery labels.
 func TestPaymentOperationMetricsOnlyRecordsBoundedIdempotencyRecoveryLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)

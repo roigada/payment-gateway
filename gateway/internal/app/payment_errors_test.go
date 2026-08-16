@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
+// Payment error constructors expose a stable public kind and safe message while preserving the
+// underlying cause for programmatic inspection; internal causes must never leak in the message.
+func TestPaymentErrorConstructorsExposeTheirContracts(t *testing.T) {
 	cause := errors.New("driver: connection refused")
 	tests := []struct {
 		name    string
@@ -49,6 +51,12 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 			message: "payment status does not allow this operation",
 		},
 		{
+			name:    "authorization expired",
+			err:     app.NewPaymentAuthorizationExpiredError(cause),
+			kind:    app.PaymentErrorAuthorizationExpired,
+			message: "authorization expired",
+		},
+		{
 			name:    "bank state conflict",
 			err:     app.NewPaymentBankStateConflictError(cause),
 			kind:    app.PaymentErrorBankStateConflict,
@@ -67,7 +75,7 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 			message: "bank request timed out",
 		},
 		{
-			name:    "internal",
+			name:    "fixed safe message",
 			err:     app.NewInternalPaymentError(cause),
 			kind:    app.PaymentErrorInternal,
 			message: "internal server error",
@@ -88,6 +96,8 @@ func TestPaymentErrorConstructorsExposeKindAndSafeMessage(t *testing.T) {
 	}
 }
 
+// Callers often add context by wrapping an error; the gateway must still find the underlying
+// Payment Error Kind so HTTP/API behavior does not change because of that extra context.
 func TestPaymentErrorKindOfFindsWrappedPaymentError(t *testing.T) {
 	err := fmt.Errorf("save payment: %w", app.NewPaymentBankUnavailableError(errors.New("connection refused")))
 
@@ -97,6 +107,8 @@ func TestPaymentErrorKindOfFindsWrappedPaymentError(t *testing.T) {
 	assert.Equal(t, app.PaymentErrorBankUnavailable, kind)
 }
 
+// Nil and ordinary Go errors have no gateway-owned Payment Error Kind, so callers can distinguish
+// them from errors that deliberately carry a public payment outcome.
 func TestPaymentErrorKindOfReturnsFalseForNilAndRawErrors(t *testing.T) {
 	tests := []struct {
 		name string

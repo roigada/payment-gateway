@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that new client builds configured http transport.
 func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 	config := retryConfig()
 	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
@@ -35,6 +36,7 @@ func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 	assert.Equal(t, time.Duration(4), transport.IdleConnTimeout)
 }
 
+// Verifies that new http request builds mock bank request.
 func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 	config := retryConfig()
 	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
@@ -50,6 +52,7 @@ func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 	assert.Equal(t, "bok_123", request.Header.Get("Idempotency-Key"))
 }
 
+// Verifies that new client rejects nil metrics.
 func TestNewClientRejectsNilMetrics(t *testing.T) {
 	client, err := NewClient(nil, Config{BaseURL: url.URL{Scheme: "https", Host: "mockbank.example"}})
 
@@ -57,6 +60,7 @@ func TestNewClientRejectsNilMetrics(t *testing.T) {
 	require.EqualError(t, err, "mock bank metrics are required")
 }
 
+// Verifies that new client rejects invalid config.
 func TestNewClientRejectsInvalidConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -72,6 +76,7 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 		{"response header timeout", func(config *Config) { config.ResponseHeaderTimeout = 0 }, "mock bank response header timeout must be positive"},
 		{"idle connection timeout", func(config *Config) { config.IdleConnectionTimeout = 0 }, "mock bank idle connection timeout must be positive"},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			config := retryConfig()
 			config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
@@ -85,6 +90,7 @@ func TestNewClientRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+// Verifies that decode bad request code normalizes bank code.
 func TestDecodeBadRequestCodeNormalizesBankCode(t *testing.T) {
 	code, err := decodeBadRequestCode(&http.Response{
 		Body: io.NopCloser(strings.NewReader(`{"error":" Invalid_Card "}`)),
@@ -94,6 +100,7 @@ func TestDecodeBadRequestCodeNormalizesBankCode(t *testing.T) {
 	assert.Equal(t, "invalid_card", code)
 }
 
+// Verifies that decode bad request code returns raw decode failure.
 func TestDecodeBadRequestCodeReturnsRawDecodeFailure(t *testing.T) {
 	_, err := decodeBadRequestCode(&http.Response{
 		Body: io.NopCloser(strings.NewReader(`{`)),
@@ -103,6 +110,7 @@ func TestDecodeBadRequestCodeReturnsRawDecodeFailure(t *testing.T) {
 	assert.NotContains(t, err.Error(), "bank is unavailable")
 }
 
+// Verifies that authorize payment sends bank payload and operation key.
 func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -156,6 +164,7 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}, gotBody)
 }
 
+// Verifies that authorize payment rejects malformed success response.
 func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -181,6 +190,7 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
+// Verifies that authorize payment maps insufficient funds to gateway decline reason.
 func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPaymentRequired)
@@ -197,6 +207,7 @@ func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.
 	assert.Equal(t, app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonInsufficientFunds}, result)
 }
 
+// Verifies that authorize payment maps bank validation failures to invalid input.
 func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) {
 	tests := []struct {
 		name string
@@ -217,6 +228,7 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
@@ -235,6 +247,7 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 	}
 }
 
+// Verifies that authorize payment maps expired card to gateway decline reason.
 func TestAuthorizePaymentMapsExpiredCardToGatewayDeclineReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -250,6 +263,7 @@ func TestAuthorizePaymentMapsExpiredCardToGatewayDeclineReason(t *testing.T) {
 	assert.Equal(t, domain.DeclineReasonExpiredCard, result.DeclineReason)
 }
 
+// Verifies that authorize payment returns error for bank failures.
 func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -269,6 +283,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.status)
@@ -287,6 +302,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
+// Verifies that authorize payment maps bank timeout to timeout error.
 func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)
@@ -305,6 +321,7 @@ func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+// Verifies that client records mock bank request metrics.
 func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -397,6 +414,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(tt.handler)
 			defer server.Close()
@@ -419,6 +437,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 	}
 }
 
+// Verifies that client records timeout metric.
 func TestClientRecordsTimeoutMetric(t *testing.T) {
 	metrics := &recordingMockBankMetrics{}
 	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, metrics, retryConfig())
@@ -433,6 +452,7 @@ func TestClientRecordsTimeoutMetric(t *testing.T) {
 	assert.Positive(t, metrics.requests[0].duration)
 }
 
+// Verifies that authorize payment maps transport timeout to timeout error.
 func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
 	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
@@ -443,6 +463,7 @@ func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+// Verifies that authorize payment retries transient failure with same operation key.
 func TestAuthorizePaymentRetriesTransientFailureWithSameOperationKey(t *testing.T) {
 	var operationKeys []string
 	attempts := 0
@@ -471,6 +492,7 @@ func TestAuthorizePaymentRetriesTransientFailureWithSameOperationKey(t *testing.
 	assert.Equal(t, []recordedMockBankRetry{{operation: "authorize", result: "attempted"}, {operation: "authorize", result: "succeeded"}}, metrics.retries)
 }
 
+// Verifies that authorize payment retries timeout and preserves exhaustion error.
 func TestAuthorizePaymentRetriesTimeoutAndPreservesExhaustionError(t *testing.T) {
 	transport := &timeoutThenTimeoutRoundTripper{}
 	metrics := &recordingMockBankMetrics{}
@@ -485,6 +507,7 @@ func TestAuthorizePaymentRetriesTimeoutAndPreservesExhaustionError(t *testing.T)
 	assert.Equal(t, []recordedMockBankRetry{{operation: "authorize", result: "attempted"}, {operation: "authorize", result: "failed"}}, metrics.retries)
 }
 
+// Verifies that authorize payment retries timeout then succeeds.
 func TestAuthorizePaymentRetriesTimeoutThenSucceeds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -502,6 +525,7 @@ func TestAuthorizePaymentRetriesTimeoutThenSucceeds(t *testing.T) {
 	assert.Equal(t, 2, transport.calls)
 }
 
+// Verifies that authorize payment does not retry definitive outcome.
 func TestAuthorizePaymentDoesNotRetryDefinitiveOutcome(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -519,6 +543,7 @@ func TestAuthorizePaymentDoesNotRetryDefinitiveOutcome(t *testing.T) {
 	assert.Equal(t, 1, attempts)
 }
 
+// Verifies that authorize payment cancellation stops retry delay.
 func TestAuthorizePaymentCancellationStopsRetryDelay(t *testing.T) {
 	firstAttempt := make(chan struct{})
 	attempts := 0
@@ -558,6 +583,7 @@ func TestAuthorizePaymentCancellationStopsRetryDelay(t *testing.T) {
 	assert.Empty(t, metrics.retries)
 }
 
+// Verifies that authorize payment command deadline stops retry delay.
 func TestAuthorizePaymentCommandDeadlineStopsRetryDelay(t *testing.T) {
 	firstAttempt := make(chan struct{})
 	attempts := 0
@@ -586,6 +612,7 @@ func TestAuthorizePaymentCommandDeadlineStopsRetryDelay(t *testing.T) {
 	assert.Equal(t, 1, attempts)
 }
 
+// Verifies that payment operations retry transient failure with same operation key.
 func TestPaymentOperationsRetryTransientFailureWithSameOperationKey(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -608,6 +635,7 @@ func TestPaymentOperationsRetryTransientFailureWithSameOperationKey(t *testing.T
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			var operationKeys []string
 			attempts := 0
@@ -636,6 +664,7 @@ func TestPaymentOperationsRetryTransientFailureWithSameOperationKey(t *testing.T
 	}
 }
 
+// Verifies that payment operations retry exhaustion preserves transient error and metrics.
 func TestPaymentOperationsRetryExhaustionPreservesTransientErrorAndMetrics(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -657,6 +686,7 @@ func TestPaymentOperationsRetryExhaustionPreservesTransientErrorAndMetrics(t *te
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			transport := &timeoutThenTimeoutRoundTripper{}
 			metrics := &recordingMockBankMetrics{}
@@ -673,6 +703,7 @@ func TestPaymentOperationsRetryExhaustionPreservesTransientErrorAndMetrics(t *te
 	}
 }
 
+// Verifies that payment operations retry timeout then succeed.
 func TestPaymentOperationsRetryTimeoutThenSucceed(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -695,6 +726,7 @@ func TestPaymentOperationsRetryTimeoutThenSucceed(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -714,6 +746,7 @@ func TestPaymentOperationsRetryTimeoutThenSucceed(t *testing.T) {
 	}
 }
 
+// Verifies that payment operations do not retry definitive outcomes.
 func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -764,6 +797,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			attempts := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -783,6 +817,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 	}
 }
 
+// Verifies that payment operations cancellation stops retry delay.
 func TestPaymentOperationsCancellationStopsRetryDelay(t *testing.T) {
 	tests := []struct {
 		name string
@@ -803,6 +838,7 @@ func TestPaymentOperationsCancellationStopsRetryDelay(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			firstAttempt := make(chan struct{})
 			attempts := 0
@@ -841,6 +877,7 @@ func TestPaymentOperationsCancellationStopsRetryDelay(t *testing.T) {
 	}
 }
 
+// Verifies that mock bank timeout does not extend parent payment command deadline.
 func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) {
 	tests := []struct {
 		name string
@@ -865,6 +902,7 @@ func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) 
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			parent, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
@@ -891,6 +929,7 @@ func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) 
 	}
 }
 
+// Verifies that mock bank attempt timeout returns bank timeout while payment command remains live.
 func TestMockBankAttemptTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		time.Sleep(50 * time.Millisecond)
@@ -909,6 +948,7 @@ func TestMockBankAttemptTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
 }
 
+// Verifies that capture payment sends bank payload and operation key.
 func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -946,6 +986,7 @@ func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}, gotBody)
 }
 
+// Verifies that capture payment returns error for bank failures.
 func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -960,6 +1001,7 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
@@ -978,6 +1020,7 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
+// Verifies that capture payment maps expired authorization to lifecycle error.
 func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -994,6 +1037,7 @@ func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
+// Verifies that void payment sends bank payload and operation key.
 func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -1028,6 +1072,7 @@ func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}, gotBody)
 }
 
+// Verifies that void payment returns error for bank failures.
 func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1050,6 +1095,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.status)
@@ -1068,6 +1114,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
+// Verifies that void payment maps expired authorization to lifecycle error.
 func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -1084,6 +1131,7 @@ func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
+// Verifies that refund payment sends bank payload and operation key.
 func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -1121,6 +1169,7 @@ func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}, gotBody)
 }
 
+// Verifies that refund payment returns error for bank failures.
 func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1149,6 +1198,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.status)
@@ -1167,6 +1217,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
+// Verifies that payment operations reject malformed success responses.
 func TestPaymentOperationsRejectMalformedSuccessResponses(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1188,6 +1239,7 @@ func TestPaymentOperationsRejectMalformedSuccessResponses(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -1202,6 +1254,7 @@ func TestPaymentOperationsRejectMalformedSuccessResponses(t *testing.T) {
 	}
 }
 
+// Verifies that payment operations map bank timeout to timeout error.
 func TestPaymentOperationsMapBankTimeoutToTimeoutError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1222,6 +1275,7 @@ func TestPaymentOperationsMapBankTimeoutToTimeoutError(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				time.Sleep(50 * time.Millisecond)

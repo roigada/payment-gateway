@@ -29,6 +29,8 @@ type PaymentOperationMetrics interface {
 
 const paymentOperationOutcomeReplayed = "replayed"
 
+const idempotencyReplayWindow = 24 * time.Hour
+
 const (
 	IdempotencyRecoveryAttempted     = "attempted"
 	IdempotencyRecoveryRecovered     = "recovered"
@@ -744,6 +746,10 @@ func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPayment
 		results = append(results, newPaymentResult(payment))
 	}
 	return results, nil
+}
+
+func (s *PaymentService) CleanupCompletedIdempotencyReplays(ctx context.Context) (int, error) {
+	return s.store.CleanupCompletedIdempotencyRecords(ctx, s.clock.Now().Add(-idempotencyReplayWindow))
 }
 
 func (s *PaymentService) releasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) {

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that post payments authorizes payment.
 func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -47,6 +48,7 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that payment commands require write scope.
 func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 	const paymentID = "pay_550e8400-e29b-41d4-a716-446655440000"
 
@@ -96,7 +98,9 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.refundPaymentCalls == 1 },
 		},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
+			// Verifies the "read-only credential is forbidden before the application" subtest scenario.
 			t.Run("read-only credential is forbidden before the application", func(t *testing.T) {
 				api := newPaymentAPITest(t)
 				headers := make(map[string]string, len(tt.headers)+1)
@@ -113,6 +117,7 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 				assert.False(t, tt.wasInvoked(api.payments))
 			})
 
+			// Verifies the "write credential invokes the application" subtest scenario.
 			t.Run("write credential invokes the application", func(t *testing.T) {
 				api := newPaymentAPITest(t)
 				rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
@@ -124,6 +129,7 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 	}
 }
 
+// Verifies that payment reads require bearer credential and read scope.
 func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	for _, tt := range []struct {
 		name, authorization string
@@ -137,6 +143,7 @@ func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 		{"insufficient scope", "Bearer read-only-for-write", http.StatusUnauthorized, "unauthorized", false},
 		{"valid read credential", "Bearer read-credential", http.StatusOK, "", true},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
@@ -158,6 +165,7 @@ func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	}
 }
 
+// Verifies that payment read returns forbidden for authenticated credential without read scope.
 func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t *testing.T) {
 	api := newPaymentAPITest(t)
 	key := []byte("01234567890123456789012345678901")
@@ -186,6 +194,7 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	assert.Equal(t, app.GetPaymentQuery{}, api.payments.getPaymentQuery)
 }
 
+// Verifies that payment rate limits use independent route buckets and round retry after.
 func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 3, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
@@ -217,6 +226,7 @@ func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testin
 	assert.Equal(t, []string{"read", "write", "read"}, api.metrics.rateLimitRejections)
 }
 
+// Verifies that payment rate limits exclude health and readiness endpoints.
 func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
@@ -228,6 +238,7 @@ func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/readyz", "", nil).Code)
 }
 
+// Verifies that payment rate limits do not charge unauthorized or forbidden requests and share credential rotation quota.
 func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCredentialRotationQuota(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{
@@ -262,6 +273,7 @@ func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCred
 	assert.NotEqual(t, http.StatusTooManyRequests, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"}).Code)
 }
 
+// Verifies that payment rate limits count idempotency replays.
 func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
@@ -279,6 +291,7 @@ func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
 	assert.Equal(t, http.StatusOK, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers).Code)
 }
 
+// Verifies that rate limiter separates principals and allows the full burst.
 func TestRateLimiterSeparatesPrincipalsAndAllowsTheFullBurst(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	limiter, err := httpapi.NewRateLimiter(clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 2, WriteRequestsPerSecond: 1, WriteBurst: 1})
@@ -297,8 +310,10 @@ func TestRateLimiterSeparatesPrincipalsAndAllowsTheFullBurst(t *testing.T) {
 	assert.True(t, allowed, "read and write buckets are independent")
 }
 
+// Verifies that payment lookup rejects unauthenticated requests before application.
 func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing.T) {
 	for _, authorization := range []string{"", "Basic read-credential", "Bearer invalid-credential"} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(authorization, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
@@ -316,6 +331,7 @@ func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing
 	}
 }
 
+// Verifies that new handler requires dependencies.
 func TestNewHandlerRequiresDependencies(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -367,6 +383,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			handler, err := tt.new(t)
 
@@ -376,6 +393,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 }
 
+// Verifies that new handler constructs with complete dependencies.
 func TestNewHandlerConstructsWithCompleteDependencies(t *testing.T) {
 	handler, err := newTestHandler(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testHandlerConfig(t))
 
@@ -383,6 +401,7 @@ func TestNewHandlerConstructsWithCompleteDependencies(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
+// Verifies that new handler rejects invalid config.
 func TestNewHandlerRejectsInvalidConfig(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -394,6 +413,7 @@ func TestNewHandlerRejectsInvalidConfig(t *testing.T) {
 		{"max request body bytes", func(c *httpapi.HandlerConfig) { c.MaxRequestBodyBytes = 0 }},
 	}
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			config := testHandlerConfig(t)
 			tt.mutate(&config)
@@ -404,6 +424,7 @@ func TestNewHandlerRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+// Verifies that post payments returns payment timeout when command deadline expires.
 func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		<-ctx.Done()
@@ -423,6 +444,7 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// Verifies that post payments prefers payment timeout after mock bank timeout.
 func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		<-ctx.Done()
@@ -444,6 +466,7 @@ func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// Verifies that post payments command deadline includes request parsing.
 func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		return app.PaymentCommandResult{}, nil
@@ -464,6 +487,7 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// Verifies that oversized request body is rejected before payment command.
 func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
@@ -474,6 +498,7 @@ func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
 }
 
+// Verifies that oversized request body records completion observability.
 func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -497,6 +522,7 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			api := newPaymentAPITestWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -525,6 +551,7 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 	}
 }
 
+// Verifies that oversized request body uses routing outcome when no gateway endpoint matches.
 func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -547,6 +574,7 @@ func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *t
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(oversizedJSONBody(t)))
@@ -565,6 +593,7 @@ func oversizedJSONBody(t *testing.T) string {
 	return `{"order_id":"` + strings.Repeat("x", int(testHandlerConfig(t).MaxRequestBodyBytes)+1) + `"}`
 }
 
+// Verifies that get payment returns request timeout when read deadline expires.
 func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	payments := &paymentApplicationFake{getPaymentFunc: func(ctx context.Context, _ app.GetPaymentQuery) (app.PaymentResult, error) {
 		<-ctx.Done()
@@ -582,6 +611,7 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	assertErrorResponse(t, rec, "request_timeout", "payment read timed out")
 }
 
+// Verifies that post payments returns authorization expiration when present.
 func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	api := newPaymentAPITest(t)
 	payment := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -608,6 +638,7 @@ func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	}`, rec.Body.String())
 }
 
+// Verifies that post payments returns declined payment with decline reason.
 func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -634,6 +665,7 @@ func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that post payments returns accepted pending payment with location.
 func TestPostPaymentsReturnsAcceptedPendingPaymentWithLocation(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
@@ -664,6 +696,7 @@ func TestPostPaymentsReturnsAcceptedPendingPaymentWithLocation(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that post payment authorization retries retries pending authorization.
 func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.retryAuthorizationResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -689,6 +722,7 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that post payment void voids authorized payment.
 func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.voidPaymentResult = newVoidedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -713,6 +747,7 @@ func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that post payment refund refunds captured payment without request body.
 func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	refunded := newRefundedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -740,6 +775,7 @@ func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T)
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that get payment by id returns payment.
 func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -763,6 +799,7 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "history")
 }
 
+// Verifies that get payment by id maps not found.
 func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentErr = app.NewPaymentNotFoundError("pay_550e8400-e29b-41d4-a716-446655440999", nil)
@@ -772,6 +809,7 @@ func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_not_found", "payment was not found")
 }
 
+// Verifies that search payments returns filtered payments.
 func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	api := newPaymentAPITest(t)
 	first := newPayment("pay_550e8400-e29b-41d4-a716-446655440001")
@@ -810,6 +848,7 @@ func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "history")
 }
 
+// Verifies that search payments rejects unsupported filters.
 func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 	tests := []struct {
 		name string
@@ -821,6 +860,7 @@ func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.searchPaymentsErr = app.NewInvalidPaymentInputError("order id or customer id is required", nil)
@@ -832,6 +872,7 @@ func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 	}
 }
 
+// Verifies that json payment commands require json content type.
 func TestJSONPaymentCommandsRequireJSONContentType(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -854,6 +895,7 @@ func TestJSONPaymentCommandsRequireJSONContentType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
@@ -864,6 +906,7 @@ func TestJSONPaymentCommandsRequireJSONContentType(t *testing.T) {
 	}
 }
 
+// Verifies that post payments rejects malformed json.
 func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":`, map[string]string{
@@ -875,6 +918,7 @@ func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
 }
 
+// Verifies that post payments rejects unknown fields.
 func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":"order-1","unexpected":true}`, map[string]string{
@@ -886,6 +930,7 @@ func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
 }
 
+// Verifies that post payments maps validation and missing idempotency errors.
 func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -908,6 +953,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.authorizePaymentErr = tt.err
@@ -922,6 +968,7 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	}
 }
 
+// Verifies that post payment capture captures payment without request body.
 func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	captured := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -951,6 +998,7 @@ func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Verifies that post payment capture rejects request body.
 func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	tests := []struct {
 		name string
@@ -961,6 +1009,7 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", tt.body, map[string]string{
@@ -975,6 +1024,7 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	}
 }
 
+// Verifies that post payment refund rejects request body.
 func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", `{}`, map[string]string{
@@ -987,6 +1037,7 @@ func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
 	assert.Zero(t, api.payments.refundPaymentCommand)
 }
 
+// Verifies that post payment capture maps payment errors.
 func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1006,6 +1057,7 @@ func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.capturePaymentErr = tt.err
@@ -1019,6 +1071,7 @@ func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
 	}
 }
 
+// Verifies that post payment refund maps payment errors.
 func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1038,6 +1091,7 @@ func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
 			api.payments.refundPaymentErr = tt.err
@@ -1051,6 +1105,7 @@ func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
 	}
 }
 
+// Verifies that post payments recovers panic.
 func TestPostPaymentsRecoversPanic(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentPanic = "database pool exploded"
@@ -1070,6 +1125,7 @@ func TestPostPaymentsRecoversPanic(t *testing.T) {
 	}, api.metrics.requests[0].withoutDuration())
 }
 
+// Verifies that healthz returns no content.
 func TestHealthzReturnsNoContent(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodGet, "/healthz", "", nil)
@@ -1078,6 +1134,7 @@ func TestHealthzReturnsNoContent(t *testing.T) {
 	assert.Empty(t, rec.Body.String())
 }
 
+// Verifies that readyz returns no content when postgres is ready.
 func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodGet, "/readyz", "", nil)
@@ -1087,6 +1144,7 @@ func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
 	assert.True(t, api.readiness.checked)
 }
 
+// Verifies that readyz returns unavailable when postgres is not ready.
 func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.readiness.err = errors.New("postgres unavailable")
@@ -1096,6 +1154,7 @@ func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
 	assertErrorResponse(t, rec, "service_unavailable", "Service Unavailable")
 }
 
+// Verifies that server records http metrics with route pattern.
 func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -1111,6 +1170,7 @@ func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	}, api.metrics.requests[0].withoutDuration())
 }
 
+// Verifies that server records http metrics for operational endpoints.
 func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
 	api := newPaymentAPITest(t)
 
@@ -1124,6 +1184,7 @@ func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
 	assert.Equal(t, "/readyz", api.metrics.requests[1].route)
 }
 
+// Verifies that metrics endpoint is not served by the public handler.
 func TestMetricsEndpointIsNotServedByThePublicHandler(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}

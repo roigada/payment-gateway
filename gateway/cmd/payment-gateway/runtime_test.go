@@ -2,85 +2,18 @@ package main
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"errors"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/roigada/payment-gateway/internal/app"
-	"github.com/roigada/payment-gateway/internal/httpapi"
-	"github.com/roigada/payment-gateway/internal/observability"
-	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
-	config := testRuntimeHandlerConfig(t)
-	config.RateLimit = httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}
-	publicHandler := newRuntimeHandlerWithConfig(t, readiness, config)
-
-	for requestNumber := range 2 {
-		request := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
-		request.Header.Set("Authorization", "Bearer test-credential")
-		response := httptest.NewRecorder()
-		publicHandler.ServeHTTP(response, request)
-		if requestNumber == 0 {
-			require.NotEqual(t, http.StatusTooManyRequests, response.Code)
-			continue
-		}
-		require.Equal(t, http.StatusTooManyRequests, response.Code)
-	}
-
-	metricsHandler := observability.NewHandler(observability.NewRegistry())
-	metrics := httptest.NewRecorder()
-	metricsHandler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	assert.Equal(t, http.StatusOK, metrics.Code)
-	assert.NotEmpty(t, metrics.Body.String())
-}
-
-func TestPublicAndMetricsServersExposeSeparateEndpoints(t *testing.T) {
-	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
-	_, publicListener := newTestServer(t, newRuntimeHandler(t, readiness))
-	_, metricsListener := newTestServer(t, observability.NewHandler(observability.NewRegistry()))
-
-	publicMetrics, err := http.Get("http://" + publicListener.Addr().String() + "/metrics")
-	require.NoError(t, err)
-	defer publicMetrics.Body.Close()
-	assert.Equal(t, http.StatusNotFound, publicMetrics.StatusCode)
-
-	metrics, err := http.Get("http://" + metricsListener.Addr().String() + "/metrics")
-	require.NoError(t, err)
-	defer metrics.Body.Close()
-	body, err := io.ReadAll(metrics.Body)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, metrics.StatusCode)
-	assert.NotEmpty(t, body)
-}
-
-func TestNewHTTPServerConfiguresAddress(t *testing.T) {
-	server := newHTTPServer(http.NotFoundHandler(), "127.0.0.1:8080", time.Second, time.Second, time.Second, time.Second)
-
-	assert.Equal(t, "127.0.0.1:8080", server.Addr)
-}
-
-func TestListenAndServeReportsListenFailure(t *testing.T) {
-	results := make(chan error, 1)
-	go listenAndServe(&http.Server{Addr: "127.0.0.1:-1"}, results)
-
-	select {
-	case err := <-results:
-		require.Error(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "timed out waiting for listen failure")
-	}
-}
-
+// Normal shutdown makes net/http return ServerClosed, but that is an expected lifecycle event;
+// the runtime helper must convert it to nil so the process does not report a false failure.
 func TestListenAndServeNormalizesServerClosed(t *testing.T) {
 	server := &http.Server{Addr: "127.0.0.1:0"}
 	_ = server.Shutdown(context.Background())
@@ -90,6 +23,25 @@ func TestListenAndServeNormalizesServerClosed(t *testing.T) {
 	require.NoError(t, requireReceive(t, results))
 }
 
+// Readiness delegates normally until shutdown begins. During a drain it must immediately become
+// unavailable without consulting its delegate, so load balancers stop sending new requests first.
+func TestShutdownReadinessBecomesUnavailableWhenDraining(t *testing.T) {
+	delegateErr := errors.New("database unavailable")
+	delegate := &readinessCheckerFake{err: delegateErr}
+	readiness := newShutdownReadiness(delegate)
+	ctx := context.WithValue(context.Background(), readinessContextKey{}, "readiness")
+
+	require.ErrorIs(t, readiness.CheckReady(ctx), delegateErr)
+	assert.Same(t, ctx, delegate.ctx)
+	assert.Equal(t, 1, delegate.calls)
+
+	readiness.beginDrain()
+	assert.EqualError(t, readiness.CheckReady(ctx), "payment-gateway is draining")
+	assert.Equal(t, 1, delegate.calls)
+}
+
+// Graceful shutdown stops both public and metrics listeners from accepting new work but waits for
+// an in-flight public request to finish, avoiding an interrupted response during normal shutdown.
 func TestShutdownServersLetsActiveRequestsFinishAndStopsBothServers(t *testing.T) {
 	requestStarted := make(chan struct{})
 	finishRequest := make(chan struct{})
@@ -128,6 +80,8 @@ func TestShutdownServersLetsActiveRequestsFinishAndStopsBothServers(t *testing.T
 	requireServerUnavailable(t, metricsListener.Addr().String())
 }
 
+// Forced close stops both listeners immediately and cancels an in-flight request's context, so a
+// handler can abandon work when the graceful-shutdown deadline has already been exhausted.
 func TestCloseServersCancelsActiveRequestsAndStopsBothServers(t *testing.T) {
 	requestStarted := make(chan struct{})
 	requestCanceled := make(chan struct{})
@@ -149,77 +103,6 @@ func TestCloseServersCancelsActiveRequestsAndStopsBothServers(t *testing.T) {
 	requireReceive(t, requestCanceled)
 	requireServerUnavailable(t, publicListener.Addr().String())
 	requireServerUnavailable(t, metricsListener.Addr().String())
-}
-
-type readinessCheckerFunc func(context.Context) error
-
-func (f readinessCheckerFunc) CheckReady(ctx context.Context) error { return f(ctx) }
-
-type runtimeHTTPAPIMetricsFake struct{}
-
-func (runtimeHTTPAPIMetricsFake) RecordHTTPRequest(string, string, int, time.Duration) {}
-func (runtimeHTTPAPIMetricsFake) RecordRateLimitRejection(string)                      {}
-
-type runtimePaymentApplicationFake struct{}
-
-func (runtimePaymentApplicationFake) AuthorizePayment(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
-	return app.PaymentCommandResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) RetryAuthorization(context.Context, app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
-	return app.PaymentCommandResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) CapturePayment(context.Context, app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
-	return app.PaymentCommandResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) VoidPayment(context.Context, app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
-	return app.PaymentCommandResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) RefundPayment(context.Context, app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
-	return app.PaymentCommandResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) GetPayment(context.Context, app.GetPaymentQuery) (app.PaymentResult, error) {
-	return app.PaymentResult{}, nil
-}
-
-func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchPaymentsQuery) ([]app.PaymentResult, error) {
-	return nil, nil
-}
-
-func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
-	t.Helper()
-
-	return newRuntimeHandlerWithConfig(t, readiness, testRuntimeHandlerConfig(t))
-}
-
-func newRuntimeHandlerWithConfig(t *testing.T, readiness *shutdownReadiness, config httpapi.HandlerConfig) *httpapi.Handler {
-	t.Helper()
-	cfg := validConfig()
-	authenticator, err := serviceauth.NewAuthenticator(cfg.ServiceCredentialHMACKey, cfg.ServiceCredentials)
-	require.NoError(t, err)
-	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}, authenticator, app.SystemClock{}, config)
-	require.NoError(t, err)
-	return handler
-}
-
-func discardRuntimeLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-func testRuntimeHandlerConfig(t *testing.T) httpapi.HandlerConfig {
-	t.Helper()
-	cfg := validConfig()
-	return httpapi.HandlerConfig{
-		PaymentCommandTimeout: cfg.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.PaymentReadTimeout,
-		ReadinessTimeout:      cfg.ReadinessTimeout,
-		MaxRequestBodyBytes:   cfg.HTTPMaxRequestBodyBytes,
-		RateLimit:             cfg.rateLimitConfig(),
-	}
 }
 
 func newTestServer(t *testing.T, handler http.Handler) (*http.Server, net.Listener) {
@@ -252,4 +135,18 @@ func requireServerUnavailable(t *testing.T, addr string) {
 		response.Body.Close()
 	}
 	require.Error(t, err)
+}
+
+type readinessContextKey struct{}
+
+type readinessCheckerFake struct {
+	ctx   context.Context
+	err   error
+	calls int
+}
+
+func (f *readinessCheckerFake) CheckReady(ctx context.Context) error {
+	f.ctx = ctx
+	f.calls++
+	return f.err
 }

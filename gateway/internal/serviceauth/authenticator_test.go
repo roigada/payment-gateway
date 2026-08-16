@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that authenticator authenticates overlapping credentials and scopes.
 func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	readCredential := "read-credential"
@@ -28,6 +29,7 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 		{"missing", "", ScopePaymentsRead, false, false},
 		{"invalid", "not-configured", ScopePaymentsRead, false, false},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			principal, authenticated := authenticator.Authenticate(tt.credential)
 			authorized := authenticated && principal.HasScope(tt.scope)
@@ -37,6 +39,7 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 	}
 }
 
+// Verifies that authenticator rejects invalid configuration.
 func TestAuthenticatorRejectsInvalidConfiguration(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	for _, configured := range [][]Credential{nil, {{Digest: "not-base64", Scopes: []Scope{ScopePaymentsRead}}}, {{Digest: Digest(key, "credential")}}} {
@@ -45,6 +48,7 @@ func TestAuthenticatorRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// Verifies that generate credential produces opaque high entropy value.
 func TestGenerateCredentialProducesOpaqueHighEntropyValue(t *testing.T) {
 	credential, err := GenerateCredential()
 	require.NoError(t, err)

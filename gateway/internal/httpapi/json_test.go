@@ -12,6 +12,7 @@ import (
 
 const testMaxJSONBodyBytes int64 = 64 * 1024
 
+// Verifies that decode json request returns invalid body category errors.
 func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -58,6 +59,7 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			err := decodePaymentRequest(tt.body)
 
@@ -71,6 +73,7 @@ func TestDecodeJSONRequestReturnsInvalidBodyCategoryErrors(t *testing.T) {
 	}
 }
 
+// Verifies that decode json request panics for invalid destination.
 func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"order_id":"order-1"}`))
@@ -80,6 +83,7 @@ func TestDecodeJSONRequestPanicsForInvalidDestination(t *testing.T) {
 	})
 }
 
+// Verifies that decode json request uses provided body limit.
 func TestDecodeJSONRequestUsesProvidedBodyLimit(t *testing.T) {
 	body := `{"order_id":"order-1"}`
 	rec := httptest.NewRecorder()
@@ -95,6 +99,7 @@ func TestDecodeJSONRequestUsesProvidedBodyLimit(t *testing.T) {
 	assert.ErrorIs(t, err, errOversizedJSONBody)
 }
 
+// Verifies that require empty request body accepts absent or empty body.
 func TestRequireEmptyRequestBodyAcceptsAbsentOrEmptyBody(t *testing.T) {
 	tests := []struct {
 		name string
@@ -117,12 +122,14 @@ func TestRequireEmptyRequestBodyAcceptsAbsentOrEmptyBody(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			assert.NoError(t, requireEmptyRequestBody(tt.req))
 		})
 	}
 }
 
+// Verifies that require empty request body rejects any body bytes.
 func TestRequireEmptyRequestBodyRejectsAnyBodyBytes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -133,6 +140,7 @@ func TestRequireEmptyRequestBodyRejectsAnyBodyBytes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/payments/pay_1/capture", strings.NewReader(tt.body))
 
@@ -154,6 +162,7 @@ func decodePaymentRequest(body string) error {
 	return decodeJSONRequest(rec, req, &request, testMaxJSONBodyBytes)
 }
 
+// Verifies that write json writes status content type and body.
 func TestWriteJSONWritesStatusContentTypeAndBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 
@@ -165,6 +174,7 @@ func TestWriteJSONWritesStatusContentTypeAndBody(t *testing.T) {
 	assert.Equal(t, "{\"id\":\"pay_550e8400-e29b-41d4-a716-446655440000\"}\n", rec.Body.String())
 }
 
+// Verifies that write json returns internal server error when body cannot be encoded.
 func TestWriteJSONReturnsInternalServerErrorWhenBodyCannotBeEncoded(t *testing.T) {
 	rec := httptest.NewRecorder()
 

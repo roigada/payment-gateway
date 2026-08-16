@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Verifies that new handler serves only metrics.
 func TestNewHandlerServesOnlyMetrics(t *testing.T) {
 	handler := NewHandler(NewRegistry())
 

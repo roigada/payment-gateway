@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that new metrics registers gateway metrics and collectors.
 func TestNewMetricsRegistersGatewayMetricsAndCollectors(t *testing.T) {
 	metrics, err := NewMetrics(&sql.DB{}, pendingPaymentMetricsSource{count: 2})
 	require.NoError(t, err)

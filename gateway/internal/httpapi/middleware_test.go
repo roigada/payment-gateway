@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that bearer credential.
 func TestBearerCredential(t *testing.T) {
 	for _, tt := range []struct {
 		name, header, credential string
@@ -25,6 +26,7 @@ func TestBearerCredential(t *testing.T) {
 		{name: "missing credential", header: "Bearer", ok: false},
 		{name: "too many fields", header: "Bearer credential extra", ok: false},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			credential, ok := bearerCredential(tt.header)
 
@@ -34,6 +36,7 @@ func TestBearerCredential(t *testing.T) {
 	}
 }
 
+// Verifies that recover panic writes internal server error before response starts.
 func TestRecoverPanicWritesInternalServerErrorBeforeResponseStarts(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
@@ -47,6 +50,7 @@ func TestRecoverPanicWritesInternalServerErrorBeforeResponseStarts(t *testing.T)
 	assert.JSONEq(t, `{"error":{"code":"internal_server_error","message":"Internal Server Error"}}`, rec.Body.String())
 }
 
+// Verifies that recover panic logs recovered panic.
 func TestRecoverPanicLogsRecoveredPanic(t *testing.T) {
 	var logs bytes.Buffer
 	handler := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil))).recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +76,7 @@ func TestRecoverPanicLogsRecoveredPanic(t *testing.T) {
 	assert.Contains(t, entry["stack"], "goroutine")
 }
 
+// Verifies that recover panic does not write error after response starts.
 func TestRecoverPanicDoesNotWriteErrorAfterResponseStarts(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -87,6 +92,7 @@ func TestRecoverPanicDoesNotWriteErrorAfterResponseStarts(t *testing.T) {
 	assert.Equal(t, `{"started":true}`, rec.Body.String())
 }
 
+// Verifies that recover panic repanics err abort handler.
 func TestRecoverPanicRepanicsErrAbortHandler(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
@@ -100,6 +106,7 @@ func TestRecoverPanicRepanicsErrAbortHandler(t *testing.T) {
 	})
 }
 
+// Verifies that log request writes info for completed requests.
 func TestLogRequestWritesInfoForCompletedRequests(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -126,6 +133,7 @@ func TestLogRequestWritesInfoForCompletedRequests(t *testing.T) {
 	assert.Equal(t, "test-agent", entry["user_agent"])
 }
 
+// Verifies that log request writes error for server errors.
 func TestLogRequestWritesErrorForServerErrors(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -141,6 +149,7 @@ func TestLogRequestWritesErrorForServerErrors(t *testing.T) {
 	assert.Equal(t, float64(http.StatusInternalServerError), entry["status"])
 }
 
+// Verifies that fallback panic recovery lets request logging observe the failure.
 func TestFallbackPanicRecoveryLetsRequestLoggingObserveTheFailure(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -162,6 +171,7 @@ func TestFallbackPanicRecoveryLetsRequestLoggingObserveTheFailure(t *testing.T) 
 	assert.Equal(t, float64(http.StatusInternalServerError), requestEntry["status"])
 }
 
+// Verifies that response recorder keeps first final status.
 func TestResponseRecorderKeepsFirstFinalStatus(t *testing.T) {
 	rec := &responseRecorder{ResponseWriter: httptest.NewRecorder()}
 

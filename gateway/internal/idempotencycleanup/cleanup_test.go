@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Verifies that the cleanup runner waits for ticks, records outcomes, and stops when its context is cancelled.
 func TestRunnerWaitsForTickRecordsOutcomesAndStopsWithContext(t *testing.T) {
 	cleanupRuns := make(chan struct{}, 3)
 	cleanupCalls := 0

@@ -15,6 +15,8 @@ import (
 
 const testClaimStuckAfter = 5 * time.Minute
 
+// A successful authorization creates an Authorized Payment, sends the expected card details
+// to the Mock Bank, and records the final result so the Idempotency Key can be replayed.
 func TestAuthorizePaymentSendsBankRequestAndCompletesClaim(t *testing.T) {
 	now := testTime()
 	store := &paymentStoreFake{}
@@ -31,6 +33,25 @@ func TestAuthorizePaymentSendsBankRequestAndCompletesClaim(t *testing.T) {
 	assert.Equal(t, domain.PaymentStatusAuthorized, store.completed[0].claim.Payment().Status())
 }
 
+// An unexpected store failure must not escape from the exported service as raw infrastructure
+// text. The service returns a safe Internal Payment Error while retaining the original cause.
+func TestAuthorizePaymentNormalizesUnexpectedStoreError(t *testing.T) {
+	storeErr := errors.New("database driver: connection refused")
+	store := &paymentStoreFake{claimAuthorizationStart: func(app.AuthorizationStartClaimRequest) (app.PaymentCommandClaim, error) {
+		return app.PaymentCommandClaim{}, storeErr
+	}}
+
+	_, err := newPaymentService(store, &bankFake{}, testTime()).AuthorizePayment(context.Background(), authorizeCommand(t))
+
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+	assert.Equal(t, "internal server error", err.Error())
+	assert.ErrorIs(t, err, storeErr)
+	assert.NotContains(t, err.Error(), storeErr.Error())
+}
+
+// A Mock Bank timeout leaves the authorization outcome unknown, so the Payment remains Pending
+// and its 202 response is completed for replay instead of treating the command as failed.
 func TestAuthorizePaymentCompletesPendingPaymentForUnknownBankOutcome(t *testing.T) {
 	store := &paymentStoreFake{}
 	bank := &bankFake{authorizeErr: app.NewPaymentBankTimeoutError(context.DeadlineExceeded)}
@@ -45,6 +66,8 @@ func TestAuthorizePaymentCompletesPendingPaymentForUnknownBankOutcome(t *testing
 	assert.Empty(t, store.released)
 }
 
+// A repeated authorization with a completed Idempotency Key returns its stored response;
+// it must not make another Mock Bank call or create another completed command.
 func TestAuthorizePaymentReturnsConfiguredReplayWithoutCallingBank(t *testing.T) {
 	replayed := app.PaymentCommandResult{Payment: app.PaymentResult{ID: "pay_replayed", Status: "authorized"}, HTTPStatus: http.StatusCreated}
 	store := &paymentStoreFake{claimAuthorizationStart: func(request app.AuthorizationStartClaimRequest) (app.PaymentCommandClaim, error) {
@@ -60,6 +83,72 @@ func TestAuthorizePaymentReturnsConfiguredReplayWithoutCallingBank(t *testing.T)
 	assert.Empty(t, store.completed)
 }
 
+// A replay of any command on an existing Payment returns its stored response without calling
+// the Mock Bank, preventing a retry from capturing, voiding, refunding, or authorizing twice.
+func TestExistingPaymentCommandsReturnConfiguredReplayWithoutCallingBank(t *testing.T) {
+	replayed := app.PaymentCommandResult{Payment: app.PaymentResult{ID: "pay_replayed", Status: "captured"}, HTTPStatus: http.StatusOK}
+	paymentID := domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")
+
+	tests := []struct {
+		name      string
+		execute   func(*testing.T, *app.PaymentService) (app.PaymentCommandResult, error)
+		bankCalls func(*bankFake) int
+	}{
+		{
+			name: "retry authorization",
+			execute: func(t *testing.T, service *app.PaymentService) (app.PaymentCommandResult, error) {
+				command, err := app.NewRetryAuthorizationCommand(string(paymentID), "4111111111111111", "123", 12, 2030, "retry-1")
+				require.NoError(t, err)
+				return service.RetryAuthorization(context.Background(), command)
+			},
+			bankCalls: func(bank *bankFake) int { return bank.authorizeCalls },
+		},
+		{
+			name: "capture",
+			execute: func(t *testing.T, service *app.PaymentService) (app.PaymentCommandResult, error) {
+				return service.CapturePayment(context.Background(), captureCommand(t, paymentID))
+			},
+			bankCalls: func(bank *bankFake) int { return bank.captureCalls },
+		},
+		{
+			name: "void",
+			execute: func(t *testing.T, service *app.PaymentService) (app.PaymentCommandResult, error) {
+				command, err := app.NewVoidPaymentCommand(string(paymentID), "void-1")
+				require.NoError(t, err)
+				return service.VoidPayment(context.Background(), command)
+			},
+			bankCalls: func(bank *bankFake) int { return bank.voidCalls },
+		},
+		{
+			name: "refund",
+			execute: func(t *testing.T, service *app.PaymentService) (app.PaymentCommandResult, error) {
+				command, err := app.NewRefundPaymentCommand(string(paymentID), "refund-1")
+				require.NoError(t, err)
+				return service.RefundPayment(context.Background(), command)
+			},
+			bankCalls: func(bank *bankFake) int { return bank.refundCalls },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &paymentStoreFake{claimExisting: func(request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+				return app.NewReplayedPaymentCommand(request, replayed), nil
+			}}
+			bank := &bankFake{}
+
+			result, err := test.execute(t, newPaymentService(store, bank, testTime()))
+
+			require.NoError(t, err)
+			assert.Equal(t, replayed, result)
+			assert.Zero(t, test.bankCalls(bank))
+			assert.Empty(t, store.completed)
+		})
+	}
+}
+
+// Retrying a Pending Payment can receive a definitive decline from the Mock Bank; the Payment
+// then becomes Declined with the bank's mapped reason and the command is completed for replay.
 func TestRetryAuthorizationCompletesDeclinedPayment(t *testing.T) {
 	payment := pendingPayment(t, testTime())
 	store := claimedPaymentStore(payment)
@@ -75,6 +164,25 @@ func TestRetryAuthorizationCompletesDeclinedPayment(t *testing.T) {
 	require.Len(t, store.completed, 1)
 }
 
+// Capturing an Authorized Payment sends its authorization reference and amount to the Mock Bank,
+// then persists the Captured lifecycle transition and its successful command result.
+func TestCapturePaymentSendsBankRequestAndCompletesClaim(t *testing.T) {
+	payment := authorizedPayment(t, testTime())
+	store := claimedPaymentStore(payment)
+	bank := &bankFake{}
+
+	result, err := newPaymentService(store, bank, testTime()).CapturePayment(context.Background(), captureCommand(t, payment.ID()))
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, result.HTTPStatus)
+	assert.Equal(t, "captured", result.Payment.Status)
+	assert.Equal(t, app.BankCaptureRequest{OperationKey: "bok_1", BankAuthorizationID: "auth-1", AmountCents: 1299, Currency: "USD"}, bank.captureRequest)
+	require.Len(t, store.completed, 1)
+	assert.Equal(t, domain.PaymentStatusCaptured, store.completed[0].claim.Payment().Status())
+}
+
+// A definitive expiration response from the Mock Bank changes the Payment to Expired and is
+// saved for replay, while the current caller receives an authorization-expired error.
 func TestCapturePaymentPersistsExpiredOutcomeAndReturnsExpirationError(t *testing.T) {
 	payment := authorizedPayment(t, testTime())
 	store := claimedPaymentStore(payment)
@@ -88,6 +196,44 @@ func TestCapturePaymentPersistsExpiredOutcomeAndReturnsExpirationError(t *testin
 	assert.Empty(t, store.released)
 }
 
+// Voiding an Authorized Payment sends its authorization reference to the Mock Bank, then stores
+// the Voided transition and successful result so a later identical request can be replayed.
+func TestVoidPaymentSendsBankRequestAndCompletesClaim(t *testing.T) {
+	payment := authorizedPayment(t, testTime())
+	store := claimedPaymentStore(payment)
+	bank := &bankFake{}
+	command, err := app.NewVoidPaymentCommand(string(payment.ID()), "void-1")
+	require.NoError(t, err)
+
+	result, err := newPaymentService(store, bank, testTime()).VoidPayment(context.Background(), command)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, result.HTTPStatus)
+	assert.Equal(t, "voided", result.Payment.Status)
+	assert.Equal(t, app.BankVoidRequest{OperationKey: "bok_1", BankAuthorizationID: "auth-1"}, bank.voidRequest)
+	require.Len(t, store.completed, 1)
+	assert.Equal(t, domain.PaymentStatusVoided, store.completed[0].claim.Payment().Status())
+}
+
+// A void can reveal that the Mock Bank authorization has expired; this is a final Payment state,
+// so it is persisted and returned to the caller as an authorization-expired error.
+func TestVoidPaymentPersistsExpiredOutcomeAndReturnsExpirationError(t *testing.T) {
+	payment := authorizedPayment(t, testTime())
+	store := claimedPaymentStore(payment)
+	bank := &bankFake{voidErr: app.NewPaymentAuthorizationExpiredError(nil)}
+	command, err := app.NewVoidPaymentCommand(string(payment.ID()), "void-1")
+	require.NoError(t, err)
+
+	_, err = newPaymentService(store, bank, testTime()).VoidPayment(context.Background(), command)
+
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
+	require.Len(t, store.completed, 1)
+	assert.Equal(t, domain.PaymentStatusExpired, store.completed[0].claim.Payment().Status())
+	assert.Empty(t, store.released)
+}
+
+// A temporary Mock Bank failure does not establish a final void outcome, so the command claim is
+// released rather than completed, allowing the caller to retry safely with the same key.
 func TestVoidPaymentReleasesClaimWhenBankFails(t *testing.T) {
 	payment := authorizedPayment(t, testTime())
 	store := claimedPaymentStore(payment)
@@ -102,6 +248,8 @@ func TestVoidPaymentReleasesClaimWhenBankFails(t *testing.T) {
 	assert.Empty(t, store.completed)
 }
 
+// Refunding a Captured Payment sends its original Mock Bank capture ID, then persists the
+// Refunded transition and completes the command for future idempotent replays.
 func TestRefundPaymentCompletesClaim(t *testing.T) {
 	payment := capturedPayment(t, testTime())
 	require.NoError(t, payment.SetRefundBankOperationKey("bok_1"))
@@ -118,6 +266,25 @@ func TestRefundPaymentCompletesClaim(t *testing.T) {
 	assert.Equal(t, "capture-1", bank.refundRequest.BankCaptureID)
 }
 
+// A temporary Mock Bank failure during refund leaves the final outcome unknown, so the command
+// claim is released—not completed—and a later retry may attempt recovery.
+func TestRefundPaymentReleasesClaimWhenBankFails(t *testing.T) {
+	payment := capturedPayment(t, testTime())
+	require.NoError(t, payment.SetRefundBankOperationKey("bok_1"))
+	store := claimedPaymentStore(payment)
+	bank := &bankFake{refundErr: app.NewPaymentBankUnavailableError(errors.New("unavailable"))}
+	command, err := app.NewRefundPaymentCommand(string(payment.ID()), "refund-1")
+	require.NoError(t, err)
+
+	_, err = newPaymentService(store, bank, testTime()).RefundPayment(context.Background(), command)
+
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
+	require.Len(t, store.released, 1)
+	assert.Empty(t, store.completed)
+}
+
+// Read operations translate the domain Payment returned by the store into the public result type
+// used by callers, for both a single Payment lookup and a Payment search.
 func TestReadsMapStorePaymentsToPublicResults(t *testing.T) {
 	payment := authorizedPayment(t, testTime())
 	store := &paymentStoreFake{findPayment: payment, searchPayments: []*domain.Payment{payment}}
@@ -137,6 +304,37 @@ func TestReadsMapStorePaymentsToPublicResults(t *testing.T) {
 	assert.Equal(t, "authorized", results[0].Status)
 }
 
+// The service owns the 24-hour Idempotency Replay Window: it supplies the store with the precise
+// cutoff and caller context, while the store selects records, deletes them, and returns the count.
+func TestCleanupCompletedIdempotencyReplaysUsesReplayWindowCutoffAndReturnsStoreCount(t *testing.T) {
+	now := time.Date(2000, time.January, 2, 12, 0, 0, 0, time.UTC)
+	store := &paymentStoreFake{cleanupRemoved: 3}
+	service := newPaymentService(store, &bankFake{}, now)
+	ctx := context.WithValue(context.Background(), cleanupContextKey{}, "cleanup")
+
+	removed, err := service.CleanupCompletedIdempotencyReplays(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, removed)
+	assert.Equal(t, now.Add(-24*time.Hour), store.cleanupBefore)
+	assert.Same(t, ctx, store.cleanupContext)
+}
+
+// Cleanup is best effort, but its store errors must remain visible to the runner so it can log
+// the failure and retry on a later scheduled run instead of reporting a false removal count.
+func TestCleanupCompletedIdempotencyReplaysPropagatesStoreError(t *testing.T) {
+	storeErr := errors.New("database unavailable")
+	store := &paymentStoreFake{cleanupErr: storeErr}
+	service := newPaymentService(store, &bankFake{}, time.Time{})
+
+	removed, err := service.CleanupCompletedIdempotencyReplays(context.Background())
+
+	assert.Zero(t, removed)
+	require.ErrorIs(t, err, storeErr)
+}
+
+// Application input constructors trim accepted text before commands are used and consistently
+// reject malformed commands and queries with the gateway's InvalidInput error kind.
 func TestAppInputConstructorsNormalizeAndRejectInvalidInput(t *testing.T) {
 	command, err := app.NewAuthorizePaymentCommand(" order-1 ", " customer-1 ", 1299, " 4111111111111111 ", " 123 ", 12, 2030, " key-1 ")
 	require.NoError(t, err)
@@ -159,6 +357,8 @@ func TestAppInputConstructorsNormalizeAndRejectInvalidInput(t *testing.T) {
 
 func constructorError(run func() error) error { return run() }
 
+type cleanupContextKey struct{}
+
 type paymentStoreFake struct {
 	findPayment             *domain.Payment
 	findErr                 error
@@ -174,6 +374,7 @@ type paymentStoreFake struct {
 	cleanupRemoved          int
 	cleanupErr              error
 	cleanupBefore           time.Time
+	cleanupContext          context.Context
 }
 
 type completedClaim struct{ claim app.PaymentCommandClaim }
@@ -205,7 +406,8 @@ func (s *paymentStoreFake) ReleasePaymentCommand(_ context.Context, claim app.Pa
 	s.released = append(s.released, claim)
 	return s.releaseErr
 }
-func (s *paymentStoreFake) CleanupCompletedIdempotencyRecords(_ context.Context, before time.Time) (int, error) {
+func (s *paymentStoreFake) CleanupCompletedIdempotencyRecords(ctx context.Context, before time.Time) (int, error) {
+	s.cleanupContext = ctx
 	s.cleanupBefore = before
 	return s.cleanupRemoved, s.cleanupErr
 }
@@ -228,6 +430,16 @@ func newPaymentService(store app.PaymentStore, bank app.BankClient, now time.Tim
 
 func claimedPaymentStore(payment *domain.Payment) *paymentStoreFake {
 	return &paymentStoreFake{claimExisting: func(request app.ExistingPaymentCommandClaimRequest) (app.PaymentCommandClaim, error) {
+		switch request.Operation() {
+		case app.CapturePaymentOperation:
+			if err := payment.SetCaptureBankOperationKey(request.BankOperationKey()); err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+		case app.VoidPaymentOperation:
+			if err := payment.SetVoidBankOperationKey(request.BankOperationKey()); err != nil {
+				return app.PaymentCommandClaim{}, err
+			}
+		}
 		return app.NewClaimedPaymentCommand(request, payment), nil
 	}}
 }
@@ -243,10 +455,16 @@ type bankFake struct {
 	authorizeResult  app.BankAuthorizationResult
 	authorizeErr     error
 	authorizeCalls   int
+	captureRequest   app.BankCaptureRequest
+	captureCalls     int
 	captureErr       error
+	voidRequest      app.BankVoidRequest
+	voidCalls        int
 	voidErr          error
 	refundRequest    app.BankRefundRequest
 	refundResult     app.BankRefundResult
+	refundErr        error
+	refundCalls      int
 }
 
 func (b *bankFake) AuthorizePayment(_ context.Context, appRequest app.BankAuthorizationRequest) (app.BankAuthorizationResult, error) {
@@ -254,18 +472,23 @@ func (b *bankFake) AuthorizePayment(_ context.Context, appRequest app.BankAuthor
 	b.authorizeCalls++
 	return b.authorizeResult, b.authorizeErr
 }
-func (b *bankFake) CapturePayment(_ context.Context, _ app.BankCaptureRequest) (app.BankCaptureResult, error) {
+func (b *bankFake) CapturePayment(_ context.Context, request app.BankCaptureRequest) (app.BankCaptureResult, error) {
+	b.captureRequest = request
+	b.captureCalls++
 	return app.BankCaptureResult{BankCaptureID: "capture-1"}, b.captureErr
 }
-func (b *bankFake) VoidPayment(_ context.Context, _ app.BankVoidRequest) (app.BankVoidResult, error) {
+func (b *bankFake) VoidPayment(_ context.Context, request app.BankVoidRequest) (app.BankVoidResult, error) {
+	b.voidRequest = request
+	b.voidCalls++
 	return app.BankVoidResult{BankVoidID: "void-1"}, b.voidErr
 }
 func (b *bankFake) RefundPayment(_ context.Context, request app.BankRefundRequest) (app.BankRefundResult, error) {
 	b.refundRequest = request
-	return b.refundResult, nil
+	b.refundCalls++
+	return b.refundResult, b.refundErr
 }
 
-func testTime() time.Time { return time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC) }
+func testTime() time.Time { return time.Date(2000, time.January, 1, 12, 0, 0, 0, time.UTC) }
 func authorizeCommand(t *testing.T) app.AuthorizePaymentCommand {
 	t.Helper()
 	command, err := app.NewAuthorizePaymentCommand("order-1", "customer-1", 1299, "4111111111111111", "123", 12, 2030, "authorize-1")

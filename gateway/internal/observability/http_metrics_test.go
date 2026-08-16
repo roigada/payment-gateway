@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that http metrics records request count and duration.
 func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewHTTPMetrics(registry)
@@ -40,6 +41,7 @@ func TestHTTPMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	})
 }
 
+// Verifies that http metrics records only bounded rate limit route classes.
 func TestHTTPMetricsRecordsOnlyBoundedRateLimitRouteClasses(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewHTTPMetrics(registry)
@@ -66,6 +68,7 @@ func TestHTTPMetricsRecordsOnlyBoundedRateLimitRouteClasses(t *testing.T) {
 	assert.Equal(t, map[string]float64{"read": 1, "write": 1}, valuesByRouteClass)
 }
 
+// Verifies that new http metrics requires registry.
 func TestNewHTTPMetricsRequiresRegistry(t *testing.T) {
 	metrics, err := NewHTTPMetrics(nil)
 
@@ -73,6 +76,7 @@ func TestNewHTTPMetricsRequiresRegistry(t *testing.T) {
 	assert.EqualError(t, err, "prometheus registry is required")
 }
 
+// Verifies that new registry includes runtime and process collectors.
 func TestNewRegistryIncludesRuntimeAndProcessCollectors(t *testing.T) {
 	registry := NewRegistry()
 
