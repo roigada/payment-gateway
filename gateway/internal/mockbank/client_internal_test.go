@@ -15,7 +15,7 @@ import (
 )
 
 func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
-	config := retryClientConfig()
+	config := retryConfig()
 	config.BaseURL = "https://mockbank.example"
 	config.TLSHandshakeTimeout = 2
 	config.ResponseHeaderTimeout = 3
@@ -31,7 +31,7 @@ func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 }
 
 func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
-	config := retryClientConfig()
+	config := retryConfig()
 	config.BaseURL = "https://mockbank.example"
 	client, err := NewClient(noopMockBankMetrics{}, config)
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 }
 
 func TestNewClientRejectsNilMetrics(t *testing.T) {
-	client, err := NewClient(nil, ClientConfig{BaseURL: "https://mockbank.example"})
+	client, err := NewClient(nil, Config{BaseURL: "https://mockbank.example"})
 
 	require.Nil(t, client)
 	require.EqualError(t, err, "mock bank metrics are required")
@@ -55,21 +55,21 @@ func TestNewClientRejectsNilMetrics(t *testing.T) {
 func TestNewClientRejectsInvalidConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		mutate  func(*ClientConfig)
+		mutate  func(*Config)
 		wantErr string
 	}{
-		{"base URL", func(config *ClientConfig) { config.BaseURL = "relative" }, "mock bank base URL must be absolute"},
-		{"timeout", func(config *ClientConfig) { config.Timeout = 0 }, "mock bank timeout must be positive"},
-		{"initial attempt timeout", func(config *ClientConfig) { config.InitialAttemptTimeout = 0 }, "mock bank initial attempt timeout must be positive"},
-		{"retry delay", func(config *ClientConfig) { config.RetryDelay = 0 }, "mock bank retry delay must be positive"},
-		{"retry attempt timeout", func(config *ClientConfig) { config.RetryAttemptTimeout = 0 }, "mock bank retry attempt timeout must be positive"},
-		{"connect timeout", func(config *ClientConfig) { config.ConnectTimeout = 0 }, "mock bank connect timeout must be positive"},
-		{"TLS handshake timeout", func(config *ClientConfig) { config.TLSHandshakeTimeout = 0 }, "mock bank TLS handshake timeout must be positive"},
-		{"response header timeout", func(config *ClientConfig) { config.ResponseHeaderTimeout = 0 }, "mock bank response header timeout must be positive"},
-		{"idle connection timeout", func(config *ClientConfig) { config.IdleConnectionTimeout = 0 }, "mock bank idle connection timeout must be positive"},
+		{"base URL", func(config *Config) { config.BaseURL = "relative" }, "mock bank base URL must be absolute"},
+		{"timeout", func(config *Config) { config.Timeout = 0 }, "mock bank timeout must be positive"},
+		{"initial attempt timeout", func(config *Config) { config.InitialAttemptTimeout = 0 }, "mock bank initial attempt timeout must be positive"},
+		{"retry delay", func(config *Config) { config.RetryDelay = 0 }, "mock bank retry delay must be positive"},
+		{"retry attempt timeout", func(config *Config) { config.RetryAttemptTimeout = 0 }, "mock bank retry attempt timeout must be positive"},
+		{"connect timeout", func(config *Config) { config.ConnectTimeout = 0 }, "mock bank connect timeout must be positive"},
+		{"TLS handshake timeout", func(config *Config) { config.TLSHandshakeTimeout = 0 }, "mock bank TLS handshake timeout must be positive"},
+		{"response header timeout", func(config *Config) { config.ResponseHeaderTimeout = 0 }, "mock bank response header timeout must be positive"},
+		{"idle connection timeout", func(config *Config) { config.IdleConnectionTimeout = 0 }, "mock bank idle connection timeout must be positive"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			config := retryClientConfig()
+			config := retryConfig()
 			config.BaseURL = "https://mockbank.example"
 			tt.mutate(&config)
 

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -56,105 +57,70 @@ const (
 const paymentCommandCompletionReserve = time.Second
 
 type config struct {
-	Runtime  RuntimeConfig
-	Database DatabaseConfig
-	HTTP     HTTPConfig
-	Metrics  MetricsConfig
-	Payment  PaymentConfig
-	Auth     AuthConfig
-	MockBank MockBankConfig
-}
-
-type RuntimeConfig struct {
 	LogLevel                         string
 	ShutdownTimeout                  time.Duration
 	IdempotencyReplayCleanupInterval time.Duration
+	DatabaseURL                      string
+	DatabaseMaxOpenConnections       int
+	DatabaseMaxIdleConnections       int
+	DatabaseConnectionMaxLifetime    time.Duration
+	DatabaseConnectionMaxIdleTime    time.Duration
+	DatabaseStartupTimeout           time.Duration
+	HTTPAddr                         string
+	HTTPReadHeaderTimeout            time.Duration
+	HTTPReadTimeout                  time.Duration
+	HTTPWriteTimeout                 time.Duration
+	HTTPIdleTimeout                  time.Duration
+	HTTPMaxRequestBodyBytes          int64
+	RateLimitReadRequestsPerSecond   int
+	RateLimitReadBurst               int
+	RateLimitWriteRequestsPerSecond  int
+	RateLimitWriteBurst              int
+	PaymentCommandTimeout            time.Duration
+	PaymentReadTimeout               time.Duration
+	ReadinessTimeout                 time.Duration
+	MetricsAddr                      string
+	MetricsReadHeaderTimeout         time.Duration
+	MetricsReadTimeout               time.Duration
+	MetricsWriteTimeout              time.Duration
+	MetricsIdleTimeout               time.Duration
+	FingerprintSecret                string
+	IdempotencyClaimStuckAfter       time.Duration
+	ServiceCredentialHMACKey         []byte
+	ServiceCredentials               []serviceauth.Credential
+	MockBankBaseURL                  string
+	MockBankTimeout                  time.Duration
+	MockBankInitialAttemptTimeout    time.Duration
+	MockBankRetryDelay               time.Duration
+	MockBankRetryAttemptTimeout      time.Duration
+	MockBankConnectTimeout           time.Duration
+	MockBankTLSHandshakeTimeout      time.Duration
+	MockBankResponseHeaderTimeout    time.Duration
+	MockBankIdleConnectionTimeout    time.Duration
 }
 
-type DatabaseConfig struct {
-	URL                   string
-	MaxOpenConnections    int
-	MaxIdleConnections    int
-	ConnectionMaxLifetime time.Duration
-	ConnectionMaxIdleTime time.Duration
-	StartupTimeout        time.Duration
+func (cfg config) postgresConfig() postgres.Config {
+	return postgres.Config{URL: cfg.DatabaseURL, MaxOpenConnections: cfg.DatabaseMaxOpenConnections, MaxIdleConnections: cfg.DatabaseMaxIdleConnections, ConnectionMaxLifetime: cfg.DatabaseConnectionMaxLifetime, ConnectionMaxIdleTime: cfg.DatabaseConnectionMaxIdleTime}
 }
 
-type ServerConfig struct {
-	Addr              string
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
+func (cfg config) mockBankConfig() mockbank.Config {
+	return mockbank.Config{BaseURL: cfg.MockBankBaseURL, Timeout: cfg.MockBankTimeout, InitialAttemptTimeout: cfg.MockBankInitialAttemptTimeout, RetryDelay: cfg.MockBankRetryDelay, RetryAttemptTimeout: cfg.MockBankRetryAttemptTimeout, ConnectTimeout: cfg.MockBankConnectTimeout, TLSHandshakeTimeout: cfg.MockBankTLSHandshakeTimeout, ResponseHeaderTimeout: cfg.MockBankResponseHeaderTimeout, IdleConnectionTimeout: cfg.MockBankIdleConnectionTimeout}
 }
 
-type HTTPConfig struct {
-	ServerConfig
-	MaxRequestBodyBytes   int64
-	RateLimit             httpapi.RateLimitConfig
-	PaymentCommandTimeout time.Duration
-	PaymentReadTimeout    time.Duration
-	ReadinessTimeout      time.Duration
+func (cfg config) handlerConfig() httpapi.HandlerConfig {
+	return httpapi.HandlerConfig{PaymentCommandTimeout: cfg.PaymentCommandTimeout, PaymentReadTimeout: cfg.PaymentReadTimeout, ReadinessTimeout: cfg.ReadinessTimeout, MaxRequestBodyBytes: cfg.HTTPMaxRequestBodyBytes, RateLimit: cfg.rateLimitConfig()}
 }
 
-func (cfg HTTPConfig) handlerOptions() httpapi.HandlerOptions {
-	return httpapi.HandlerOptions{
-		PaymentCommandTimeout: cfg.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.PaymentReadTimeout,
-		ReadinessTimeout:      cfg.ReadinessTimeout,
-		MaxRequestBodyBytes:   cfg.MaxRequestBodyBytes,
-		RateLimit:             cfg.RateLimit,
-	}
+func (cfg config) rateLimitConfig() httpapi.RateLimitConfig {
+	return httpapi.RateLimitConfig{ReadRequestsPerSecond: cfg.RateLimitReadRequestsPerSecond, ReadBurst: cfg.RateLimitReadBurst, WriteRequestsPerSecond: cfg.RateLimitWriteRequestsPerSecond, WriteBurst: cfg.RateLimitWriteBurst}
 }
 
-type MetricsConfig struct {
-	ServerConfig
+func (cfg config) publicServer(handler http.Handler) *http.Server {
+	return newHTTPServer(handler, cfg.HTTPAddr, cfg.HTTPReadHeaderTimeout, cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout, cfg.HTTPIdleTimeout)
 }
 
-type PaymentConfig struct {
-	FingerprintSecret          string
-	IdempotencyClaimStuckAfter time.Duration
-}
-
-type AuthConfig struct {
-	HMACKey     []byte
-	Credentials []serviceauth.Credential
-}
-
-type MockBankConfig struct {
-	BaseURL               string
-	Timeout               time.Duration
-	InitialAttemptTimeout time.Duration
-	RetryDelay            time.Duration
-	RetryAttemptTimeout   time.Duration
-	ConnectTimeout        time.Duration
-	TLSHandshakeTimeout   time.Duration
-	ResponseHeaderTimeout time.Duration
-	IdleConnectionTimeout time.Duration
-}
-
-func (cfg DatabaseConfig) postgresOptions() postgres.Options {
-	return postgres.Options{
-		URL:                   cfg.URL,
-		MaxOpenConnections:    cfg.MaxOpenConnections,
-		MaxIdleConnections:    cfg.MaxIdleConnections,
-		ConnectionMaxLifetime: cfg.ConnectionMaxLifetime,
-		ConnectionMaxIdleTime: cfg.ConnectionMaxIdleTime,
-	}
-}
-
-func (cfg MockBankConfig) clientConfig() mockbank.ClientConfig {
-	return mockbank.ClientConfig{
-		BaseURL:               cfg.BaseURL,
-		Timeout:               cfg.Timeout,
-		InitialAttemptTimeout: cfg.InitialAttemptTimeout,
-		RetryDelay:            cfg.RetryDelay,
-		RetryAttemptTimeout:   cfg.RetryAttemptTimeout,
-		ConnectTimeout:        cfg.ConnectTimeout,
-		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
-		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
-		IdleConnectionTimeout: cfg.IdleConnectionTimeout,
-	}
+func (cfg config) metricsServer(handler http.Handler) *http.Server {
+	return newHTTPServer(handler, cfg.MetricsAddr, cfg.MetricsReadHeaderTimeout, cfg.MetricsReadTimeout, cfg.MetricsWriteTimeout, cfg.MetricsIdleTimeout)
 }
 
 func loadConfig() (config, error) {
@@ -296,150 +262,149 @@ func loadConfig() (config, error) {
 	}
 
 	cfg := config{
-		Runtime:  RuntimeConfig{LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval},
-		Database: DatabaseConfig{URL: os.Getenv("DATABASE_URL"), MaxOpenConnections: databaseMaxOpenConnections, MaxIdleConnections: databaseMaxIdleConnections, ConnectionMaxLifetime: databaseConnectionMaxLifetime, ConnectionMaxIdleTime: databaseConnectionMaxIdleTime, StartupTimeout: databaseStartupTimeout},
-		HTTP:     HTTPConfig{ServerConfig: ServerConfig{Addr: envString("ADDR", defaultHTTPAddr), ReadHeaderTimeout: httpReadHeaderTimeout, ReadTimeout: httpReadTimeout, WriteTimeout: httpWriteTimeout, IdleTimeout: httpIdleTimeout}, MaxRequestBodyBytes: httpMaxRequestBodyBytes, RateLimit: httpapi.RateLimitConfig{ReadRequestsPerSecond: readRateLimitRequestsPerSecond, ReadBurst: readRateLimitBurst, WriteRequestsPerSecond: writeRateLimitRequestsPerSecond, WriteBurst: writeRateLimitBurst}, PaymentCommandTimeout: paymentCommandTimeout, PaymentReadTimeout: paymentReadTimeout, ReadinessTimeout: readinessTimeout},
-		Metrics:  MetricsConfig{ServerConfig: ServerConfig{Addr: envString("METRICS_ADDR", defaultMetricsAddr), ReadHeaderTimeout: metricsReadHeaderTimeout, ReadTimeout: metricsReadTimeout, WriteTimeout: metricsWriteTimeout, IdleTimeout: metricsIdleTimeout}},
-		Payment:  PaymentConfig{FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter},
-		Auth:     AuthConfig{HMACKey: serviceCredentialHMACKey, Credentials: serviceCredentials},
-		MockBank: MockBankConfig{BaseURL: os.Getenv("MOCK_BANK_BASE_URL"), Timeout: mockBankTimeout, InitialAttemptTimeout: mockBankInitialAttemptTimeout, RetryDelay: mockBankRetryDelay, RetryAttemptTimeout: mockBankRetryAttemptTimeout, ConnectTimeout: mockBankConnectTimeout, TLSHandshakeTimeout: mockBankTLSHandshakeTimeout, ResponseHeaderTimeout: mockBankResponseHeaderTimeout, IdleConnectionTimeout: mockBankIdleConnectionTimeout},
+		LogLevel: envString("LOG_LEVEL", defaultLogLevel), ShutdownTimeout: shutdownTimeout, IdempotencyReplayCleanupInterval: idempotencyReplayCleanupInterval,
+		DatabaseURL: os.Getenv("DATABASE_URL"), DatabaseMaxOpenConnections: databaseMaxOpenConnections, DatabaseMaxIdleConnections: databaseMaxIdleConnections, DatabaseConnectionMaxLifetime: databaseConnectionMaxLifetime, DatabaseConnectionMaxIdleTime: databaseConnectionMaxIdleTime, DatabaseStartupTimeout: databaseStartupTimeout,
+		HTTPAddr: envString("ADDR", defaultHTTPAddr), HTTPReadHeaderTimeout: httpReadHeaderTimeout, HTTPReadTimeout: httpReadTimeout, HTTPWriteTimeout: httpWriteTimeout, HTTPIdleTimeout: httpIdleTimeout, HTTPMaxRequestBodyBytes: httpMaxRequestBodyBytes, RateLimitReadRequestsPerSecond: readRateLimitRequestsPerSecond, RateLimitReadBurst: readRateLimitBurst, RateLimitWriteRequestsPerSecond: writeRateLimitRequestsPerSecond, RateLimitWriteBurst: writeRateLimitBurst, PaymentCommandTimeout: paymentCommandTimeout, PaymentReadTimeout: paymentReadTimeout, ReadinessTimeout: readinessTimeout,
+		MetricsAddr: envString("METRICS_ADDR", defaultMetricsAddr), MetricsReadHeaderTimeout: metricsReadHeaderTimeout, MetricsReadTimeout: metricsReadTimeout, MetricsWriteTimeout: metricsWriteTimeout, MetricsIdleTimeout: metricsIdleTimeout,
+		FingerprintSecret: os.Getenv("FINGERPRINT_SECRET"), IdempotencyClaimStuckAfter: idempotencyClaimStuckAfter, ServiceCredentialHMACKey: serviceCredentialHMACKey, ServiceCredentials: serviceCredentials,
+		MockBankBaseURL: os.Getenv("MOCK_BANK_BASE_URL"), MockBankTimeout: mockBankTimeout, MockBankInitialAttemptTimeout: mockBankInitialAttemptTimeout, MockBankRetryDelay: mockBankRetryDelay, MockBankRetryAttemptTimeout: mockBankRetryAttemptTimeout, MockBankConnectTimeout: mockBankConnectTimeout, MockBankTLSHandshakeTimeout: mockBankTLSHandshakeTimeout, MockBankResponseHeaderTimeout: mockBankResponseHeaderTimeout, MockBankIdleConnectionTimeout: mockBankIdleConnectionTimeout,
 	}
 	return cfg, nil
 }
 
 func (cfg config) validate() error {
-	if err := validateListenerAddr("ADDR", cfg.HTTP.Addr); err != nil {
+	if err := validateListenerAddr("ADDR", cfg.HTTPAddr); err != nil {
 		return err
 	}
-	if err := validateListenerAddr("METRICS_ADDR", cfg.Metrics.Addr); err != nil {
+	if err := validateListenerAddr("METRICS_ADDR", cfg.MetricsAddr); err != nil {
 		return err
 	}
-	if cfg.HTTP.Addr == cfg.Metrics.Addr {
+	if cfg.HTTPAddr == cfg.MetricsAddr {
 		return fmt.Errorf("METRICS_ADDR must differ from ADDR")
 	}
-	if cfg.Database.URL == "" {
+	if cfg.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
-	if cfg.Database.MaxOpenConnections <= 0 {
+	if cfg.DatabaseMaxOpenConnections <= 0 {
 		return fmt.Errorf("DATABASE_MAX_OPEN_CONNECTIONS must be a positive integer")
 	}
-	if cfg.Database.MaxIdleConnections < 0 {
+	if cfg.DatabaseMaxIdleConnections < 0 {
 		return fmt.Errorf("DATABASE_MAX_IDLE_CONNECTIONS must be a non-negative integer")
 	}
-	if cfg.Database.MaxIdleConnections > cfg.Database.MaxOpenConnections {
+	if cfg.DatabaseMaxIdleConnections > cfg.DatabaseMaxOpenConnections {
 		return fmt.Errorf("DATABASE_MAX_IDLE_CONNECTIONS must be less than or equal to DATABASE_MAX_OPEN_CONNECTIONS")
 	}
-	if cfg.Database.ConnectionMaxLifetime <= 0 {
+	if cfg.DatabaseConnectionMaxLifetime <= 0 {
 		return fmt.Errorf("DATABASE_CONNECTION_MAX_LIFETIME must be a positive duration")
 	}
-	if cfg.MockBank.BaseURL == "" {
+	if cfg.MockBankBaseURL == "" {
 		return fmt.Errorf("MOCK_BANK_BASE_URL is required")
 	}
-	if cfg.Payment.FingerprintSecret == "" {
+	if cfg.FingerprintSecret == "" {
 		return fmt.Errorf("FINGERPRINT_SECRET is required")
 	}
-	if cfg.Payment.IdempotencyClaimStuckAfter <= 0 {
+	if cfg.IdempotencyClaimStuckAfter <= 0 {
 		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must be a positive duration")
 	}
-	if cfg.Runtime.ShutdownTimeout <= 0 {
+	if cfg.ShutdownTimeout <= 0 {
 		return fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive duration")
 	}
-	if cfg.Runtime.IdempotencyReplayCleanupInterval <= 0 {
+	if cfg.IdempotencyReplayCleanupInterval <= 0 {
 		return fmt.Errorf("IDEMPOTENCY_REPLAY_CLEANUP_INTERVAL must be a positive duration")
 	}
-	if cfg.Database.ConnectionMaxIdleTime <= 0 {
+	if cfg.DatabaseConnectionMaxIdleTime <= 0 {
 		return fmt.Errorf("DATABASE_CONNECTION_MAX_IDLE_TIME must be a positive duration")
 	}
-	if cfg.Database.StartupTimeout <= 0 {
+	if cfg.DatabaseStartupTimeout <= 0 {
 		return fmt.Errorf("DATABASE_STARTUP_TIMEOUT must be a positive duration")
 	}
-	if cfg.Runtime.LogLevel != "debug" && cfg.Runtime.LogLevel != "info" && cfg.Runtime.LogLevel != "warn" && cfg.Runtime.LogLevel != "error" {
+	if cfg.LogLevel != "debug" && cfg.LogLevel != "info" && cfg.LogLevel != "warn" && cfg.LogLevel != "error" {
 		return fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, or error")
 	}
-	if cfg.HTTP.PaymentCommandTimeout <= 0 {
+	if cfg.PaymentCommandTimeout <= 0 {
 		return fmt.Errorf("PAYMENT_COMMAND_TIMEOUT must be a positive duration")
 	}
-	if cfg.Payment.IdempotencyClaimStuckAfter <= cfg.HTTP.PaymentCommandTimeout {
+	if cfg.IdempotencyClaimStuckAfter <= cfg.PaymentCommandTimeout {
 		return fmt.Errorf("IDEMPOTENCY_CLAIM_STUCK_AFTER must exceed PAYMENT_COMMAND_TIMEOUT")
 	}
-	if cfg.HTTP.PaymentReadTimeout <= 0 {
+	if cfg.PaymentReadTimeout <= 0 {
 		return fmt.Errorf("PAYMENT_READ_TIMEOUT must be a positive duration")
 	}
-	if cfg.HTTP.ReadinessTimeout <= 0 {
+	if cfg.ReadinessTimeout <= 0 {
 		return fmt.Errorf("READINESS_CHECK_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.InitialAttemptTimeout <= 0 {
+	if cfg.MockBankInitialAttemptTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.Timeout <= 0 {
+	if cfg.MockBankTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.Timeout >= cfg.HTTP.PaymentCommandTimeout {
+	if cfg.MockBankTimeout >= cfg.PaymentCommandTimeout {
 		return fmt.Errorf("MOCK_BANK_TIMEOUT must be shorter than PAYMENT_COMMAND_TIMEOUT")
 	}
-	if cfg.MockBank.RetryDelay <= 0 {
+	if cfg.MockBankRetryDelay <= 0 {
 		return fmt.Errorf("MOCK_BANK_RETRY_DELAY must be a positive duration")
 	}
-	if cfg.MockBank.RetryAttemptTimeout <= 0 {
+	if cfg.MockBankRetryAttemptTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_RETRY_ATTEMPT_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.InitialAttemptTimeout+cfg.MockBank.RetryDelay+cfg.MockBank.RetryAttemptTimeout+paymentCommandCompletionReserve >= cfg.HTTP.PaymentCommandTimeout {
+	if cfg.MockBankInitialAttemptTimeout+cfg.MockBankRetryDelay+cfg.MockBankRetryAttemptTimeout+paymentCommandCompletionReserve >= cfg.PaymentCommandTimeout {
 		return fmt.Errorf("Mock Bank retry budget must leave time within PAYMENT_COMMAND_TIMEOUT to persist the final payment outcome")
 	}
-	if err := validateServerTimeouts("HTTP", cfg.HTTP.ServerConfig); err != nil {
+	if err := validateServerTimeouts("HTTP", cfg.HTTPReadHeaderTimeout, cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout, cfg.HTTPIdleTimeout); err != nil {
 		return err
 	}
-	if cfg.HTTP.ReadTimeout <= cfg.HTTP.PaymentCommandTimeout {
+	if cfg.HTTPReadTimeout <= cfg.PaymentCommandTimeout {
 		return fmt.Errorf("HTTP_READ_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT")
 	}
-	if cfg.HTTP.WriteTimeout <= cfg.HTTP.PaymentCommandTimeout {
+	if cfg.HTTPWriteTimeout <= cfg.PaymentCommandTimeout {
 		return fmt.Errorf("HTTP_WRITE_TIMEOUT must exceed PAYMENT_COMMAND_TIMEOUT")
 	}
-	if err := validateServerTimeouts("METRICS", cfg.Metrics.ServerConfig); err != nil {
+	if err := validateServerTimeouts("METRICS", cfg.MetricsReadHeaderTimeout, cfg.MetricsReadTimeout, cfg.MetricsWriteTimeout, cfg.MetricsIdleTimeout); err != nil {
 		return err
 	}
-	if cfg.HTTP.MaxRequestBodyBytes <= 0 {
+	if cfg.HTTPMaxRequestBodyBytes <= 0 {
 		return fmt.Errorf("HTTP_MAX_REQUEST_BODY_BYTES must be a positive integer")
 	}
-	if cfg.HTTP.RateLimit.ReadRequestsPerSecond <= 0 {
+	if cfg.RateLimitReadRequestsPerSecond <= 0 {
 		return fmt.Errorf("RATE_LIMIT_READ_REQUESTS_PER_SECOND must be a positive integer")
 	}
-	if cfg.HTTP.RateLimit.ReadBurst <= 0 {
+	if cfg.RateLimitReadBurst <= 0 {
 		return fmt.Errorf("RATE_LIMIT_READ_BURST must be a positive integer")
 	}
-	if cfg.HTTP.RateLimit.WriteRequestsPerSecond <= 0 {
+	if cfg.RateLimitWriteRequestsPerSecond <= 0 {
 		return fmt.Errorf("RATE_LIMIT_WRITE_REQUESTS_PER_SECOND must be a positive integer")
 	}
-	if cfg.HTTP.RateLimit.WriteBurst <= 0 {
+	if cfg.RateLimitWriteBurst <= 0 {
 		return fmt.Errorf("RATE_LIMIT_WRITE_BURST must be a positive integer")
 	}
-	if cfg.MockBank.ConnectTimeout <= 0 {
+	if cfg.MockBankConnectTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_CONNECT_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.TLSHandshakeTimeout <= 0 {
+	if cfg.MockBankTLSHandshakeTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_TLS_HANDSHAKE_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.ResponseHeaderTimeout <= 0 {
+	if cfg.MockBankResponseHeaderTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_RESPONSE_HEADER_TIMEOUT must be a positive duration")
 	}
-	if cfg.MockBank.IdleConnectionTimeout <= 0 {
+	if cfg.MockBankIdleConnectionTimeout <= 0 {
 		return fmt.Errorf("MOCK_BANK_IDLE_CONNECTION_TIMEOUT must be a positive duration")
 	}
 
 	return nil
 }
 
-func validateServerTimeouts(prefix string, cfg ServerConfig) error {
-	if cfg.ReadHeaderTimeout <= 0 {
+func validateServerTimeouts(prefix string, readHeaderTimeout, readTimeout, writeTimeout, idleTimeout time.Duration) error {
+	if readHeaderTimeout <= 0 {
 		return fmt.Errorf("%s_READ_HEADER_TIMEOUT must be a positive duration", prefix)
 	}
-	if cfg.ReadTimeout <= 0 {
+	if readTimeout <= 0 {
 		return fmt.Errorf("%s_READ_TIMEOUT must be a positive duration", prefix)
 	}
-	if cfg.WriteTimeout <= 0 {
+	if writeTimeout <= 0 {
 		return fmt.Errorf("%s_WRITE_TIMEOUT must be a positive duration", prefix)
 	}
-	if cfg.IdleTimeout <= 0 {
+	if idleTimeout <= 0 {
 		return fmt.Errorf("%s_IDLE_TIMEOUT must be a positive duration", prefix)
 	}
 	return nil

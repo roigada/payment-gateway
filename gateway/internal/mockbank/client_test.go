@@ -37,7 +37,7 @@ func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
@@ -75,7 +75,7 @@ func TestAuthorizePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), app.BankAuthorizationRequest{
@@ -100,7 +100,7 @@ func TestAuthorizePaymentMapsInsufficientFundsToGatewayDeclineReason(t *testing.
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -136,7 +136,7 @@ func TestAuthorizePaymentMapsBankValidationFailuresToInvalidInput(t *testing.T) 
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -154,7 +154,7 @@ func TestAuthorizePaymentMapsExpiredCardToGatewayDeclineReason(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -188,7 +188,7 @@ func TestAuthorizePaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 
 			_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -208,7 +208,7 @@ func TestAuthorizePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -314,7 +314,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 			defer server.Close()
 
 			metrics := &recordingMockBankMetrics{}
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryConfig())
 			require.NoError(t, err)
 
 			_ = tt.call(client)
@@ -333,7 +333,7 @@ func TestClientRecordsMockBankRequestMetrics(t *testing.T) {
 
 func TestClientRecordsTimeoutMetric(t *testing.T) {
 	metrics := &recordingMockBankMetrics{}
-	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, metrics, retryClientConfig())
+	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, metrics, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -346,7 +346,7 @@ func TestClientRecordsTimeoutMetric(t *testing.T) {
 }
 
 func TestAuthorizePaymentMapsTransportTimeoutToTimeoutError(t *testing.T) {
-	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: timeoutRoundTripper{}}, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -371,7 +371,7 @@ func TestAuthorizePaymentRetriesTransientFailureWithSameOperationKey(t *testing.
 	defer server.Close()
 
 	metrics := &recordingMockBankMetrics{}
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -386,7 +386,7 @@ func TestAuthorizePaymentRetriesTransientFailureWithSameOperationKey(t *testing.
 func TestAuthorizePaymentRetriesTimeoutAndPreservesExhaustionError(t *testing.T) {
 	transport := &timeoutThenTimeoutRoundTripper{}
 	metrics := &recordingMockBankMetrics{}
-	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: transport}, metrics, retryClientConfig())
+	client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: transport}, metrics, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -405,7 +405,7 @@ func TestAuthorizePaymentRetriesTimeoutThenSucceeds(t *testing.T) {
 	defer server.Close()
 
 	transport := &timeoutThenSuccessRoundTripper{next: http.DefaultTransport}
-	client, err := testClientWithHTTPClient(server.URL, &http.Client{Transport: transport}, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, &http.Client{Transport: transport}, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -422,7 +422,7 @@ func TestAuthorizePaymentDoesNotRetryDefinitiveOutcome(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.AuthorizePayment(context.Background(), validAuthorizationRequest())
@@ -442,7 +442,7 @@ func TestAuthorizePaymentCancellationStopsRetryDelay(t *testing.T) {
 	defer server.Close()
 
 	metrics := &recordingMockBankMetrics{}
-	config := retryClientConfig()
+	config := retryConfig()
 	config.RetryDelay = time.Second
 	client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, config)
 	require.NoError(t, err)
@@ -480,7 +480,7 @@ func TestAuthorizePaymentCommandDeadlineStopsRetryDelay(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := retryClientConfig()
+	config := retryConfig()
 	config.RetryDelay = time.Second
 	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, config)
 	require.NoError(t, err)
@@ -536,7 +536,7 @@ func TestPaymentOperationsRetryTransientFailureWithSameOperationKey(t *testing.T
 			defer server.Close()
 
 			metrics := &recordingMockBankMetrics{}
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, retryConfig())
 			require.NoError(t, err)
 
 			require.NoError(t, tt.call(client))
@@ -572,7 +572,7 @@ func TestPaymentOperationsRetryExhaustionPreservesTransientErrorAndMetrics(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			transport := &timeoutThenTimeoutRoundTripper{}
 			metrics := &recordingMockBankMetrics{}
-			client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: transport}, metrics, retryClientConfig())
+			client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: transport}, metrics, retryConfig())
 			require.NoError(t, err)
 
 			err = tt.call(client)
@@ -616,7 +616,7 @@ func TestPaymentOperationsRetryTimeoutThenSucceed(t *testing.T) {
 
 			transport := &timeoutThenSuccessRoundTripper{next: http.DefaultTransport}
 			metrics := &recordingMockBankMetrics{}
-			client, err := testClientWithHTTPClient(server.URL, &http.Client{Transport: transport}, metrics, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, &http.Client{Transport: transport}, metrics, retryConfig())
 			require.NoError(t, err)
 
 			require.NoError(t, tt.call(client))
@@ -677,7 +677,7 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 			err = tt.call(client)
 			require.Error(t, err)
@@ -717,7 +717,7 @@ func TestPaymentOperationsCancellationStopsRetryDelay(t *testing.T) {
 			}))
 			defer server.Close()
 
-			config := retryClientConfig()
+			config := retryConfig()
 			config.RetryDelay = time.Second
 			metrics := &recordingMockBankMetrics{}
 			client, err := testClientWithHTTPClient(server.URL, server.Client(), metrics, config)
@@ -776,7 +776,7 @@ func TestMockBankTimeoutDoesNotExtendParentPaymentCommandDeadline(t *testing.T) 
 			require.True(t, ok)
 
 			transport := &deadlineRecordingRoundTripper{done: make(chan struct{})}
-			config := retryClientConfig()
+			config := retryConfig()
 			client, err := testClientWithHTTPClient("http://mockbank.example", &http.Client{Transport: transport}, noopMockBankMetrics{}, config)
 			require.NoError(t, err)
 
@@ -801,7 +801,7 @@ func TestMockBankTimeoutReturnsBankTimeoutWhilePaymentCommandRemainsLive(t *test
 	}))
 	defer server.Close()
 
-	config := retryClientConfig()
+	config := retryConfig()
 	config.Timeout = time.Millisecond
 	config.RetryAttemptTimeout = time.Millisecond
 	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, config)
@@ -835,7 +835,7 @@ func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.CapturePayment(context.Background(), validCaptureRequest())
@@ -857,7 +857,7 @@ func TestCapturePaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -886,7 +886,7 @@ func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 
 			_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -904,7 +904,7 @@ func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -922,7 +922,7 @@ func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
@@ -951,7 +951,7 @@ func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.VoidPayment(context.Background(), validVoidRequest())
@@ -972,7 +972,7 @@ func TestVoidPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -1009,7 +1009,7 @@ func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 
 			_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -1027,7 +1027,7 @@ func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -1045,7 +1045,7 @@ func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.VoidPayment(context.Background(), validVoidRequest())
@@ -1076,7 +1076,7 @@ func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	result, err := client.RefundPayment(context.Background(), validRefundRequest())
@@ -1098,7 +1098,7 @@ func TestRefundPaymentRejectsMalformedSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
@@ -1141,7 +1141,7 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryClientConfig())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
 			require.NoError(t, err)
 
 			_, err = client.RefundPayment(context.Background(), validRefundRequest())
@@ -1161,7 +1161,7 @@ func TestRefundPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
 
 	httpClient := server.Client()
 	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryClientConfig())
+	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
 	require.NoError(t, err)
 
 	_, err = client.RefundPayment(context.Background(), validRefundRequest())
@@ -1258,7 +1258,7 @@ type recordedMockBankRetry struct {
 
 // testClientWithHTTPClient keeps transport control local to adapter tests while
 // exercising the production constructor for configuration and URL validation.
-func testClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics metrics, config ClientConfig) (*Client, error) {
+func testClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics metrics, config Config) (*Client, error) {
 	config.BaseURL = baseURL
 	client, err := NewClient(metrics, config)
 	if err != nil {
@@ -1270,8 +1270,8 @@ func testClientWithHTTPClient(baseURL string, httpClient *http.Client, metrics m
 	return client, nil
 }
 
-func retryClientConfig() ClientConfig {
-	return ClientConfig{
+func retryConfig() Config {
+	return Config{
 		Timeout:               time.Second,
 		InitialAttemptTimeout: time.Second,
 		RetryDelay:            time.Millisecond,

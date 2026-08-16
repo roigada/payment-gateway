@@ -20,9 +20,9 @@ import (
 
 func TestPrivateMetricsHandlerIsExcludedFromPaymentRateLimits(t *testing.T) {
 	readiness := newShutdownReadiness(readinessCheckerFunc(func(context.Context) error { return nil }))
-	options := testRuntimeHandlerOptions(t)
-	options.RateLimit = httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}
-	publicHandler := newRuntimeHandlerWithOptions(t, readiness, options)
+	config := testRuntimeHandlerConfig(t)
+	config.RateLimit = httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}
+	publicHandler := newRuntimeHandlerWithConfig(t, readiness, config)
 
 	for requestNumber := range 2 {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
@@ -64,7 +64,7 @@ func TestPublicAndMetricsServersExposeSeparateEndpoints(t *testing.T) {
 }
 
 func TestNewHTTPServerConfiguresAddress(t *testing.T) {
-	server := newHTTPServer(http.NotFoundHandler(), ServerConfig{Addr: "127.0.0.1:8080"})
+	server := newHTTPServer(http.NotFoundHandler(), "127.0.0.1:8080", time.Second, time.Second, time.Second, time.Second)
 
 	assert.Equal(t, "127.0.0.1:8080", server.Addr)
 }
@@ -193,15 +193,15 @@ func (runtimePaymentApplicationFake) SearchPayments(context.Context, app.SearchP
 func newRuntimeHandler(t *testing.T, readiness *shutdownReadiness) *httpapi.Handler {
 	t.Helper()
 
-	return newRuntimeHandlerWithOptions(t, readiness, testRuntimeHandlerOptions(t))
+	return newRuntimeHandlerWithConfig(t, readiness, testRuntimeHandlerConfig(t))
 }
 
-func newRuntimeHandlerWithOptions(t *testing.T, readiness *shutdownReadiness, options httpapi.HandlerOptions) *httpapi.Handler {
+func newRuntimeHandlerWithConfig(t *testing.T, readiness *shutdownReadiness, config httpapi.HandlerConfig) *httpapi.Handler {
 	t.Helper()
 	cfg := validConfig()
-	authenticator, err := serviceauth.NewAuthenticator(cfg.Auth.HMACKey, cfg.Auth.Credentials)
+	authenticator, err := serviceauth.NewAuthenticator(cfg.ServiceCredentialHMACKey, cfg.ServiceCredentials)
 	require.NoError(t, err)
-	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}, authenticator, app.SystemClock{}, options)
+	handler, err := httpapi.NewHandler(runtimePaymentApplicationFake{}, readiness, discardRuntimeLogger(), runtimeHTTPAPIMetricsFake{}, authenticator, app.SystemClock{}, config)
 	require.NoError(t, err)
 	return handler
 }
@@ -210,15 +210,15 @@ func discardRuntimeLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func testRuntimeHandlerOptions(t *testing.T) httpapi.HandlerOptions {
+func testRuntimeHandlerConfig(t *testing.T) httpapi.HandlerConfig {
 	t.Helper()
 	cfg := validConfig()
-	return httpapi.HandlerOptions{
-		PaymentCommandTimeout: cfg.HTTP.PaymentCommandTimeout,
-		PaymentReadTimeout:    cfg.HTTP.PaymentReadTimeout,
-		ReadinessTimeout:      cfg.HTTP.ReadinessTimeout,
-		MaxRequestBodyBytes:   cfg.HTTP.MaxRequestBodyBytes,
-		RateLimit:             cfg.HTTP.RateLimit,
+	return httpapi.HandlerConfig{
+		PaymentCommandTimeout: cfg.PaymentCommandTimeout,
+		PaymentReadTimeout:    cfg.PaymentReadTimeout,
+		ReadinessTimeout:      cfg.ReadinessTimeout,
+		MaxRequestBodyBytes:   cfg.HTTPMaxRequestBodyBytes,
+		RateLimit:             cfg.rateLimitConfig(),
 	}
 }
 

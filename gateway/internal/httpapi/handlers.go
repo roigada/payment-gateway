@@ -48,7 +48,7 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.config.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return
@@ -107,7 +107,7 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.config.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return
@@ -260,7 +260,7 @@ func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentReadTimeout)
 	defer cancel()
 	payment, err := s.payments.GetPayment(ctx, query)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -291,7 +291,7 @@ func (s *Handler) searchPayments(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentReadTimeout)
 	defer cancel()
 	payments, err := s.payments.SearchPayments(ctx, searchQuery)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

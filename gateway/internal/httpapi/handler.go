@@ -21,10 +21,10 @@ type Handler struct {
 	readiness     readinessChecker
 	authenticator *serviceauth.Authenticator
 	rateLimiter   *RateLimiter
-	options       HandlerOptions
+	config        HandlerConfig
 }
 
-type HandlerOptions struct {
+type HandlerConfig struct {
 	PaymentCommandTimeout time.Duration
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
@@ -51,7 +51,7 @@ type httpMetrics interface {
 	RecordRateLimitRejection(routeClass string)
 }
 
-func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, authenticator *serviceauth.Authenticator, clock Clock, options HandlerOptions) (*Handler, error) {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, authenticator *serviceauth.Authenticator, clock Clock, config HandlerConfig) (*Handler, error) {
 	if payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
@@ -67,7 +67,10 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 	if authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	rateLimiter, err := NewRateLimiter(clock, options.RateLimit)
+	if err := config.validate(); err != nil {
+		return nil, err
+	}
+	rateLimiter, err := NewRateLimiter(clock, config.RateLimit)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi handler: %w", err)
 	}
@@ -79,10 +82,26 @@ func NewHandler(payments paymentApplication, readiness readinessChecker, logger 
 		readiness:     readiness,
 		authenticator: authenticator,
 		rateLimiter:   rateLimiter,
-		options:       options,
+		config:        config,
 	}
 	handler.handler = handler.routes()
 	return handler, nil
+}
+
+func (config HandlerConfig) validate() error {
+	if config.PaymentCommandTimeout <= 0 {
+		return errors.New("httpapi handler payment command timeout must be positive")
+	}
+	if config.PaymentReadTimeout <= 0 {
+		return errors.New("httpapi handler payment read timeout must be positive")
+	}
+	if config.ReadinessTimeout <= 0 {
+		return errors.New("httpapi handler readiness timeout must be positive")
+	}
+	if config.MaxRequestBodyBytes <= 0 {
+		return errors.New("httpapi handler max request body bytes must be positive")
+	}
+	return nil
 }
 
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +142,7 @@ func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.ReadinessTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.ReadinessTimeout)
 	defer cancel()
 	if err := s.readiness.CheckReady(ctx); err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
@@ -134,6 +153,6 @@ func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) commandRequest(r *http.Request) (*http.Request, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentCommandTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentCommandTimeout)
 	return r.WithContext(ctx), cancel
 }

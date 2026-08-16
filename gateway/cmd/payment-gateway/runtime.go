@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
 	"github.com/roigada/payment-gateway/internal/httpapi"
@@ -21,10 +22,10 @@ import (
 )
 
 func run(cfg config, logger *slog.Logger) error {
-	dbCtx, cancel := context.WithTimeout(context.Background(), cfg.Database.StartupTimeout)
+	dbCtx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseStartupTimeout)
 	defer cancel()
 
-	db, err := postgres.Open(dbCtx, cfg.Database.postgresOptions())
+	db, err := postgres.Open(dbCtx, cfg.postgresConfig())
 	if err != nil {
 		return err
 	}
@@ -37,7 +38,7 @@ func run(cfg config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	mockBank, err := mockbank.NewClient(metrics.MockBank, cfg.MockBank.clientConfig())
+	mockBank, err := mockbank.NewClient(metrics.MockBank, cfg.mockBankConfig())
 	if err != nil {
 		return err
 	}
@@ -48,19 +49,19 @@ func run(cfg config, logger *slog.Logger) error {
 		mockBank,
 		metrics.PaymentOperations,
 		paymentClock,
-		cfg.Payment.FingerprintSecret,
-		cfg.Payment.IdempotencyClaimStuckAfter,
+		cfg.FingerprintSecret,
+		cfg.IdempotencyClaimStuckAfter,
 	)
 
-	authenticator, err := serviceauth.NewAuthenticator(cfg.Auth.HMACKey, cfg.Auth.Credentials)
+	authenticator, err := serviceauth.NewAuthenticator(cfg.ServiceCredentialHMACKey, cfg.ServiceCredentials)
 	if err != nil {
 		return err
 	}
-	handler, err := httpapi.NewHandler(paymentService, readiness, logger, metrics.HTTP, authenticator, app.SystemClock{}, cfg.HTTP.handlerOptions())
+	handler, err := httpapi.NewHandler(paymentService, readiness, logger, metrics.HTTP, authenticator, app.SystemClock{}, cfg.handlerConfig())
 	if err != nil {
 		return err
 	}
-	cleanupRunner := idempotencycleanup.New(paymentService, metrics.IdempotencyReplayCleanup, logger, cfg.Runtime.IdempotencyReplayCleanupInterval)
+	cleanupRunner := idempotencycleanup.New(paymentService, metrics.IdempotencyReplayCleanup, logger, cfg.IdempotencyReplayCleanupInterval)
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -72,8 +73,8 @@ func run(cfg config, logger *slog.Logger) error {
 		<-cleanupDone
 	}()
 
-	publicServer := newHTTPServer(handler, cfg.HTTP.ServerConfig)
-	metricsServer := newHTTPServer(metrics.Handler, cfg.Metrics.ServerConfig)
+	publicServer := cfg.publicServer(handler)
+	metricsServer := cfg.metricsServer(metrics.Handler)
 	serveResults := make(chan error, 2)
 	go listenAndServe(publicServer, serveResults)
 	go listenAndServe(metricsServer, serveResults)
@@ -82,11 +83,11 @@ func run(cfg config, logger *slog.Logger) error {
 	signal.Notify(shutdownSignals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(shutdownSignals)
 
-	logger.Info("payment-gateway starting", "addr", cfg.HTTP.Addr, "metrics_addr", cfg.Metrics.Addr)
+	logger.Info("payment-gateway starting", "addr", cfg.HTTPAddr, "metrics_addr", cfg.MetricsAddr)
 	select {
 	case err := <-serveResults:
 		readiness.beginDrain()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		shutdownErr := shutdownServers(shutdownCtx, publicServer, metricsServer)
 		cancel()
 		if shutdownErr != nil {
@@ -98,9 +99,9 @@ func run(cfg config, logger *slog.Logger) error {
 	}
 
 	readiness.beginDrain()
-	logger.Info("payment-gateway shutdown drain started", "timeout", cfg.Runtime.ShutdownTimeout)
+	logger.Info("payment-gateway shutdown drain started", "timeout", cfg.ShutdownTimeout)
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Runtime.ShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- shutdownServers(ctx, publicServer, metricsServer) }()
 
@@ -125,10 +126,10 @@ func run(cfg config, logger *slog.Logger) error {
 	return <-serveResults
 }
 
-func newHTTPServer(handler http.Handler, cfg ServerConfig) *http.Server {
+func newHTTPServer(handler http.Handler, addr string, readHeaderTimeout, readTimeout, writeTimeout, idleTimeout time.Duration) *http.Server {
 	return &http.Server{
-		Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
+		Addr: addr, Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
+		WriteTimeout: writeTimeout, IdleTimeout: idleTimeout,
 	}
 }
 

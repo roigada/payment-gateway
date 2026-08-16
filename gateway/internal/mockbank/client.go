@@ -44,12 +44,12 @@ type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	metrics    metrics
-	config     ClientConfig
+	config     Config
 }
 
-// ClientConfig contains the Mock Bank endpoint and call budgets. All budgets
+// Config contains the Mock Bank endpoint and call budgets. All budgets
 // must be positive.
-type ClientConfig struct {
+type Config struct {
 	BaseURL               string
 	Timeout               time.Duration
 	InitialAttemptTimeout time.Duration
@@ -63,7 +63,7 @@ type ClientConfig struct {
 
 // NewClient constructs a Mock Bank client with its HTTP transport configured
 // from the supplied call budgets.
-func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
+func NewClient(metrics metrics, config Config) (*Client, error) {
 	if metrics == nil {
 		return nil, fmt.Errorf("mock bank metrics are required")
 	}
@@ -86,7 +86,7 @@ func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
 	return &Client{baseURL: parsed, httpClient: &http.Client{Transport: transport}, metrics: metrics, config: config}, nil
 }
 
-func (config ClientConfig) validate() error {
+func (config Config) validate() error {
 	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
 	if err != nil {
 		return err

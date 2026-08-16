@@ -17,7 +17,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger = newLogger(cfg.Runtime.LogLevel)
+	logger = newLogger(cfg.LogLevel)
 	if err := run(cfg, logger); err != nil {
 		logger.Error("payment-gateway stopped", "error", err)
 		os.Exit(1)
