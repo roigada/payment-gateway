@@ -64,6 +64,9 @@ type ClientConfig struct {
 // NewClient constructs a Mock Bank client with its HTTP transport configured
 // from the supplied call budgets.
 func NewClient(metrics metrics, config ClientConfig) (*Client, error) {
+	if metrics == nil {
+		return nil, fmt.Errorf("mock bank metrics are required")
+	}
 	transport := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: config.ConnectTimeout}).DialContext,
 		TLSHandshakeTimeout:   config.TLSHandshakeTimeout,
@@ -97,7 +100,7 @@ func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAu
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
 	defer func() {
-		c.recordRequest(mockBankOperationAuthorize, result, time.Since(startedAt))
+		c.metrics.RecordMockBankRequest(mockBankOperationAuthorize, result, time.Since(startedAt))
 	}()
 
 	var body bytes.Buffer
@@ -180,7 +183,7 @@ func (c *Client) capturePaymentAttempt(ctx context.Context, request app.BankCapt
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
 	defer func() {
-		c.recordRequest(mockBankOperationCapture, result, time.Since(startedAt))
+		c.metrics.RecordMockBankRequest(mockBankOperationCapture, result, time.Since(startedAt))
 	}()
 
 	var body bytes.Buffer
@@ -256,7 +259,7 @@ func (c *Client) voidPaymentAttempt(ctx context.Context, request app.BankVoidReq
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
 	defer func() {
-		c.recordRequest(mockBankOperationVoid, result, time.Since(startedAt))
+		c.metrics.RecordMockBankRequest(mockBankOperationVoid, result, time.Since(startedAt))
 	}()
 
 	var body bytes.Buffer
@@ -331,7 +334,7 @@ func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefun
 	startedAt := time.Now()
 	result := mockBankRequestResultInternal
 	defer func() {
-		c.recordRequest(mockBankOperationRefund, result, time.Since(startedAt))
+		c.metrics.RecordMockBankRequest(mockBankOperationRefund, result, time.Since(startedAt))
 	}()
 
 	var body bytes.Buffer
@@ -398,27 +401,13 @@ func (c *Client) initialAttemptTimeout() time.Duration {
 	return c.config.Timeout
 }
 
-func (c *Client) recordRequest(operation string, result string, duration time.Duration) {
-	if c.metrics == nil {
-		return
-	}
-	c.metrics.RecordMockBankRequest(operation, result, duration)
-}
-
-func (c *Client) recordRetry(operation string, result string) {
-	if c.metrics == nil {
-		return
-	}
-	c.metrics.RecordMockBankRetry(operation, result)
-}
-
 func retryTransient[T any](c *Client, ctx context.Context, operation string, attempt func(context.Context, time.Duration) (T, error)) (T, error) {
 	result, err := attempt(ctx, c.initialAttemptTimeout())
 	if err == nil || !isRetryablePaymentError(err) || c.config.RetryDelay <= 0 || c.config.RetryAttemptTimeout <= 0 {
 		return result, err
 	}
 
-	c.recordRetry(operation, mockBankRetryResultAttempted)
+	c.metrics.RecordMockBankRetry(operation, mockBankRetryResultAttempted)
 	if err := waitForRetry(ctx, c.config.RetryDelay); err != nil {
 		var zero T
 		return zero, retryWaitError(err)
@@ -426,11 +415,11 @@ func retryTransient[T any](c *Client, ctx context.Context, operation string, att
 
 	result, err = attempt(ctx, c.config.RetryAttemptTimeout)
 	if err != nil {
-		c.recordRetry(operation, mockBankRetryResultExhausted)
+		c.metrics.RecordMockBankRetry(operation, mockBankRetryResultExhausted)
 		var zero T
 		return zero, err
 	}
-	c.recordRetry(operation, mockBankRetryResultSucceeded)
+	c.metrics.RecordMockBankRetry(operation, mockBankRetryResultSucceeded)
 	return result, nil
 }
 

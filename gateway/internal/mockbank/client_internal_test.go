@@ -15,7 +15,7 @@ import (
 )
 
 func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
-	client, err := NewClient(nil, ClientConfig{
+	client, err := NewClient(noopMockBankMetrics{}, ClientConfig{
 		BaseURL:               "https://mockbank.example",
 		TLSHandshakeTimeout:   2,
 		ResponseHeaderTimeout: 3,
@@ -31,7 +31,7 @@ func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
 }
 
 func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
-	client, err := NewClient(nil, ClientConfig{BaseURL: "https://mockbank.example"})
+	client, err := NewClient(noopMockBankMetrics{}, ClientConfig{BaseURL: "https://mockbank.example"})
 	require.NoError(t, err)
 
 	request, err := client.newHTTPRequest(context.Background(), "/api/v1/authorizations", &bytes.Buffer{}, "bok_123")
@@ -41,6 +41,13 @@ func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
 	assert.Equal(t, "https://mockbank.example/api/v1/authorizations", request.URL.String())
 	assert.Equal(t, "application/json", request.Header.Get("Content-Type"))
 	assert.Equal(t, "bok_123", request.Header.Get("Idempotency-Key"))
+}
+
+func TestNewClientRejectsNilMetrics(t *testing.T) {
+	client, err := NewClient(nil, ClientConfig{BaseURL: "https://mockbank.example"})
+
+	require.Nil(t, client)
+	require.EqualError(t, err, "mock bank metrics are required")
 }
 
 func TestDecodeBadRequestAuthorizationOutcomeReturnsGatewayReason(t *testing.T) {
