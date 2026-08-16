@@ -646,6 +646,10 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
 			return err
 		}},
+		{name: "capture missing bank capture", body: `{"error":"capture_not_found","message":"capture not found"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
+			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
+			return err
+		}},
 		{name: "void bank state conflict", body: `{"error":"authorization_not_found","message":"authorization not found"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
 			_, err := client.VoidPayment(context.Background(), validVoidRequest())
 			return err
@@ -655,6 +659,10 @@ func TestPaymentOperationsDoNotRetryDefinitiveOutcomes(t *testing.T) {
 			return err
 		}},
 		{name: "void bank state conflict", body: `{"error":"already_voided","message":"already voided"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
+			_, err := client.VoidPayment(context.Background(), validVoidRequest())
+			return err
+		}},
+		{name: "void missing bank capture", body: `{"error":"capture_not_found","message":"capture not found"}`, kind: app.PaymentErrorBankStateConflict, call: func(client *Client) error {
 			_, err := client.VoidPayment(context.Background(), validVoidRequest())
 			return err
 		}},

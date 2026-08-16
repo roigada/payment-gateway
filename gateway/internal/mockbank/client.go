@@ -172,18 +172,30 @@ func (c *Client) authorizePaymentAttempt(ctx context.Context, request app.BankAu
 		result = mockBankRequestResultSuccess
 		return app.BankAuthorizationResult{BankAuthorizationID: payload.AuthorizationID, AuthorizationExpiresAt: payload.ExpiresAt}, nil
 	case http.StatusBadRequest:
-		reason, declineReason, err := decodeBadRequestAuthorizationOutcome(response)
+		code, err := decodeBadRequestCode(response)
 		if err != nil {
 			result = mockBankRequestResultUnavailable
 			return app.BankAuthorizationResult{}, app.NewPaymentBankUnavailableError(err)
 		}
-		if declineReason != "" {
+		switch code {
+		case "card_expired":
 			result = mockBankRequestResultDeclined
-			return app.BankAuthorizationResult{DeclineReason: declineReason}, nil
-		}
-		if reason != "" {
+			return app.BankAuthorizationResult{DeclineReason: domain.DeclineReasonExpiredCard}, nil
+		case "invalid_card", "invalid_card_number", "invalid_cvv":
 			result = mockBankRequestResultInvalidInput
-			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError(reason, nil)
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError("card details are invalid", nil)
+		case "invalid_amount":
+			result = mockBankRequestResultInvalidInput
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError("amount must be greater than zero", nil)
+		case "amount_mismatch":
+			result = mockBankRequestResultInvalidInput
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError("amount does not match bank authorization", nil)
+		case "authorization_not_found":
+			result = mockBankRequestResultInvalidInput
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError("bank authorization cannot be captured", nil)
+		case "capture_not_found":
+			result = mockBankRequestResultInvalidInput
+			return app.BankAuthorizationResult{}, app.NewInvalidPaymentInputError("bank capture cannot be refunded", nil)
 		}
 	case http.StatusPaymentRequired:
 		result = mockBankRequestResultDeclined
@@ -247,22 +259,24 @@ func (c *Client) capturePaymentAttempt(ctx context.Context, request app.BankCapt
 		result = mockBankRequestResultSuccess
 		return app.BankCaptureResult{BankCaptureID: payload.CaptureID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, expired, err := decodeBadRequestReason(response)
+		code, err := decodeBadRequestCode(response)
 		if err != nil {
 			result = mockBankRequestResultUnavailable
 			return app.BankCaptureResult{}, app.NewPaymentBankUnavailableError(err)
 		}
-		if expired {
+		switch code {
+		case "authorization_expired":
 			result = mockBankRequestResultExpired
 			return app.BankCaptureResult{}, app.NewPaymentAuthorizationExpiredError(nil)
-		}
-		if conflict {
+		case "invalid_card", "invalid_card_number", "invalid_cvv":
+			result = mockBankRequestResultInvalidInput
+			return app.BankCaptureResult{}, app.NewInvalidPaymentInputError("card details are invalid", nil)
+		case "invalid_amount":
+			result = mockBankRequestResultInvalidInput
+			return app.BankCaptureResult{}, app.NewInvalidPaymentInputError("amount must be greater than zero", nil)
+		case "authorization_not_found", "capture_not_found", "amount_mismatch", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
 			result = mockBankRequestResultStateConflict
 			return app.BankCaptureResult{}, app.NewPaymentBankStateConflictError(nil)
-		}
-		if reason != "" {
-			result = mockBankRequestResultInvalidInput
-			return app.BankCaptureResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
@@ -322,22 +336,24 @@ func (c *Client) voidPaymentAttempt(ctx context.Context, request app.BankVoidReq
 		result = mockBankRequestResultSuccess
 		return app.BankVoidResult{BankVoidID: payload.VoidID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, expired, err := decodeBadRequestReason(response)
+		code, err := decodeBadRequestCode(response)
 		if err != nil {
 			result = mockBankRequestResultUnavailable
 			return app.BankVoidResult{}, app.NewPaymentBankUnavailableError(err)
 		}
-		if expired {
+		switch code {
+		case "authorization_expired":
 			result = mockBankRequestResultExpired
 			return app.BankVoidResult{}, app.NewPaymentAuthorizationExpiredError(nil)
-		}
-		if conflict {
+		case "invalid_card", "invalid_card_number", "invalid_cvv":
+			result = mockBankRequestResultInvalidInput
+			return app.BankVoidResult{}, app.NewInvalidPaymentInputError("card details are invalid", nil)
+		case "invalid_amount":
+			result = mockBankRequestResultInvalidInput
+			return app.BankVoidResult{}, app.NewInvalidPaymentInputError("amount must be greater than zero", nil)
+		case "authorization_not_found", "capture_not_found", "amount_mismatch", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
 			result = mockBankRequestResultStateConflict
 			return app.BankVoidResult{}, app.NewPaymentBankStateConflictError(nil)
-		}
-		if reason != "" {
-			result = mockBankRequestResultInvalidInput
-			return app.BankVoidResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
@@ -398,18 +414,21 @@ func (c *Client) refundPaymentAttempt(ctx context.Context, request app.BankRefun
 		result = mockBankRequestResultSuccess
 		return app.BankRefundResult{BankRefundID: payload.RefundID}, nil
 	case http.StatusBadRequest:
-		reason, conflict, _, err := decodeBadRequestReason(response)
+		code, err := decodeBadRequestCode(response)
 		if err != nil {
 			result = mockBankRequestResultUnavailable
 			return app.BankRefundResult{}, app.NewPaymentBankUnavailableError(err)
 		}
-		if conflict {
+		switch code {
+		case "invalid_card", "invalid_card_number", "invalid_cvv":
+			result = mockBankRequestResultInvalidInput
+			return app.BankRefundResult{}, app.NewInvalidPaymentInputError("card details are invalid", nil)
+		case "invalid_amount":
+			result = mockBankRequestResultInvalidInput
+			return app.BankRefundResult{}, app.NewInvalidPaymentInputError("amount must be greater than zero", nil)
+		case "authorization_not_found", "capture_not_found", "amount_mismatch", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
 			result = mockBankRequestResultStateConflict
 			return app.BankRefundResult{}, app.NewPaymentBankStateConflictError(nil)
-		}
-		if reason != "" {
-			result = mockBankRequestResultInvalidInput
-			return app.BankRefundResult{}, app.NewInvalidPaymentInputError(reason, nil)
 		}
 	}
 
@@ -504,65 +523,17 @@ type refundResponse struct {
 	RefundID string `json:"refund_id"`
 }
 
-type authorizationErrorResponse struct {
+type bankErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func decodeBadRequestAuthorizationOutcome(response *http.Response) (string, domain.DeclineReason, error) {
-	var payload authorizationErrorResponse
+func decodeBadRequestCode(response *http.Response) (string, error) {
+	var payload bankErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	return invalidInputReasonForBadRequest(payload.Error), declineReasonForBadRequest(payload.Error), nil
-}
-
-func decodeBadRequestReason(response *http.Response) (string, bool, bool, error) {
-	var payload authorizationErrorResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", false, false, err
-	}
-
-	return invalidInputReasonForBadRequest(payload.Error), isBankStateConflict(payload.Error), isAuthorizationExpired(payload.Error), nil
-}
-
-func invalidInputReasonForBadRequest(code string) string {
-	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "invalid_card", "invalid_card_number":
-		return "card details are invalid"
-	case "invalid_cvv":
-		return "card details are invalid"
-	case "invalid_amount":
-		return "amount must be greater than zero"
-	case "amount_mismatch":
-		return "amount does not match bank authorization"
-	case "authorization_not_found":
-		return "bank authorization cannot be captured"
-	case "capture_not_found":
-		return "bank capture cannot be refunded"
-	default:
-		return ""
-	}
-}
-
-func declineReasonForBadRequest(code string) domain.DeclineReason {
-	if strings.EqualFold(strings.TrimSpace(code), "card_expired") {
-		return domain.DeclineReasonExpiredCard
-	}
-	return ""
-}
-
-func isAuthorizationExpired(code string) bool {
-	return strings.EqualFold(strings.TrimSpace(code), "authorization_expired")
-}
-
-func isBankStateConflict(code string) bool {
-	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "authorization_not_found", "capture_not_found", "amount_mismatch", "authorization_already_used", "already_captured", "already_voided", "already_refunded":
-		return true
-	default:
-		return false
-	}
+	return strings.ToLower(strings.TrimSpace(payload.Error)), nil
 }
 
 func (c *Client) newHTTPRequest(ctx context.Context, endpointPath string, body *bytes.Buffer, operationKey string) (*http.Request, error) {
