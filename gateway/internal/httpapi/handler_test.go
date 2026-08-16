@@ -832,24 +832,36 @@ func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 	}
 }
 
-func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
-	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
-		"Idempotency-Key": "public-key-1",
-	})
+func TestJSONPaymentCommandsRequireJSONContentType(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		body    string
+		headers map[string]string
+	}{
+		{
+			name:    "authorize",
+			path:    "/api/v1/payments",
+			body:    validAuthorizeBody(),
+			headers: map[string]string{"Idempotency-Key": "public-key-1"},
+		},
+		{
+			name:    "authorization retry",
+			path:    "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries",
+			body:    validRetryAuthorizationBody(),
+			headers: map[string]string{"Idempotency-Key": "retry-key-1"},
+		},
+	}
 
-	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
 
-func TestPostPaymentAuthorizationRetriesRequiresJSONContentType(t *testing.T) {
-	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
-		"Idempotency-Key": "retry-key-1",
-	})
-
-	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+			assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+		})
+	}
 }
 
 func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {

@@ -861,15 +861,6 @@ func TestAuthorizePaymentNormalizesRequestBeforeFingerprintBankCallAndStorage(t 
 	assert.Equal(t, 1, bank.calls)
 }
 
-func TestNewAuthorizePaymentCommandRequiresIdempotencyKey(t *testing.T) {
-	bank := &bankAuthorizerFake{result: app.BankAuthorizationResult{BankAuthorizationID: "bank-auth-id-1"}}
-
-	_, err := newAuthorizePaymentCommand("order-1", "customer-1", 1299, validCardDetails(), "")
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
-	assert.Zero(t, bank.request)
-}
-
 func TestNewAuthorizePaymentCommandValidatesInput(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -1135,18 +1126,6 @@ func TestVoidPaymentRejectsNonAuthorizedPayment(t *testing.T) {
 	}
 }
 
-func TestNewVoidPaymentCommandRequiresIdempotencyKey(t *testing.T) {
-	repo := testsupport.NewPaymentStore()
-	payment := newAuthorizedDomainPayment(t, time.Now())
-	require.NoError(t, repo.SeedPayment(context.Background(), payment))
-	bank := &bankAuthorizerFake{voidResult: app.BankVoidResult{BankVoidID: "void_550e8400-e29b-41d4-a716-446655440002"}}
-
-	_, err := app.NewVoidPaymentCommand(string(payment.ID()), "")
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
-	assert.Zero(t, bank.voidRequest)
-}
-
 func TestVoidPaymentLeavesPaymentStatusUnchangedWhenBankFails(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1401,18 +1380,6 @@ func TestCapturePaymentCallsBankStoresCapturedPaymentAndReturnsPublicResult(t *t
 	assert.Equal(t, domain.PaymentStatusCaptured, saved.Status())
 	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440001", saved.BankCaptureID())
 	assert.Equal(t, "bok_123", saved.CaptureBankOperationKey())
-}
-
-func TestNewCapturePaymentCommandRequiresIdempotencyKey(t *testing.T) {
-	repo := testsupport.NewPaymentStore()
-	payment := newAuthorizedDomainPayment(t, time.Now())
-	require.NoError(t, repo.SeedPayment(context.Background(), payment))
-	bank := &bankFake{captureResult: app.BankCaptureResult{BankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440001"}}
-
-	_, err := app.NewCapturePaymentCommand(string(payment.ID()), "")
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
-	assert.Zero(t, bank.captureRequest)
 }
 
 func TestCapturePaymentCallsBankWhenAuthorizationExpirationTimeHasPassed(t *testing.T) {
@@ -1768,16 +1735,46 @@ func TestRefundPaymentCallsBankStoresRefundedPaymentAndReturnsPublicResult(t *te
 	assert.Equal(t, "bok_123", saved.RefundBankOperationKey())
 }
 
-func TestNewRefundPaymentCommandRequiresIdempotencyKey(t *testing.T) {
-	repo := testsupport.NewPaymentStore()
-	payment := newCapturedDomainPayment(t, time.Now())
-	require.NoError(t, repo.SeedPayment(context.Background(), payment))
-	bank := &bankFake{refundResult: app.BankRefundResult{BankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002"}}
+func TestPaymentCommandConstructorsRequireIdempotencyKey(t *testing.T) {
+	tests := []struct {
+		name string
+		new  func() error
+	}{
+		{
+			name: "authorize",
+			new: func() error {
+				_, err := newAuthorizePaymentCommand("order-1", "customer-1", 1299, validCardDetails(), "")
+				return err
+			},
+		},
+		{
+			name: "void",
+			new: func() error {
+				_, err := app.NewVoidPaymentCommand("pay_550e8400-e29b-41d4-a716-446655440000", "")
+				return err
+			},
+		},
+		{
+			name: "capture",
+			new: func() error {
+				_, err := app.NewCapturePaymentCommand("pay_550e8400-e29b-41d4-a716-446655440000", "")
+				return err
+			},
+		},
+		{
+			name: "refund",
+			new: func() error {
+				_, err := app.NewRefundPaymentCommand("pay_550e8400-e29b-41d4-a716-446655440000", "")
+				return err
+			},
+		},
+	}
 
-	_, err := app.NewRefundPaymentCommand(string(payment.ID()), "")
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInvalidInput))
-	assert.Zero(t, bank.refundRequest)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.True(t, app.HasPaymentErrorKind(tt.new(), app.PaymentErrorInvalidInput))
+		})
+	}
 }
 
 func TestRefundPaymentRejectsNonCapturedStatusesWithoutCallingBank(t *testing.T) {

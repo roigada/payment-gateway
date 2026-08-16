@@ -1,11 +1,14 @@
 package mockbank
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +18,90 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewClientBuildsConfiguredHTTPTransport(t *testing.T) {
+	config := retryConfig()
+	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
+	config.TLSHandshakeTimeout = 2
+	config.ResponseHeaderTimeout = 3
+	config.IdleConnectionTimeout = 4
+	client, err := NewClient(noopMockBankMetrics{}, config)
+
+	require.NoError(t, err)
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, time.Duration(2), transport.TLSHandshakeTimeout)
+	assert.Equal(t, time.Duration(3), transport.ResponseHeaderTimeout)
+	assert.Equal(t, time.Duration(4), transport.IdleConnTimeout)
+}
+
+func TestNewHTTPRequestBuildsMockBankRequest(t *testing.T) {
+	config := retryConfig()
+	config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
+	client, err := NewClient(noopMockBankMetrics{}, config)
+	require.NoError(t, err)
+
+	request, err := client.newHTTPRequest(context.Background(), "/api/v1/authorizations", &bytes.Buffer{}, "bok_123")
+
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodPost, request.Method)
+	assert.Equal(t, "https://mockbank.example/api/v1/authorizations", request.URL.String())
+	assert.Equal(t, "application/json", request.Header.Get("Content-Type"))
+	assert.Equal(t, "bok_123", request.Header.Get("Idempotency-Key"))
+}
+
+func TestNewClientRejectsNilMetrics(t *testing.T) {
+	client, err := NewClient(nil, Config{BaseURL: url.URL{Scheme: "https", Host: "mockbank.example"}})
+
+	require.Nil(t, client)
+	require.EqualError(t, err, "mock bank metrics are required")
+}
+
+func TestNewClientRejectsInvalidConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"base URL", func(config *Config) { config.BaseURL = url.URL{Path: "relative"} }, "mock bank base URL must be absolute"},
+		{"initial attempt timeout", func(config *Config) { config.InitialAttemptTimeout = 0 }, "mock bank initial attempt timeout must be positive"},
+		{"retry delay", func(config *Config) { config.RetryDelay = 0 }, "mock bank retry delay must be positive"},
+		{"retry attempt timeout", func(config *Config) { config.RetryAttemptTimeout = 0 }, "mock bank retry attempt timeout must be positive"},
+		{"connect timeout", func(config *Config) { config.ConnectTimeout = 0 }, "mock bank connect timeout must be positive"},
+		{"TLS handshake timeout", func(config *Config) { config.TLSHandshakeTimeout = 0 }, "mock bank TLS handshake timeout must be positive"},
+		{"response header timeout", func(config *Config) { config.ResponseHeaderTimeout = 0 }, "mock bank response header timeout must be positive"},
+		{"idle connection timeout", func(config *Config) { config.IdleConnectionTimeout = 0 }, "mock bank idle connection timeout must be positive"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			config := retryConfig()
+			config.BaseURL = url.URL{Scheme: "https", Host: "mockbank.example"}
+			tt.mutate(&config)
+
+			client, err := NewClient(noopMockBankMetrics{}, config)
+
+			require.Nil(t, client)
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestDecodeBadRequestCodeNormalizesBankCode(t *testing.T) {
+	code, err := decodeBadRequestCode(&http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"error":" Invalid_Card "}`)),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "invalid_card", code)
+}
+
+func TestDecodeBadRequestCodeReturnsRawDecodeFailure(t *testing.T) {
+	_, err := decodeBadRequestCode(&http.Response{
+		Body: io.NopCloser(strings.NewReader(`{`)),
+	})
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "bank is unavailable")
+}
 
 func TestAuthorizePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
@@ -859,21 +946,6 @@ func TestCapturePaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	}, gotBody)
 }
 
-func TestCapturePaymentRejectsMalformedSuccessResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"capture_id":""}`))
-	}))
-	defer server.Close()
-
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
-
-	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
-}
-
 func TestCapturePaymentReturnsErrorForBankFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -922,24 +994,6 @@ func TestCapturePaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
-func TestCapturePaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	httpClient := server.Client()
-	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
-
-	_, err = client.CapturePayment(context.Background(), validCaptureRequest())
-
-	require.Error(t, err)
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
-}
-
 func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -972,21 +1026,6 @@ func TestVoidPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	assert.Equal(t, map[string]any{
 		"authorization_id": "auth_550e8400-e29b-41d4-a716-446655440000",
 	}, gotBody)
-}
-
-func TestVoidPaymentRejectsMalformedSuccessResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"void_id":""}`))
-	}))
-	defer server.Close()
-
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
-
-	_, err = client.VoidPayment(context.Background(), validVoidRequest())
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestVoidPaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -1045,24 +1084,6 @@ func TestVoidPaymentMapsExpiredAuthorizationToLifecycleError(t *testing.T) {
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorAuthorizationExpired))
 }
 
-func TestVoidPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	httpClient := server.Client()
-	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
-
-	_, err = client.VoidPayment(context.Background(), validVoidRequest())
-
-	require.Error(t, err)
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
-}
-
 func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 	var gotPath string
 	var gotIdempotencyKey string
@@ -1098,21 +1119,6 @@ func TestRefundPaymentSendsBankPayloadAndOperationKey(t *testing.T) {
 		"capture_id": "cap_550e8400-e29b-41d4-a716-446655440001",
 		"amount":     float64(1299),
 	}, gotBody)
-}
-
-func TestRefundPaymentRejectsMalformedSuccessResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"refund_id":""}`))
-	}))
-	defer server.Close()
-
-	client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
-
-	_, err = client.RefundPayment(context.Background(), validRefundRequest())
-
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankUnavailable))
 }
 
 func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
@@ -1161,22 +1167,77 @@ func TestRefundPaymentReturnsErrorForBankFailures(t *testing.T) {
 	}
 }
 
-func TestRefundPaymentMapsBankTimeoutToTimeoutError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
+func TestPaymentOperationsRejectMalformedSuccessResponses(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		operation func(*Client) error
+	}{
+		{name: "capture", body: `{"capture_id":""}`, operation: func(client *Client) error {
+			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
+			return err
+		}},
+		{name: "void", body: `{"void_id":""}`, operation: func(client *Client) error {
+			_, err := client.VoidPayment(context.Background(), validVoidRequest())
+			return err
+		}},
+		{name: "refund", body: `{"refund_id":""}`, operation: func(client *Client) error {
+			_, err := client.RefundPayment(context.Background(), validRefundRequest())
+			return err
+		}},
+	}
 
-	httpClient := server.Client()
-	httpClient.Timeout = time.Nanosecond
-	client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
 
-	_, err = client.RefundPayment(context.Background(), validRefundRequest())
+			client, err := testClientWithHTTPClient(server.URL, server.Client(), noopMockBankMetrics{}, retryConfig())
+			require.NoError(t, err)
+			assert.True(t, app.HasPaymentErrorKind(tt.operation(client), app.PaymentErrorBankUnavailable))
+		})
+	}
+}
 
-	require.Error(t, err)
-	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+func TestPaymentOperationsMapBankTimeoutToTimeoutError(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation func(*Client) error
+	}{
+		{name: "capture", operation: func(client *Client) error {
+			_, err := client.CapturePayment(context.Background(), validCaptureRequest())
+			return err
+		}},
+		{name: "void", operation: func(client *Client) error {
+			_, err := client.VoidPayment(context.Background(), validVoidRequest())
+			return err
+		}},
+		{name: "refund", operation: func(client *Client) error {
+			_, err := client.RefundPayment(context.Background(), validRefundRequest())
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				time.Sleep(50 * time.Millisecond)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			httpClient := server.Client()
+			httpClient.Timeout = time.Nanosecond
+			client, err := testClientWithHTTPClient(server.URL, httpClient, noopMockBankMetrics{}, retryConfig())
+			require.NoError(t, err)
+			err = tt.operation(client)
+			require.Error(t, err)
+			assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorBankTimeout))
+		})
+	}
 }
 
 type timeoutRoundTripper struct{}
