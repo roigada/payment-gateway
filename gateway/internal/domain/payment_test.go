@@ -9,50 +9,79 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newAuthorizedPayment(
-	id domain.PaymentID,
-	orderID string,
-	customerID string,
-	amountCents int64,
-	bankAuthorizationID string,
-	authorizationExpiresAt time.Time,
-	authorizationBankOperationKey string,
-	authorizationCardFingerprint string,
-	now time.Time,
-) (*domain.Payment, error) {
-	payment, err := domain.NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationCardFingerprint, now)
+var (
+	validPaymentID = domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000")
+	createdAt      = time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+)
+
+func newPendingPayment(now time.Time) (*domain.Payment, error) {
+	return domain.NewPendingPayment(validPaymentID, "order-1", "customer-1", 1299, "bok-auth", "fingerprint-1", now)
+}
+
+func newAuthorizedPayment(now time.Time) (*domain.Payment, error) {
+	payment, err := newPendingPayment(now)
 	if err != nil {
 		return nil, err
 	}
-	if err := payment.MarkAuthorized(bankAuthorizationID, authorizationExpiresAt, now); err != nil {
+	if err := payment.MarkAuthorized("auth-1", now.Add(time.Hour), now); err != nil {
 		return nil, err
 	}
 	return payment, nil
 }
 
-func newDeclinedPayment(
-	id domain.PaymentID,
-	orderID string,
-	customerID string,
-	amountCents int64,
-	declineReason domain.DeclineReason,
-	authorizationBankOperationKey string,
-	authorizationCardFingerprint string,
-	now time.Time,
-) (*domain.Payment, error) {
-	payment, err := domain.NewPendingPayment(id, orderID, customerID, amountCents, authorizationBankOperationKey, authorizationCardFingerprint, now)
+func newCapturedPayment(now time.Time) (*domain.Payment, error) {
+	payment, err := newAuthorizedPayment(now)
 	if err != nil {
 		return nil, err
 	}
-	if err := payment.MarkDeclined(declineReason, now); err != nil {
+	if err := payment.SetCaptureBankOperationKey("bok-capture"); err != nil {
+		return nil, err
+	}
+	if err := payment.MarkCaptured("cap-1", now); err != nil {
 		return nil, err
 	}
 	return payment, nil
 }
 
-// Verifies that is valid payment status.
+type paymentSnapshot struct {
+	status                  domain.PaymentStatus
+	bankAuthorizationID     string
+	authorizationExpiresAt  time.Time
+	captureBankOperationKey string
+	bankCaptureID           string
+	voidBankOperationKey    string
+	bankVoidID              string
+	refundBankOperationKey  string
+	bankRefundID            string
+	declineReason           domain.DeclineReason
+	updatedAt               time.Time
+}
+
+func snapshot(payment *domain.Payment) paymentSnapshot {
+	return paymentSnapshot{
+		status:                  payment.Status(),
+		bankAuthorizationID:     payment.BankAuthorizationID(),
+		authorizationExpiresAt:  payment.AuthorizationExpiresAt(),
+		captureBankOperationKey: payment.CaptureBankOperationKey(),
+		bankCaptureID:           payment.BankCaptureID(),
+		voidBankOperationKey:    payment.VoidBankOperationKey(),
+		bankVoidID:              payment.BankVoidID(),
+		refundBankOperationKey:  payment.RefundBankOperationKey(),
+		bankRefundID:            payment.BankRefundID(),
+		declineReason:           payment.DeclineReason(),
+		updatedAt:               payment.UpdatedAt(),
+	}
+}
+
+func assertUnchanged(t *testing.T, payment *domain.Payment, before paymentSnapshot) {
+	t.Helper()
+	assert.Equal(t, before, snapshot(payment))
+}
+
+// Payment lifecycle validation recognizes every declared status and rejects values that cannot
+// represent a persisted Payment state.
 func TestIsValidPaymentStatus(t *testing.T) {
-	validStatuses := []domain.PaymentStatus{
+	for _, status := range []domain.PaymentStatus{
 		domain.PaymentStatusPending,
 		domain.PaymentStatusAuthorized,
 		domain.PaymentStatusExpired,
@@ -60,354 +89,271 @@ func TestIsValidPaymentStatus(t *testing.T) {
 		domain.PaymentStatusCaptured,
 		domain.PaymentStatusVoided,
 		domain.PaymentStatusRefunded,
-	}
-
-	for _, status := range validStatuses {
-		// Verifies the table-defined scenario for this case.
+	} {
 		t.Run(string(status), func(t *testing.T) {
 			assert.True(t, domain.IsValidPaymentStatus(status))
 		})
 	}
-
 	assert.False(t, domain.IsValidPaymentStatus("unknown"))
 }
 
-// Verifies that payment authorization stores private bank authorization id.
-func TestPaymentAuthorizationStoresPrivateBankAuthorizationID(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	expiresAt := now.Add(time.Hour)
-
-	payment, err := newAuthorizedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		" order-1 ",
-		" customer-1 ",
-		1299,
-		" bank-auth-id-1 ",
-		expiresAt,
-		" bok-1 ",
-		" fingerprint-1 ",
-		now,
-	)
+// Creating a Pending Payment normalizes customer-facing identifiers and records the retry
+// metadata needed to safely authorize the Payment later.
+func TestNewPendingPaymentNormalizesAndInitializesState(t *testing.T) {
+	payment, err := domain.NewPendingPayment(validPaymentID, " order-1 ", " customer-1 ", 1299, " bok-auth ", " fingerprint-1 ", createdAt)
 	require.NoError(t, err)
 
-	assert.Equal(t, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), payment.ID())
 	assert.Equal(t, "order-1", payment.OrderID())
 	assert.Equal(t, "customer-1", payment.CustomerID())
-	assert.Equal(t, int64(1299), payment.AmountCents())
-	assert.Equal(t, domain.CurrencyUSD, payment.Currency())
-	assert.Equal(t, domain.PaymentStatusAuthorized, payment.Status())
-	assert.Empty(t, payment.DeclineReason())
-	assert.Equal(t, "bank-auth-id-1", payment.BankAuthorizationID())
-	assert.Equal(t, expiresAt, payment.AuthorizationExpiresAt())
-	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
-	assert.Equal(t, now, payment.CreatedAt())
-	assert.Equal(t, now, payment.UpdatedAt())
-}
-
-// Verifies that new pending payment creates payment with retry private fields.
-func TestNewPendingPaymentCreatesPaymentWithRetryPrivateFields(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-
-	payment, err := domain.NewPendingPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		" order-1 ",
-		" customer-1 ",
-		1299,
-		" bok-1 ",
-		" fingerprint-1 ",
-		now,
-	)
-	require.NoError(t, err)
-
 	assert.Equal(t, domain.PaymentStatusPending, payment.Status())
-	assert.Empty(t, payment.BankAuthorizationID())
-	assert.Empty(t, payment.DeclineReason())
-	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
+	assert.Equal(t, "bok-auth", payment.AuthorizationBankOperationKey())
 	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
-	assert.Equal(t, now, payment.CreatedAt())
-	assert.Equal(t, now, payment.UpdatedAt())
+	assert.Equal(t, createdAt, payment.CreatedAt())
+	assert.Equal(t, createdAt, payment.UpdatedAt())
 }
 
-// Verifies that payment decline stores gateway decline reason.
-func TestPaymentDeclineStoresGatewayDeclineReason(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-
-	payment, err := newDeclinedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		" order-1 ",
-		" customer-1 ",
-		1299,
-		domain.DeclineReasonInsufficientFunds,
-		" bok-1 ",
-		" fingerprint-1 ",
-		now,
-	)
-	require.NoError(t, err)
-
-	assert.Equal(t, domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"), payment.ID())
-	assert.Equal(t, "order-1", payment.OrderID())
-	assert.Equal(t, "customer-1", payment.CustomerID())
-	assert.Equal(t, int64(1299), payment.AmountCents())
-	assert.Equal(t, domain.CurrencyUSD, payment.Currency())
-	assert.Equal(t, domain.PaymentStatusDeclined, payment.Status())
-	assert.Equal(t, domain.DeclineReasonInsufficientFunds, payment.DeclineReason())
-	assert.Empty(t, payment.BankAuthorizationID())
-	assert.Equal(t, "bok-1", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "fingerprint-1", payment.AuthorizationCardFingerprint())
-	assert.Equal(t, now, payment.CreatedAt())
-	assert.Equal(t, now, payment.UpdatedAt())
-}
-
-// Verifies that capture authorized payment stores private capture fields.
-func TestCaptureAuthorizedPaymentStoresPrivateCaptureFields(t *testing.T) {
-	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	expiresAt := authorizedAt.Add(time.Hour)
-	payment, err := newAuthorizedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		"order-1",
-		"customer-1",
-		1299,
-		"auth_550e8400-e29b-41d4-a716-446655440000",
-		expiresAt,
-		"bok_550e8400-e29b-41d4-a716-446655440001",
-		"fingerprint-1",
-		authorizedAt,
-	)
-	require.NoError(t, err)
-	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
-
-	require.NoError(t, payment.MarkCaptured(
-		" cap_550e8400-e29b-41d4-a716-446655440002 ",
-		" bok_550e8400-e29b-41d4-a716-446655440003 ",
-		capturedAt,
-	))
-
-	assert.Equal(t, domain.PaymentStatusCaptured, payment.Status())
-	assert.Equal(t, "auth_550e8400-e29b-41d4-a716-446655440000", payment.BankAuthorizationID())
-	assert.Equal(t, expiresAt, payment.AuthorizationExpiresAt())
-	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440001", payment.AuthorizationBankOperationKey())
-	assert.Equal(t, "cap_550e8400-e29b-41d4-a716-446655440002", payment.BankCaptureID())
-	assert.Equal(t, "bok_550e8400-e29b-41d4-a716-446655440003", payment.CaptureBankOperationKey())
-	assert.Equal(t, authorizedAt, payment.CreatedAt())
-	assert.Equal(t, capturedAt, payment.UpdatedAt())
-}
-
-// Verifies that capture payment rejects invalid values.
-func TestCapturePaymentRejectsInvalidValues(t *testing.T) {
-	authorizedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+// Each valid lifecycle transition records its normalized bank result, clears operation data that
+// no longer applies, and preserves the original creation time.
+func TestPaymentLifecycleTransitions(t *testing.T) {
+	transitionedAt := createdAt.Add(30 * time.Minute)
 	tests := []struct {
-		name          string
-		status        domain.PaymentStatus
-		bankCaptureID string
-		bok           string
-		now           time.Time
-		wantErr       error
+		name       string
+		newPayment func() (*domain.Payment, error)
+		transition func(*domain.Payment) error
+		assert     func(*testing.T, *domain.Payment)
 	}{
-		{name: "status", status: domain.PaymentStatusDeclined, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: authorizedAt, wantErr: domain.ErrInvalidPaymentStatus},
-		{name: "capture id", status: domain.PaymentStatusAuthorized, bankCaptureID: " ", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: authorizedAt, wantErr: domain.ErrInvalidBankCaptureID},
-		{name: "bank operation key", status: domain.PaymentStatusAuthorized, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: " ", now: authorizedAt, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "timestamp", status: domain.PaymentStatusAuthorized, bankCaptureID: "cap_550e8400-e29b-41d4-a716-446655440002", bok: "bok_550e8400-e29b-41d4-a716-446655440003", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{
+			name:       "authorize pending payment",
+			newPayment: func() (*domain.Payment, error) { return newPendingPayment(createdAt) },
+			transition: func(p *domain.Payment) error {
+				return p.MarkAuthorized(" auth-1 ", createdAt.Add(time.Hour), transitionedAt)
+			},
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusAuthorized, p.Status())
+				assert.Equal(t, "auth-1", p.BankAuthorizationID())
+				assert.Equal(t, createdAt.Add(time.Hour), p.AuthorizationExpiresAt())
+			},
+		},
+		{
+			name:       "decline pending payment",
+			newPayment: func() (*domain.Payment, error) { return newPendingPayment(createdAt) },
+			transition: func(p *domain.Payment) error {
+				return p.MarkDeclined(domain.DeclineReasonInsufficientFunds, transitionedAt)
+			},
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusDeclined, p.Status())
+				assert.Equal(t, domain.DeclineReasonInsufficientFunds, p.DeclineReason())
+				assert.Empty(t, p.BankAuthorizationID())
+				assert.True(t, p.AuthorizationExpiresAt().IsZero())
+			},
+		},
+		{
+			name: "expire authorized payment",
+			newPayment: func() (*domain.Payment, error) {
+				p, err := newAuthorizedPayment(createdAt)
+				if err != nil {
+					return nil, err
+				}
+				if err := p.SetCaptureBankOperationKey("bok-capture"); err != nil {
+					return nil, err
+				}
+				return p, p.SetVoidBankOperationKey("bok-void")
+			},
+			transition: func(p *domain.Payment) error { return p.MarkExpired(transitionedAt) },
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusExpired, p.Status())
+				assert.Empty(t, p.CaptureBankOperationKey())
+				assert.Empty(t, p.VoidBankOperationKey())
+			},
+		},
+		{
+			name: "capture authorized payment",
+			newPayment: func() (*domain.Payment, error) {
+				p, err := newAuthorizedPayment(createdAt)
+				if err != nil {
+					return nil, err
+				}
+				if err := p.SetCaptureBankOperationKey("bok-capture"); err != nil {
+					return nil, err
+				}
+				return p, p.SetVoidBankOperationKey("bok-void")
+			},
+			transition: func(p *domain.Payment) error { return p.MarkCaptured(" cap-1 ", transitionedAt) },
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusCaptured, p.Status())
+				assert.Equal(t, "cap-1", p.BankCaptureID())
+				assert.Equal(t, "bok-capture", p.CaptureBankOperationKey())
+				assert.Empty(t, p.VoidBankOperationKey())
+			},
+		},
+		{
+			name: "void authorized payment",
+			newPayment: func() (*domain.Payment, error) {
+				p, err := newAuthorizedPayment(createdAt)
+				if err != nil {
+					return nil, err
+				}
+				if err := p.SetCaptureBankOperationKey("bok-capture"); err != nil {
+					return nil, err
+				}
+				return p, p.SetVoidBankOperationKey("bok-void")
+			},
+			transition: func(p *domain.Payment) error { return p.MarkVoided(" void-1 ", transitionedAt) },
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusVoided, p.Status())
+				assert.Equal(t, "void-1", p.BankVoidID())
+				assert.Equal(t, "bok-void", p.VoidBankOperationKey())
+				assert.Empty(t, p.CaptureBankOperationKey())
+			},
+		},
+		{
+			name: "refund captured payment",
+			newPayment: func() (*domain.Payment, error) {
+				p, err := newCapturedPayment(createdAt)
+				if err != nil {
+					return nil, err
+				}
+				return p, p.SetRefundBankOperationKey("bok-refund")
+			},
+			transition: func(p *domain.Payment) error { return p.MarkRefunded(" ref-1 ", transitionedAt) },
+			assert: func(t *testing.T, p *domain.Payment) {
+				assert.Equal(t, domain.PaymentStatusRefunded, p.Status())
+				assert.Equal(t, "ref-1", p.BankRefundID())
+				assert.Equal(t, "bok-refund", p.RefundBankOperationKey())
+				assert.Equal(t, "cap-1", p.BankCaptureID())
+			},
+		},
 	}
 
 	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
-			bankAuthorizationID := ""
-			declineReason := domain.DeclineReasonUnknown
-			if tt.status == domain.PaymentStatusAuthorized {
-				bankAuthorizationID = "auth_550e8400-e29b-41d4-a716-446655440000"
-				declineReason = ""
-			}
-			authorizationExpiresAt := time.Time{}
-			if bankAuthorizationID != "" {
-				authorizationExpiresAt = authorizedAt.Add(time.Hour)
-			}
-			payment, err := domain.LoadPayment(
-				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-				"order-1",
-				"customer-1",
-				1299,
-				domain.CurrencyUSD,
-				tt.status,
-				bankAuthorizationID,
-				authorizationExpiresAt,
-				"bok_550e8400-e29b-41d4-a716-446655440001",
-				"fingerprint-1",
-				"",
-				"",
-				"",
-				"",
-				"",
-				"",
-				declineReason,
-				authorizedAt,
-				authorizedAt,
-			)
+			payment, err := tt.newPayment()
 			require.NoError(t, err)
-
-			err = payment.MarkCaptured(tt.bankCaptureID, tt.bok, tt.now)
-
-			assert.ErrorIs(t, err, tt.wantErr)
+			require.NoError(t, tt.transition(payment))
+			tt.assert(t, payment)
+			assert.Equal(t, createdAt, payment.CreatedAt())
+			assert.Equal(t, transitionedAt, payment.UpdatedAt())
 		})
 	}
 }
 
-// Verifies that refund captured payment stores private refund fields.
-func TestRefundCapturedPaymentStoresPrivateRefundFields(t *testing.T) {
-	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	expiresAt := createdAt.Add(time.Hour)
-	payment, err := newAuthorizedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		"order-1",
-		"customer-1",
-		1299,
-		"auth_550e8400-e29b-41d4-a716-446655440000",
-		expiresAt,
-		"bok-auth",
-		"fingerprint-1",
-		createdAt,
-	)
-	require.NoError(t, err)
-	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
-	require.NoError(t, payment.MarkCaptured(
-		"cap_550e8400-e29b-41d4-a716-446655440001",
-		"bok-capture",
-		capturedAt,
-	))
-	refundedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
-
-	require.NoError(t, payment.MarkRefunded(
-		" ref_550e8400-e29b-41d4-a716-446655440002 ",
-		" bok-refund ",
-		refundedAt,
-	))
-
-	assert.Equal(t, domain.PaymentStatusRefunded, payment.Status())
-	assert.Equal(t, "ref_550e8400-e29b-41d4-a716-446655440002", payment.BankRefundID())
-	assert.Equal(t, "bok-refund", payment.RefundBankOperationKey())
-	assert.Equal(t, createdAt, payment.CreatedAt())
-	assert.Equal(t, refundedAt, payment.UpdatedAt())
-}
-
-// Verifies that refund payment rejects invalid values.
-func TestRefundPaymentRejectsInvalidValues(t *testing.T) {
-	capturedAt := time.Date(2026, 6, 18, 12, 30, 0, 0, time.UTC)
+// Invalid lifecycle transitions and malformed bank data return precise domain errors without
+// partially mutating the Payment, so callers can retry or report failures safely.
+func TestPaymentTransitionsRejectInvalidValuesWithoutMutation(t *testing.T) {
 	tests := []struct {
-		name         string
-		status       domain.PaymentStatus
-		bankRefundID string
-		bok          string
-		now          time.Time
-		wantErr      error
+		name       string
+		newPayment func() (*domain.Payment, error)
+		transition func(*domain.Payment) error
+		wantErr    error
 	}{
-		{name: "status", status: domain.PaymentStatusAuthorized, bankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002", bok: "bok-refund", now: capturedAt, wantErr: domain.ErrInvalidPaymentStatus},
-		{name: "refund id", status: domain.PaymentStatusCaptured, bankRefundID: " ", bok: "bok-refund", now: capturedAt, wantErr: domain.ErrInvalidBankRefundID},
-		{name: "bank operation key", status: domain.PaymentStatusCaptured, bankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002", bok: " ", now: capturedAt, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "timestamp", status: domain.PaymentStatusCaptured, bankRefundID: "ref_550e8400-e29b-41d4-a716-446655440002", bok: "bok-refund", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{"authorize from authorized", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkAuthorized("auth-2", createdAt.Add(time.Hour), createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"authorize with blank id", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkAuthorized(" ", createdAt.Add(time.Hour), createdAt) }, domain.ErrInvalidBankAuthorizationID},
+		{"authorize with zero expiration", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkAuthorized("auth-1", time.Time{}, createdAt) }, domain.ErrInvalidAuthorizationExpirationTime},
+		{"authorize with zero timestamp", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error {
+			return p.MarkAuthorized("auth-1", createdAt.Add(time.Hour), time.Time{})
+		}, domain.ErrInvalidPaymentTimestamp},
+		{"decline from authorized", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkDeclined(domain.DeclineReasonInvalidCard, createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"decline with unknown reason", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkDeclined("raw-bank-code", createdAt) }, domain.ErrInvalidDeclineReason},
+		{"decline with zero timestamp", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkDeclined(domain.DeclineReasonInvalidCard, time.Time{}) }, domain.ErrInvalidPaymentTimestamp},
+		{"expire from pending", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkExpired(createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"expire with zero timestamp", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkExpired(time.Time{}) }, domain.ErrInvalidPaymentTimestamp},
+		{"capture from declined", func() (*domain.Payment, error) {
+			p, err := newPendingPayment(createdAt)
+			if err != nil {
+				return nil, err
+			}
+			return p, p.MarkDeclined(domain.DeclineReasonInvalidCard, createdAt)
+		}, func(p *domain.Payment) error { return p.MarkCaptured("cap-1", createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"capture with blank id", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkCaptured(" ", createdAt) }, domain.ErrInvalidBankCaptureID},
+		{"capture with zero timestamp", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkCaptured("cap-1", time.Time{}) }, domain.ErrInvalidPaymentTimestamp},
+		{"void from declined", func() (*domain.Payment, error) {
+			p, err := newPendingPayment(createdAt)
+			if err != nil {
+				return nil, err
+			}
+			return p, p.MarkDeclined(domain.DeclineReasonInvalidCard, createdAt)
+		}, func(p *domain.Payment) error { return p.MarkVoided("void-1", createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"void with blank id", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkVoided(" ", createdAt) }, domain.ErrInvalidBankVoidID},
+		{"void with zero timestamp", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkVoided("void-1", time.Time{}) }, domain.ErrInvalidPaymentTimestamp},
+		{"refund from authorized", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkRefunded("ref-1", createdAt) }, domain.ErrInvalidPaymentStatus},
+		{"refund with blank id", func() (*domain.Payment, error) { return newCapturedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkRefunded(" ", createdAt) }, domain.ErrInvalidBankRefundID},
+		{"refund with zero timestamp", func() (*domain.Payment, error) { return newCapturedPayment(createdAt) }, func(p *domain.Payment) error { return p.MarkRefunded("ref-1", time.Time{}) }, domain.ErrInvalidPaymentTimestamp},
 	}
 
 	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
-			var (
-				payment *domain.Payment
-				err     error
-			)
-			if tt.status == domain.PaymentStatusCaptured {
-				payment, err = domain.LoadPayment(
-					domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-					"order-1",
-					"customer-1",
-					1299,
-					domain.CurrencyUSD,
-					tt.status,
-					"auth_550e8400-e29b-41d4-a716-446655440000",
-					capturedAt.Add(time.Hour),
-					"bok-auth",
-					"fingerprint-1",
-					"cap_550e8400-e29b-41d4-a716-446655440001",
-					"bok-capture",
-					"",
-					"",
-					"",
-					"",
-					"",
-					capturedAt,
-					capturedAt,
-				)
-			} else {
-				payment, err = newAuthorizedPayment(
-					domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-					"order-1",
-					"customer-1",
-					1299,
-					"auth_550e8400-e29b-41d4-a716-446655440000",
-					capturedAt.Add(time.Hour),
-					"bok-auth",
-					"fingerprint-1",
-					capturedAt,
-				)
-			}
+			payment, err := tt.newPayment()
 			require.NoError(t, err)
+			before := snapshot(payment)
 
-			err = payment.MarkRefunded(tt.bankRefundID, tt.bok, tt.now)
-
-			assert.ErrorIs(t, err, tt.wantErr)
+			assert.ErrorIs(t, tt.transition(payment), tt.wantErr)
+			assertUnchanged(t, payment, before)
 		})
 	}
 }
 
-// Verifies that payment void moves authorized payment to voided.
-func TestPaymentVoidMovesAuthorizedPaymentToVoided(t *testing.T) {
-	createdAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	expiresAt := createdAt.Add(2 * time.Hour)
-	payment, err := newAuthorizedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		"order-1",
-		"customer-1",
-		1299,
-		"auth_550e8400-e29b-41d4-a716-446655440000",
-		expiresAt,
-		"bok-auth",
-		"fingerprint-1",
-		createdAt,
-	)
-	require.NoError(t, err)
-	voidedAt := time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)
+// An in-progress bank operation key is normalized and attached only to the matching lifecycle
+// state; recording it does not itself advance the Payment or alter its timestamp.
+func TestOperationKeySetters(t *testing.T) {
+	tests := []struct {
+		name       string
+		newPayment func() (*domain.Payment, error)
+		set        func(*domain.Payment, string) error
+		key        func(*domain.Payment) string
+		wantStatus domain.PaymentStatus
+	}{
+		{"capture", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, (*domain.Payment).SetCaptureBankOperationKey, (*domain.Payment).CaptureBankOperationKey, domain.PaymentStatusAuthorized},
+		{"void", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, (*domain.Payment).SetVoidBankOperationKey, (*domain.Payment).VoidBankOperationKey, domain.PaymentStatusAuthorized},
+		{"refund", func() (*domain.Payment, error) { return newCapturedPayment(createdAt) }, (*domain.Payment).SetRefundBankOperationKey, (*domain.Payment).RefundBankOperationKey, domain.PaymentStatusCaptured},
+	}
 
-	err = payment.MarkVoided(" void_550e8400-e29b-41d4-a716-446655440002 ", " bok-void ", voidedAt)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payment, err := tt.newPayment()
+			require.NoError(t, err)
+			before := snapshot(payment)
 
-	assert.Equal(t, domain.PaymentStatusVoided, payment.Status())
-	assert.Equal(t, "void_550e8400-e29b-41d4-a716-446655440002", payment.BankVoidID())
-	assert.Equal(t, "bok-void", payment.VoidBankOperationKey())
-	assert.Equal(t, createdAt, payment.CreatedAt())
-	assert.Equal(t, voidedAt, payment.UpdatedAt())
+			require.NoError(t, tt.set(payment, " key-1 "))
+			assert.Equal(t, "key-1", tt.key(payment))
+			assert.Equal(t, tt.wantStatus, payment.Status())
+			assert.Equal(t, before.updatedAt, payment.UpdatedAt())
+		})
+	}
 }
 
-// Verifies that payment void rejects invalid transition.
-func TestPaymentVoidRejectsInvalidTransition(t *testing.T) {
-	payment, err := newDeclinedPayment(
-		domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-		"order-1",
-		"customer-1",
-		1299,
-		domain.DeclineReasonInvalidCard,
-		"bok-auth",
-		"fingerprint-1",
-		time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC),
-	)
-	require.NoError(t, err)
+// Operation keys cannot be attached outside their permitted lifecycle state or with blank
+// values, and rejected attempts leave every Payment field intact.
+func TestOperationKeySettersRejectInvalidValuesWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		newPayment func() (*domain.Payment, error)
+		set        func(*domain.Payment, string) error
+		key        string
+		wantErr    error
+	}{
+		{"capture invalid status", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, (*domain.Payment).SetCaptureBankOperationKey, "bok-capture", domain.ErrInvalidPaymentStatus},
+		{"capture blank key", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, (*domain.Payment).SetCaptureBankOperationKey, " ", domain.ErrInvalidBankOperationKey},
+		{"void invalid status", func() (*domain.Payment, error) { return newPendingPayment(createdAt) }, (*domain.Payment).SetVoidBankOperationKey, "bok-void", domain.ErrInvalidPaymentStatus},
+		{"void blank key", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, (*domain.Payment).SetVoidBankOperationKey, " ", domain.ErrInvalidBankOperationKey},
+		{"refund invalid status", func() (*domain.Payment, error) { return newAuthorizedPayment(createdAt) }, (*domain.Payment).SetRefundBankOperationKey, "bok-refund", domain.ErrInvalidPaymentStatus},
+		{"refund blank key", func() (*domain.Payment, error) { return newCapturedPayment(createdAt) }, (*domain.Payment).SetRefundBankOperationKey, " ", domain.ErrInvalidBankOperationKey},
+	}
 
-	err = payment.MarkVoided("void_550e8400-e29b-41d4-a716-446655440002", "bok-void", time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payment, err := tt.newPayment()
+			require.NoError(t, err)
+			before := snapshot(payment)
 
-	assert.ErrorIs(t, err, domain.ErrInvalidPaymentStatus)
+			assert.ErrorIs(t, tt.set(payment, tt.key), tt.wantErr)
+			assertUnchanged(t, payment, before)
+		})
+	}
 }
 
-// Verifies that load payment rejects incomplete completed bank operations.
-func TestLoadPaymentRejectsIncompleteCompletedBankOperations(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+// Rehydration rejects persisted bank-operation fields that are missing for a terminal state or
+// incompatible with its lifecycle, preventing corrupt Payments from entering the domain.
+func TestLoadPaymentRejectsInvalidPersistedLifecycleFields(t *testing.T) {
 	tests := []struct {
 		name                    string
 		status                  domain.PaymentStatus
@@ -419,174 +365,60 @@ func TestLoadPaymentRejectsIncompleteCompletedBankOperations(t *testing.T) {
 		voidBankOperationKey    string
 		wantErr                 error
 	}{
-		{name: "captured without capture id", status: domain.PaymentStatusCaptured, captureBankOperationKey: "bok-capture", wantErr: domain.ErrInvalidBankCaptureID},
-		{name: "captured without capture operation key", status: domain.PaymentStatusCaptured, bankCaptureID: "cap-1", wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "voided without void id", status: domain.PaymentStatusVoided, voidBankOperationKey: "bok-void", wantErr: domain.ErrInvalidBankVoidID},
-		{name: "voided without void operation key", status: domain.PaymentStatusVoided, bankVoidID: "void-1", wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "refunded without capture id", status: domain.PaymentStatusRefunded, captureBankOperationKey: "bok-capture", bankRefundID: "ref-1", refundBankOperationKey: "bok-refund", wantErr: domain.ErrInvalidBankCaptureID},
-		{name: "refunded without capture operation key", status: domain.PaymentStatusRefunded, bankCaptureID: "cap-1", bankRefundID: "ref-1", refundBankOperationKey: "bok-refund", wantErr: domain.ErrInvalidBankOperationKey},
+		{"pending capture id", domain.PaymentStatusPending, "cap-1", "", "", "", "", "", domain.ErrInvalidBankCaptureID},
+		{"expired capture operation key", domain.PaymentStatusExpired, "", "bok-capture", "", "", "", "", domain.ErrInvalidBankOperationKey},
+		{"captured without capture id", domain.PaymentStatusCaptured, "", "bok-capture", "", "", "", "", domain.ErrInvalidBankCaptureID},
+		{"captured without capture operation key", domain.PaymentStatusCaptured, "cap-1", "", "", "", "", "", domain.ErrInvalidBankOperationKey},
+		{"voided capture id", domain.PaymentStatusVoided, "cap-1", "", "", "", "void-1", "bok-void", domain.ErrInvalidBankCaptureID},
+		{"voided without void id", domain.PaymentStatusVoided, "", "", "", "", "", "bok-void", domain.ErrInvalidBankVoidID},
+		{"voided without void operation key", domain.PaymentStatusVoided, "", "", "", "", "void-1", "", domain.ErrInvalidBankOperationKey},
+		{"refunded without capture id", domain.PaymentStatusRefunded, "", "bok-capture", "ref-1", "bok-refund", "", "", domain.ErrInvalidBankCaptureID},
+		{"refunded without capture operation key", domain.PaymentStatusRefunded, "cap-1", "", "ref-1", "bok-refund", "", "", domain.ErrInvalidBankOperationKey},
 	}
 
 	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := domain.LoadPayment(
-				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-				"order-1",
-				"customer-1",
-				1299,
-				domain.CurrencyUSD,
-				tt.status,
-				"auth-1",
-				now.Add(time.Hour),
-				"bok-auth",
-				"fingerprint-1",
-				tt.bankCaptureID,
-				tt.captureBankOperationKey,
-				tt.bankRefundID,
-				tt.refundBankOperationKey,
-				tt.bankVoidID,
-				tt.voidBankOperationKey,
-				"",
-				now,
-				now,
-			)
-
-			assert.ErrorIs(t, err, tt.wantErr)
-		})
-	}
-}
-
-// Verifies that load payment reports the invalid private field.
-func TestLoadPaymentReportsTheInvalidPrivateField(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name                    string
-		status                  domain.PaymentStatus
-		bankCaptureID           string
-		captureBankOperationKey string
-		wantErr                 error
-	}{
-		{name: "pending capture id", status: domain.PaymentStatusPending, bankCaptureID: "cap-1", wantErr: domain.ErrInvalidBankCaptureID},
-		{name: "expired capture operation key", status: domain.PaymentStatusExpired, captureBankOperationKey: "bok-capture", wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "voided capture id", status: domain.PaymentStatusVoided, bankCaptureID: "cap-1", wantErr: domain.ErrInvalidBankCaptureID},
-	}
-
-	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
-		t.Run(tt.name, func(t *testing.T) {
-			bankAuthorizationID := ""
-			authorizationExpiresAt := time.Time{}
-			bankVoidID := ""
-			voidBankOperationKey := ""
-			if tt.status != domain.PaymentStatusPending {
-				bankAuthorizationID = "auth-1"
-				authorizationExpiresAt = now.Add(time.Hour)
+			bankAuthorizationID := "auth-1"
+			authorizationExpiresAt := createdAt.Add(time.Hour)
+			if tt.status == domain.PaymentStatusPending {
+				bankAuthorizationID = ""
+				authorizationExpiresAt = time.Time{}
 			}
-			if tt.status == domain.PaymentStatusVoided {
-				bankVoidID = "void-1"
-				voidBankOperationKey = "bok-void"
-			}
-
-			_, err := domain.LoadPayment(
-				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-				"order-1",
-				"customer-1",
-				1299,
-				domain.CurrencyUSD,
-				tt.status,
-				bankAuthorizationID,
-				authorizationExpiresAt,
-				"bok-auth",
-				"fingerprint-1",
-				tt.bankCaptureID,
-				tt.captureBankOperationKey,
-				"",
-				"",
-				bankVoidID,
-				voidBankOperationKey,
-				"",
-				now,
-				now,
-			)
-
+			_, err := domain.LoadPayment(validPaymentID, "order-1", "customer-1", 1299, domain.CurrencyUSD, tt.status, bankAuthorizationID, authorizationExpiresAt, "bok-auth", "fingerprint-1", tt.bankCaptureID, tt.captureBankOperationKey, tt.bankRefundID, tt.refundBankOperationKey, tt.bankVoidID, tt.voidBankOperationKey, "", createdAt, createdAt)
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }
 
-// Verifies that payment authorization rejects invalid values.
-func TestPaymentAuthorizationRejectsInvalidValues(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	expiresAt := now.Add(time.Hour)
-
+// Pending Payment creation validates every required identity, retry field, and timestamp before
+// the aggregate is initialized.
+func TestNewPendingPaymentRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
-		name                string
-		id                  domain.PaymentID
-		orderID             string
-		customer            string
-		amount              int64
-		bankAuthorizationID string
-		expiresAt           time.Time
-		bok                 string
-		fingerprint         string
-		now                 time.Time
-		wantErr             error
+		name             string
+		id               domain.PaymentID
+		orderID          string
+		customerID       string
+		amountCents      int64
+		bankOperationKey string
+		fingerprint      string
+		now              time.Time
+		wantErr          error
 	}{
-		{name: "payment id without prefix", id: "550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id without uuid", id: "pay_123", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id with undashed uuid", id: "pay_550e8400e29b41d4a716446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "payment id with urn uuid", id: "pay_urn:uuid:550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidPaymentID},
-		{name: "order id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: " ", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidOrderID},
-		{name: "customer id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: " ", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidCustomerID},
-		{name: "amount", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 0, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAmount},
-		{name: "bank authorization id", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: " ", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankAuthorizationID},
-		{name: "authorization expiration", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: time.Time{}, bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidAuthorizationExpirationTime},
-		{name: "bank operation key", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "authorization card fingerprint", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
-		{name: "timestamp", id: "pay_550e8400-e29b-41d4-a716-446655440000", orderID: "order-1", customer: "customer-1", amount: 100, bankAuthorizationID: "bank-auth-id-1", expiresAt: expiresAt, bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
+		{"payment id without prefix", "550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidPaymentID},
+		{"payment id without uuid", "pay_123", "order-1", "customer-1", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidPaymentID},
+		{"payment id with undashed uuid", "pay_550e8400e29b41d4a716446655440000", "order-1", "customer-1", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidPaymentID},
+		{"payment id with urn uuid", "pay_urn:uuid:550e8400-e29b-41d4-a716-446655440000", "order-1", "customer-1", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidPaymentID},
+		{"order id", validPaymentID, " ", "customer-1", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidOrderID},
+		{"customer id", validPaymentID, "order-1", " ", 100, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidCustomerID},
+		{"amount", validPaymentID, "order-1", "customer-1", 0, "bok-auth", "fingerprint-1", createdAt, domain.ErrInvalidAmount},
+		{"bank operation key", validPaymentID, "order-1", "customer-1", 100, " ", "fingerprint-1", createdAt, domain.ErrInvalidBankOperationKey},
+		{"card fingerprint", validPaymentID, "order-1", "customer-1", 100, "bok-auth", " ", createdAt, domain.ErrInvalidAuthorizationCardFingerprint},
+		{"creation timestamp", validPaymentID, "order-1", "customer-1", 100, "bok-auth", "fingerprint-1", time.Time{}, domain.ErrInvalidPaymentTimestamp},
 	}
 
 	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := newAuthorizedPayment(tt.id, tt.orderID, tt.customer, tt.amount, tt.bankAuthorizationID, tt.expiresAt, tt.bok, tt.fingerprint, tt.now)
-			assert.ErrorIs(t, err, tt.wantErr)
-		})
-	}
-}
-
-// Verifies that payment decline rejects invalid values.
-func TestPaymentDeclineRejectsInvalidValues(t *testing.T) {
-	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-
-	tests := []struct {
-		name        string
-		reason      domain.DeclineReason
-		bok         string
-		fingerprint string
-		now         time.Time
-		wantErr     error
-	}{
-		{name: "decline reason", reason: domain.DeclineReason("raw_bank_code"), bok: "bok-1", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidDeclineReason},
-		{name: "bank operation key", reason: domain.DeclineReasonInvalidCard, bok: " ", fingerprint: "fingerprint-1", now: now, wantErr: domain.ErrInvalidBankOperationKey},
-		{name: "authorization card fingerprint", reason: domain.DeclineReasonInvalidCard, bok: "bok-1", fingerprint: " ", now: now, wantErr: domain.ErrInvalidAuthorizationCardFingerprint},
-		{name: "timestamp", reason: domain.DeclineReasonExpiredCard, bok: "bok-1", fingerprint: "fingerprint-1", now: time.Time{}, wantErr: domain.ErrInvalidPaymentTimestamp},
-	}
-
-	for _, tt := range tests {
-		// Verifies the table-defined scenario for this case.
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := newDeclinedPayment(
-				domain.PaymentID("pay_550e8400-e29b-41d4-a716-446655440000"),
-				"order-1",
-				"customer-1",
-				100,
-				tt.reason,
-				tt.bok,
-				tt.fingerprint,
-				tt.now,
-			)
+			_, err := domain.NewPendingPayment(tt.id, tt.orderID, tt.customerID, tt.amountCents, tt.bankOperationKey, tt.fingerprint, tt.now)
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}

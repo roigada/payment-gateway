@@ -516,6 +516,7 @@ func authorizedPayment(t *testing.T, now time.Time) *domain.Payment {
 func capturedPayment(t *testing.T, now time.Time) *domain.Payment {
 	t.Helper()
 	payment := authorizedPayment(t, now)
-	require.NoError(t, payment.MarkCaptured("capture-1", "bok_capture", now))
+	require.NoError(t, payment.SetCaptureBankOperationKey("bok_capture"))
+	require.NoError(t, payment.MarkCaptured("capture-1", now))
 	return payment
 }

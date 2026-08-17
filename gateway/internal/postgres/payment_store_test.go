@@ -280,11 +280,11 @@ func TestPaymentStoreUpdatesVoidedPayment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	insertPaymentFixture(t, db, payment)
+	require.NoError(t, payment.SetVoidBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440002"))
 
 	voidedAt := now.Add(time.Minute)
 	require.NoError(t, payment.MarkVoided(
 		"void_550e8400-e29b-41d4-a716-446655440003",
-		"bok_550e8400-e29b-41d4-a716-446655440002",
 		voidedAt,
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
@@ -445,11 +445,11 @@ func TestPaymentStoreUpdatesCapturedPayment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	insertPaymentFixture(t, db, payment)
+	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440003"))
 
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
 	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
-		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusAuthorized)
@@ -522,18 +522,18 @@ func TestPaymentStoreUpdatesRefundedPayment(t *testing.T) {
 		authorizedAt,
 	)
 	require.NoError(t, err)
+	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440003"))
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
 	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
-		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
 	))
 	insertPaymentFixture(t, db, payment)
+	require.NoError(t, payment.SetRefundBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440005"))
 
 	refundedAt := time.Date(2026, 6, 19, 11, 0, 0, 0, time.UTC)
 	require.NoError(t, payment.MarkRefunded(
 		"ref_550e8400-e29b-41d4-a716-446655440004",
-		"bok_550e8400-e29b-41d4-a716-446655440005",
 		refundedAt,
 	))
 	updatePaymentFixture(t, db, payment, domain.PaymentStatusCaptured)
@@ -571,10 +571,10 @@ func TestPaymentStoreSavesRefundBankOperationKeyWithoutChangingStatus(t *testing
 		authorizedAt,
 	)
 	require.NoError(t, err)
+	require.NoError(t, payment.SetCaptureBankOperationKey("bok_550e8400-e29b-41d4-a716-446655440003"))
 	capturedAt := time.Date(2026, 6, 19, 10, 45, 0, 0, time.UTC)
 	require.NoError(t, payment.MarkCaptured(
 		"cap_550e8400-e29b-41d4-a716-446655440002",
-		"bok_550e8400-e29b-41d4-a716-446655440003",
 		capturedAt,
 	))
 	insertPaymentFixture(t, db, payment)
@@ -1243,7 +1243,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
 	require.NoError(t, err)
 	require.NotNil(t, claim.Payment())
-	require.NoError(t, claim.Payment().MarkCaptured("cap_550e8400-e29b-41d4-a716-446655440000", claim.Payment().CaptureBankOperationKey(), now.Add(time.Minute)))
+	require.NoError(t, claim.Payment().MarkCaptured("cap_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Minute)))
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "capture_payment", "public-capture-key-1")
 	require.NoError(t, err)
 
@@ -1296,25 +1296,25 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 		return payment
 	case domain.PaymentStatusCaptured:
 		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusAuthorized, now)
+		require.NoError(t, payment.SetCaptureBankOperationKey(fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000)))
 		require.NoError(t, payment.MarkCaptured(
 			fmt.Sprintf("cap_00000000-0000-4000-8000-%012d", sequence),
-			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000),
 			now.Add(time.Minute),
 		))
 		return payment
 	case domain.PaymentStatusVoided:
 		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusAuthorized, now)
+		require.NoError(t, payment.SetVoidBankOperationKey(fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000)))
 		require.NoError(t, payment.MarkVoided(
 			fmt.Sprintf("void_00000000-0000-4000-8000-%012d", sequence),
-			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+1000),
 			now.Add(time.Minute),
 		))
 		return payment
 	case domain.PaymentStatusRefunded:
 		payment := newStorePayment(t, sequence, orderID, customerID, domain.PaymentStatusCaptured, now)
+		require.NoError(t, payment.SetRefundBankOperationKey(fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+2000)))
 		require.NoError(t, payment.MarkRefunded(
 			fmt.Sprintf("ref_00000000-0000-4000-8000-%012d", sequence),
-			fmt.Sprintf("bok_00000000-0000-4000-8000-%012d", sequence+2000),
 			now.Add(2*time.Minute),
 		))
 		return payment

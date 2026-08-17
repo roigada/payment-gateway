@@ -157,7 +157,7 @@ A public idempotency record still marked in progress long enough that the gatewa
 _Avoid_: Expired claim, stale payment, timeout
 
 **Bank Operation Key**:
-A gateway-generated operation identity sent to the **Mock Bank** so retried bank calls produce one bank result.
+A gateway-generated operation identity assigned before a **Payment** operation's first call to the **Mock Bank** so retried bank calls produce one bank result. A key is discarded only when the **Payment Status** definitively makes its associated operation impossible.
 _Avoid_: Idempotency Key, request ID
 
 ## Relationships

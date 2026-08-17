@@ -482,15 +482,11 @@ func (p *Payment) MarkDeclined(declineReason DeclineReason, now time.Time) error
 	return nil
 }
 
-func (p *Payment) MarkCaptured(bankCaptureID string, captureBankOperationKey string, now time.Time) error {
+func (p *Payment) MarkCaptured(bankCaptureID string, now time.Time) error {
 	if p.status != PaymentStatusAuthorized {
 		return ErrInvalidPaymentStatus
 	}
 	bankCaptureID, err := normalizeRequired(bankCaptureID, ErrInvalidBankCaptureID)
-	if err != nil {
-		return err
-	}
-	captureBankOperationKey, err = normalizeRequired(captureBankOperationKey, ErrInvalidBankOperationKey)
 	if err != nil {
 		return err
 	}
@@ -500,7 +496,6 @@ func (p *Payment) MarkCaptured(bankCaptureID string, captureBankOperationKey str
 
 	p.status = PaymentStatusCaptured
 	p.bankCaptureID = bankCaptureID
-	p.captureBankOperationKey = captureBankOperationKey
 	p.voidBankOperationKey = ""
 	p.updatedAt = now
 	return nil
@@ -518,15 +513,11 @@ func (p *Payment) SetCaptureBankOperationKey(captureBankOperationKey string) err
 	return nil
 }
 
-func (p *Payment) MarkVoided(bankVoidID string, voidBankOperationKey string, now time.Time) error {
+func (p *Payment) MarkVoided(bankVoidID string, now time.Time) error {
 	if p.status != PaymentStatusAuthorized {
 		return ErrInvalidPaymentStatus
 	}
 	bankVoidID, err := normalizeRequired(bankVoidID, ErrInvalidBankVoidID)
-	if err != nil {
-		return err
-	}
-	voidBankOperationKey, err = normalizeRequired(voidBankOperationKey, ErrInvalidBankOperationKey)
 	if err != nil {
 		return err
 	}
@@ -535,7 +526,6 @@ func (p *Payment) MarkVoided(bankVoidID string, voidBankOperationKey string, now
 	}
 	p.status = PaymentStatusVoided
 	p.bankVoidID = bankVoidID
-	p.voidBankOperationKey = voidBankOperationKey
 	p.captureBankOperationKey = ""
 	p.declineReason = ""
 	p.updatedAt = now
@@ -554,15 +544,11 @@ func (p *Payment) SetVoidBankOperationKey(voidBankOperationKey string) error {
 	return nil
 }
 
-func (p *Payment) MarkRefunded(bankRefundID string, refundBankOperationKey string, now time.Time) error {
+func (p *Payment) MarkRefunded(bankRefundID string, now time.Time) error {
 	if p.status != PaymentStatusCaptured {
 		return ErrInvalidPaymentStatus
 	}
 	bankRefundID, err := normalizeRequired(bankRefundID, ErrInvalidBankRefundID)
-	if err != nil {
-		return err
-	}
-	refundBankOperationKey, err = normalizeRequired(refundBankOperationKey, ErrInvalidBankOperationKey)
 	if err != nil {
 		return err
 	}
@@ -572,7 +558,6 @@ func (p *Payment) MarkRefunded(bankRefundID string, refundBankOperationKey strin
 
 	p.status = PaymentStatusRefunded
 	p.bankRefundID = bankRefundID
-	p.refundBankOperationKey = refundBankOperationKey
 	p.updatedAt = now
 	return nil
 }
