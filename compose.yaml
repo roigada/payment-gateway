@@ -1,0 +1,139 @@
+name: payment-gateway-local
+
+services:
+  gateway-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: payment_gateway
+      POSTGRES_PASSWORD: payment_gateway
+      POSTGRES_DB: payment_gateway
+    volumes:
+      - gateway-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_gateway -d payment_gateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  gateway-migrate:
+    image: migrate/migrate:v4.18.1
+    command:
+      - -path=/migrations
+      - -database=postgres://payment_gateway:payment_gateway@gateway-postgres:5432/payment_gateway?sslmode=disable
+      - up
+    volumes:
+      - ./gateway/migrations:/migrations:ro
+    depends_on:
+      gateway-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  mock-bank-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mockbank
+    volumes:
+      - mock-bank-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mockbank"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  bank-api:
+    build:
+      context: ./mock-bank
+      dockerfile: docker/bank-api/Dockerfile
+    entrypoint: ["/docker-entrypoint.sh"]
+    command: ["go", "run", "./cmd/bank"]
+    environment:
+      DB_HOST: mock-bank-postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: mockbank
+      DB_SSLMODE: disable
+      PORT: "8080"
+      FAILURE_RATE: "0.10"
+      MIN_LATENCY_MS: "100"
+      MAX_LATENCY_MS: "2000"
+      AUTH_EXPIRY_HOURS: "168"
+      LOG_LEVEL: debug
+    ports:
+      - "8787:8080"
+    depends_on:
+      mock-bank-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  payment-gateway:
+    build:
+      context: ./gateway
+    environment:
+      DATABASE_URL: postgres://payment_gateway:payment_gateway@gateway-postgres:5432/payment_gateway?sslmode=disable
+      MOCK_BANK_BASE_URL: http://bank-api:8080
+      FINGERPRINT_SECRET: local-development-fingerprint-secret
+      SERVICE_CREDENTIAL_HMAC_KEY: MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE
+      ORDER_SERVICE_CREDENTIALS: uBebxYmPsqcMQ7WoRZJQBMZ8UaQMrx_r6DJ5UmK2sQA=payments:read+payments:write
+      LOG_LEVEL: debug
+      ADDR: :8080
+      METRICS_ADDR: :9091
+    ports:
+      - "8080:8080"
+      - "9091:9091"
+    depends_on:
+      gateway-migrate:
+        condition: service_completed_successfully
+      bank-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - prometheus-data:/prometheus
+      - ./observability/prometheus:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      payment-gateway:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
+volumes:
+  gateway-postgres-data:
+  mock-bank-postgres-data:
+  prometheus-data:
+  grafana-data:
