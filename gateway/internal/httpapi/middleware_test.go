@@ -13,7 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Verifies that bearer credential.
+// Bearer parsing accepts the scheme case-insensitively but requires exactly one non-empty
+// credential, preventing malformed Authorization values from being treated as credentials.
 func TestBearerCredential(t *testing.T) {
 	for _, tt := range []struct {
 		name, header, credential string
@@ -26,7 +27,6 @@ func TestBearerCredential(t *testing.T) {
 		{name: "missing credential", header: "Bearer", ok: false},
 		{name: "too many fields", header: "Bearer credential extra", ok: false},
 	} {
-		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
 			credential, ok := bearerCredential(tt.header)
 
@@ -36,7 +36,8 @@ func TestBearerCredential(t *testing.T) {
 	}
 }
 
-// Verifies that recover panic writes internal server error before response starts.
+// A panic before headers are committed becomes the standard safe 500 JSON response and tells the
+// client to close the connection.
 func TestRecoverPanicWritesInternalServerErrorBeforeResponseStarts(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
@@ -50,7 +51,8 @@ func TestRecoverPanicWritesInternalServerErrorBeforeResponseStarts(t *testing.T)
 	assert.JSONEq(t, `{"error":{"code":"internal_server_error","message":"Internal Server Error"}}`, rec.Body.String())
 }
 
-// Verifies that recover panic logs recovered panic.
+// Recovery logs enough request and panic context to diagnose a crash without putting those internals
+// in the client response.
 func TestRecoverPanicLogsRecoveredPanic(t *testing.T) {
 	var logs bytes.Buffer
 	handler := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil))).recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +78,8 @@ func TestRecoverPanicLogsRecoveredPanic(t *testing.T) {
 	assert.Contains(t, entry["stack"], "goroutine")
 }
 
-// Verifies that recover panic does not write error after response starts.
+// Once a handler commits a response, recovery cannot replace it with a 500; it preserves the
+// partial response while still closing the connection.
 func TestRecoverPanicDoesNotWriteErrorAfterResponseStarts(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -92,7 +95,8 @@ func TestRecoverPanicDoesNotWriteErrorAfterResponseStarts(t *testing.T) {
 	assert.Equal(t, `{"started":true}`, rec.Body.String())
 }
 
-// Verifies that recover panic repanics err abort handler.
+// http.ErrAbortHandler is Go's control-flow sentinel and must propagate instead of being converted
+// into an application panic response.
 func TestRecoverPanicRepanicsErrAbortHandler(t *testing.T) {
 	handler := newMiddlewareTestServer().recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
@@ -106,7 +110,7 @@ func TestRecoverPanicRepanicsErrAbortHandler(t *testing.T) {
 	})
 }
 
-// Verifies that log request writes info for completed requests.
+// Completed non-server-error requests produce an INFO log with status, duration, and request metadata.
 func TestLogRequestWritesInfoForCompletedRequests(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -133,7 +137,7 @@ func TestLogRequestWritesInfoForCompletedRequests(t *testing.T) {
 	assert.Equal(t, "test-agent", entry["user_agent"])
 }
 
-// Verifies that log request writes error for server errors.
+// Completed 5xx responses are elevated to ERROR so operational failures stand out in request logs.
 func TestLogRequestWritesErrorForServerErrors(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -149,7 +153,8 @@ func TestLogRequestWritesErrorForServerErrors(t *testing.T) {
 	assert.Equal(t, float64(http.StatusInternalServerError), entry["status"])
 }
 
-// Verifies that fallback panic recovery lets request logging observe the failure.
+// Wrapping recovery inside request logging records both the panic diagnostic and the resulting 500
+// request outcome, preserving the complete incident trail.
 func TestFallbackPanicRecoveryLetsRequestLoggingObserveTheFailure(t *testing.T) {
 	var logs bytes.Buffer
 	server := newMiddlewareTestServerWithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -171,7 +176,8 @@ func TestFallbackPanicRecoveryLetsRequestLoggingObserveTheFailure(t *testing.T) 
 	assert.Equal(t, float64(http.StatusInternalServerError), requestEntry["status"])
 }
 
-// Verifies that response recorder keeps first final status.
+// The recorder follows net/http semantics: the first final status wins, so logs reflect what the
+// client actually received.
 func TestResponseRecorderKeepsFirstFinalStatus(t *testing.T) {
 	rec := &responseRecorder{ResponseWriter: httptest.NewRecorder()}
 
