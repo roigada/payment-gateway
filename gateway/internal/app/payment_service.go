@@ -110,9 +110,12 @@ type PaymentResult struct {
 	UpdatedAt              time.Time
 }
 
+// PaymentCommandResult is the protocol-agnostic outcome of a completed payment
+// command. FailureKind is empty when the command succeeded, and otherwise holds
+// the terminal failure kind that completed it.
 type PaymentCommandResult struct {
-	Payment    PaymentResult
-	HTTPStatus int
+	Payment     PaymentResult
+	FailureKind PaymentErrorKind
 }
 
 type PaymentStore interface {
@@ -392,7 +395,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
-		return replayResult, nil
+		return replayPaymentCommand(replayResult)
 	}
 	if claim.Recovered() {
 		s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
@@ -412,10 +415,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 	})
 	if err != nil {
 		if isUnknownAuthorizationOutcome(err) {
-			result = PaymentCommandResult{
-				Payment:    newPaymentResult(payment),
-				HTTPStatus: 202,
-			}
+			result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 			if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 				return PaymentCommandResult{}, ensurePaymentError(err)
 			}
@@ -434,10 +434,7 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 201,
-	}
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -472,7 +469,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
-		return replayResult, nil
+		return replayPaymentCommand(replayResult)
 	}
 	if claim.Recovered() {
 		s.recordIdempotencyRecoveryAttempt(RetryAuthorizationOperation)
@@ -501,10 +498,7 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
-	}
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -539,7 +533,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
-		return replayResult, nil
+		return replayPaymentCommand(replayResult)
 	}
 	if claim.Recovered() {
 		s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
@@ -558,8 +552,8 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				return PaymentCommandResult{}, ensurePaymentError(markErr)
 			}
 			result := PaymentCommandResult{
-				Payment:    newPaymentResult(payment),
-				HTTPStatus: 409,
+				Payment:     newPaymentResult(payment),
+				FailureKind: PaymentErrorAuthorizationExpired,
 			}
 			if completeErr := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); completeErr != nil {
 				return PaymentCommandResult{}, ensurePaymentError(completeErr)
@@ -567,7 +561,9 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 			if claim.Recovered() {
 				s.recordIdempotencyRecoveryCompleted(CapturePaymentOperation)
 			}
-			return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(nil)
+			// Built from the stored kind, exactly as a replay of this record
+			// will build it, so the two cannot drift apart.
+			return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
 		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
@@ -578,10 +574,7 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
-	}
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -616,7 +609,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
-		return replayResult, nil
+		return replayPaymentCommand(replayResult)
 	}
 	if claim.Recovered() {
 		s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
@@ -633,8 +626,8 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 				return PaymentCommandResult{}, ensurePaymentError(markErr)
 			}
 			result := PaymentCommandResult{
-				Payment:    newPaymentResult(payment),
-				HTTPStatus: 409,
+				Payment:     newPaymentResult(payment),
+				FailureKind: PaymentErrorAuthorizationExpired,
 			}
 			if completeErr := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); completeErr != nil {
 				return PaymentCommandResult{}, ensurePaymentError(completeErr)
@@ -642,7 +635,9 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 			if claim.Recovered() {
 				s.recordIdempotencyRecoveryCompleted(VoidPaymentOperation)
 			}
-			return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(nil)
+			// Built from the stored kind, exactly as a replay of this record
+			// will build it, so the two cannot drift apart.
+			return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
 		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
@@ -653,10 +648,7 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
-	}
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -691,7 +683,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 	}
 	replayResult, replayed := claim.ReplayResult()
 	if replayed {
-		return replayResult, nil
+		return replayPaymentCommand(replayResult)
 	}
 	if claim.Recovered() {
 		s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
@@ -713,10 +705,7 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
-	}
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
 	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -768,6 +757,16 @@ func (s *PaymentService) recordIdempotencyRecoveryCompleted(operation string) {
 
 func (s *PaymentService) recordIdempotencyRecoveryFailure(operation string, result string) {
 	s.operationMetrics.RecordIdempotencyRecovery(operation, result)
+}
+
+// replayPaymentCommand reproduces the stored outcome of a completed command so
+// a replay is indistinguishable from the original attempt, including a command
+// that completed as a terminal failure.
+func replayPaymentCommand(result PaymentCommandResult) (PaymentCommandResult, error) {
+	if result.FailureKind == "" {
+		return result, nil
+	}
+	return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
 }
 
 func paymentOperationOutcome(result PaymentCommandResult, err error, replayed bool) string {

@@ -611,7 +611,6 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	)
 	require.NoError(t, err)
 	result := app.PaymentCommandResult{
-		HTTPStatus: 201,
 		Payment: app.PaymentResult{
 			ID:            "pay_550e8400-e29b-41d4-a716-446655440000",
 			OrderID:       "order-1",
@@ -636,7 +635,7 @@ func TestPaymentStorePersistsCompletedDeclinedResult(t *testing.T) {
 	require.NoError(t, err)
 	replayed, ok := saved.ReplayResult()
 	require.True(t, ok)
-	assert.Equal(t, result.HTTPStatus, replayed.HTTPStatus)
+	assert.Empty(t, replayed.FailureKind)
 	assert.Equal(t, result.Payment.ID, replayed.Payment.ID)
 	assert.Equal(t, result.Payment.OrderID, replayed.Payment.OrderID)
 	assert.Equal(t, result.Payment.CustomerID, replayed.Payment.CustomerID)
@@ -678,7 +677,7 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	claim, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	require.NoError(t, claim.Payment().MarkDeclined(domain.DeclineReasonInvalidCard, completedAt))
-	require.NoError(t, store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 201), completedAt))
+	require.NoError(t, store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment()), completedAt))
 
 	var (
 		status      string
@@ -714,6 +713,68 @@ func TestPaymentStoreCleansOnlyCompletedIdempotencyRecordsBeforeCutoff(t *testin
 	err = db.QueryRowContext(ctx, `SELECT count(*) FROM idempotency_records WHERE operation = $1 AND key = $2 AND status = 'in_progress'`, app.AuthorizePaymentOperation, "in-progress-key").Scan(&inProgressCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, inProgressCount)
+}
+
+// A capture that the Mock Bank confirms as expired completes its claim as a terminal failure.
+// The stored failure kind must survive the round trip so a replay reproduces the same failure
+// instead of the Expired Payment snapshot.
+func TestPaymentStoreRoundTripsTerminalFailureOnCompletedCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := testBusinessTime
+
+	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
+	insertPaymentFixture(t, db, payment)
+	request := app.NewCaptureClaimRequest("public-key-1", "fingerprint-1", payment.ID(), "bok_550e8400-e29b-41d4-a716-446655440010", now, testIdempotencyClaimStuckAfter)
+	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
+	require.NoError(t, err)
+	require.NoError(t, claim.Payment().MarkExpired(now))
+
+	result := newStorePaymentCommandResult(claim.Payment())
+	result.FailureKind = app.PaymentErrorAuthorizationExpired
+	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result, now.Add(time.Minute)))
+
+	replayed, err := store.ClaimExistingPaymentCommand(ctx, request)
+	require.NoError(t, err)
+	replayResult, ok := replayed.ReplayResult()
+	require.True(t, ok)
+	assert.Equal(t, app.PaymentErrorAuthorizationExpired, replayResult.FailureKind)
+	assert.Equal(t, string(domain.PaymentStatusExpired), replayResult.Payment.Status)
+}
+
+// Only failures that persisted a Payment transition may complete a claim. Storing a transient
+// kind would replay it for the whole replay window, leaving the caller no way to retry the key.
+func TestPaymentStoreRejectsNonTerminalFailureKindOnCompletion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	db := newTestDatabase(t)
+	store := postgres.NewPaymentStore(db)
+	ctx := context.Background()
+	now := testBusinessTime
+
+	payment := newStorePayment(t, 1, "order-1", "customer-1", domain.PaymentStatusAuthorized, now)
+	insertPaymentFixture(t, db, payment)
+	request := app.NewCaptureClaimRequest("public-key-1", "fingerprint-1", payment.ID(), "bok_550e8400-e29b-41d4-a716-446655440010", now, testIdempotencyClaimStuckAfter)
+	claim, err := store.ClaimExistingPaymentCommand(ctx, request)
+	require.NoError(t, err)
+
+	result := newStorePaymentCommandResult(claim.Payment())
+	result.FailureKind = app.PaymentErrorBankUnavailable
+
+	err = store.CompletePaymentCommand(ctx, claim, result, now.Add(time.Minute))
+	require.Error(t, err)
+	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorInternal))
+
+	var status string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM idempotency_records WHERE operation = $1 AND key = $2`, app.CapturePaymentOperation, "public-key-1").Scan(&status))
+	assert.Equal(t, "in_progress", status, "a rejected completion must leave the claim retryable")
 }
 
 // Verifies that payment store returns in progress error for duplicate claim.
@@ -768,14 +829,14 @@ func TestPaymentStoreRecoversStuckAuthorizationClaimAndCompletesReplay(t *testin
 	assertClaimedAt(t, db, app.AuthorizePaymentOperation, "public-key-1", now)
 
 	require.NoError(t, claim.Payment().MarkAuthorized("auth_550e8400-e29b-41d4-a716-446655440000", now.Add(time.Hour), now))
-	result := newStorePaymentCommandResult(claim.Payment(), 201)
+	result := newStorePaymentCommandResult(claim.Payment())
 	require.NoError(t, store.CompletePaymentCommand(ctx, claim, result, now.Add(time.Minute)))
 
 	replayed, err := store.ClaimAuthorizationStart(ctx, request)
 	require.NoError(t, err)
 	replayResult, ok := replayed.ReplayResult()
 	require.True(t, ok)
-	assert.Equal(t, result.HTTPStatus, replayResult.HTTPStatus)
+	assert.Empty(t, replayResult.FailureKind)
 	assert.Equal(t, result.Payment.ID, replayResult.Payment.ID)
 	assert.Equal(t, result.Payment.OrderID, replayResult.Payment.OrderID)
 	assert.Equal(t, result.Payment.CustomerID, replayResult.Payment.CustomerID)
@@ -1216,7 +1277,7 @@ func TestPaymentStoreCompletionRollsBackAuthorizationTransitionWhenIdempotencyCo
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "authorize_payment", "public-key-1")
 	require.NoError(t, err)
 
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201), now.Add(2*time.Minute))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment), now.Add(2*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -1247,7 +1308,7 @@ func TestPaymentStoreCompletionRollsBackCaptureTransitionWhenIdempotencyCompleti
 	_, err = db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE operation = $1 AND key = $2`, "capture_payment", "public-capture-key-1")
 	require.NoError(t, err)
 
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment(), 200), now.Add(2*time.Minute))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(claim.Payment()), now.Add(2*time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))
@@ -1337,9 +1398,8 @@ func newStorePayment(t *testing.T, sequence int, orderID string, customerID stri
 	}
 }
 
-func newStorePaymentCommandResult(payment *domain.Payment, httpStatus int) app.PaymentCommandResult {
+func newStorePaymentCommandResult(payment *domain.Payment) app.PaymentCommandResult {
 	return app.PaymentCommandResult{
-		HTTPStatus: httpStatus,
 		Payment: app.PaymentResult{
 			ID:                     string(payment.ID()),
 			OrderID:                payment.OrderID(),
@@ -1380,7 +1440,7 @@ func TestPaymentStoreReturnsConflictWhenCompletingUnclaimedCommand(t *testing.T)
 
 	request := app.NewAuthorizationStartClaimRequest("public-key-1", "fingerprint-1", payment, now, testIdempotencyClaimStuckAfter)
 	claim := app.NewClaimedPaymentCommand(request, payment)
-	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment, 201), now.Add(time.Minute))
+	err = store.CompletePaymentCommand(ctx, claim, newStorePaymentCommandResult(payment), now.Add(time.Minute))
 
 	require.Error(t, err)
 	assert.True(t, app.HasPaymentErrorKind(err, app.PaymentErrorIdempotencyConflict))

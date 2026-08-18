@@ -194,7 +194,7 @@ func (r *PaymentStore) CompletePaymentCommand(ctx context.Context, claim app.Pay
 	if err := persistPaymentTransition(ctx, tx, claim.Payment(), claim.ExpectedStatus()); err != nil {
 		return err
 	}
-	if err := completeIdempotencyRecord(ctx, tx, claim, result.HTTPStatus, paymentResult, completedAt); err != nil {
+	if err := completeIdempotencyRecord(ctx, tx, claim, result.FailureKind, paymentResult, completedAt); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -446,7 +446,7 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 	var (
 		record      idempotencyRecord
 		paymentData []byte
-		httpStatus  sql.NullInt64
+		failureKind sql.NullString
 		paymentID   sql.NullString
 		claimedAt   time.Time
 	)
@@ -455,7 +455,7 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 		`SELECT request_fingerprint,
 		        payment_id,
 		        status,
-		        http_status,
+		        failure_kind,
 		        payment_result,
 		        claimed_at
 		   FROM idempotency_records
@@ -463,7 +463,7 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 		    AND key = $2`,
 		operation,
 		key,
-	).Scan(&record.requestFingerprint, &paymentID, &record.status, &httpStatus, &paymentData, &claimedAt)
+	).Scan(&record.requestFingerprint, &paymentID, &record.status, &failureKind, &paymentData, &claimedAt)
 	if err != nil {
 		return idempotencyRecord{}, err
 	}
@@ -477,9 +477,13 @@ func selectIdempotencyRecord(ctx context.Context, tx *sql.Tx, operation string, 
 		if err != nil {
 			return idempotencyRecord{}, err
 		}
+		storedKind := app.PaymentErrorKind(nullStringValue(failureKind))
+		if storedKind != "" && !app.IsTerminalFailureKind(storedKind) {
+			return idempotencyRecord{}, errors.New("stored idempotency failure kind is not terminal: " + string(storedKind))
+		}
 		record.result = app.PaymentCommandResult{
-			Payment:    paymentResult,
-			HTTPStatus: int(httpStatus.Int64),
+			Payment:     paymentResult,
+			FailureKind: storedKind,
 		}
 	}
 	return record, nil
@@ -701,12 +705,18 @@ func persistPaymentTransition(ctx context.Context, tx *sql.Tx, payment *domain.P
 	return nil
 }
 
-func completeIdempotencyRecord(ctx context.Context, tx *sql.Tx, claim app.PaymentCommandClaim, httpStatus int, paymentResult []byte, completedAt time.Time) error {
+func completeIdempotencyRecord(ctx context.Context, tx *sql.Tx, claim app.PaymentCommandClaim, failureKind app.PaymentErrorKind, paymentResult []byte, completedAt time.Time) error {
+	// Only failures that persisted a Payment transition may complete a claim.
+	// Storing a transient kind would replay it for the whole replay window and
+	// leave the caller no way to retry the idempotency key.
+	if failureKind != "" && !app.IsTerminalFailureKind(failureKind) {
+		return app.NewInternalPaymentError(errors.New("payment command failure kind is not terminal: " + string(failureKind)))
+	}
 	completion, err := tx.ExecContext(
 		ctx,
 		`UPDATE idempotency_records
 		    SET status = 'completed',
-		        http_status = $4,
+		        failure_kind = $4,
 		        payment_result = $5::jsonb,
 		        completed_at = $6
 		  WHERE operation = $1
@@ -716,7 +726,7 @@ func completeIdempotencyRecord(ctx context.Context, tx *sql.Tx, claim app.Paymen
 		claim.Operation(),
 		claim.Key(),
 		claim.RequestFingerprint(),
-		httpStatus,
+		nullableString(string(failureKind)),
 		string(paymentResult),
 		completedAt,
 	)

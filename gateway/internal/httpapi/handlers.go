@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 const (
@@ -86,8 +87,16 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A Payment left pending means the authorization outcome is not yet known
+	// and the command was accepted for later resolution; any other status is a
+	// created Payment.
+	status := http.StatusCreated
+	if result.Payment.Status == string(domain.PaymentStatusPending) {
+		status = http.StatusAccepted
+	}
+
 	w.Header().Set("Location", "/api/v1/payments/"+url.PathEscape(result.Payment.ID))
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, status, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +152,7 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +188,7 @@ func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +224,7 @@ func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +260,7 @@ func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {

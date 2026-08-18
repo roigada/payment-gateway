@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
@@ -616,8 +617,7 @@ func TestPostPaymentsReturnsAcceptedPendingPaymentWithLocation(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		return app.PaymentCommandResult{
-			Payment:    newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000"),
-			HTTPStatus: http.StatusAccepted,
+			Payment: newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000"),
 		}, nil
 	}
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
@@ -1327,7 +1327,7 @@ func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command a
 		panic(f.authorizePaymentPanic)
 	}
 	f.authorizePaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.authorizePaymentResult, HTTPStatus: http.StatusCreated}, f.authorizePaymentErr
+	return app.PaymentCommandResult{Payment: f.authorizePaymentResult}, f.authorizePaymentErr
 }
 
 func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
@@ -1336,7 +1336,7 @@ func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command a
 		panic(f.retryAuthorizationPanic)
 	}
 	f.retryAuthorizationCommand = command
-	return app.PaymentCommandResult{Payment: f.retryAuthorizationResult, HTTPStatus: http.StatusOK}, f.retryAuthorizationErr
+	return app.PaymentCommandResult{Payment: f.retryAuthorizationResult}, f.retryAuthorizationErr
 }
 
 func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
@@ -1345,19 +1345,19 @@ func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.C
 		panic(f.capturePaymentPanic)
 	}
 	f.capturePaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.capturePaymentResult, HTTPStatus: http.StatusOK}, f.capturePaymentErr
+	return app.PaymentCommandResult{Payment: f.capturePaymentResult}, f.capturePaymentErr
 }
 
 func (f *paymentApplicationFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
 	f.voidPaymentCalls++
 	f.voidPaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.voidPaymentResult, HTTPStatus: http.StatusOK}, f.voidPaymentErr
+	return app.PaymentCommandResult{Payment: f.voidPaymentResult}, f.voidPaymentErr
 }
 
 func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
 	f.refundPaymentCalls++
 	f.refundPaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
+	return app.PaymentCommandResult{Payment: f.refundPaymentResult}, f.refundPaymentErr
 }
 
 func (f *paymentApplicationFake) GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
@@ -1445,7 +1445,7 @@ func newDeclinedPayment(id string) app.PaymentResult {
 
 func newPendingPayment(id string) app.PaymentResult {
 	payment := newPayment(id)
-	payment.Status = "pending"
+	payment.Status = string(domain.PaymentStatusPending)
 	return payment
 }
 
