@@ -29,7 +29,7 @@ A **Payment** whose full **Amount** has been reserved by the **Mock Bank** and c
 _Avoid_: Approved, held
 
 **Expired**:
-A **Payment** whose authorization was approved by the **Mock Bank** but can no longer be captured or voided because its authorization hold expired.
+A **Payment** whose authorization was approved by the **Mock Bank** and for which the **Mock Bank** has definitively confirmed that the authorization can no longer be captured or voided because its hold expired. The stored **Authorization Expiration Time** predicts this outcome but does not itself transition the **Payment** to Expired.
 _Avoid_: Timed out, stale, failed
 
 **Declined**:
@@ -37,7 +37,7 @@ A **Payment** whose authorization was refused by the **Mock Bank**.
 _Avoid_: Rejected, failed
 
 **Decline Reason**:
-A gateway-owned explanation for a **Declined** **Payment**.
+A gateway-owned explanation for a **Declined** **Payment**, such as insufficient funds or an expired card.
 _Avoid_: Bank error, failure reason
 
 **Captured**:
@@ -59,6 +59,10 @@ _Avoid_: State
 **Payment Status Conflict**:
 A command outcome where the requested payment operation is valid in shape but not allowed by the current **Payment Status**.
 _Avoid_: Invalid status conflict, transition error
+
+**Bank State Conflict**:
+A command outcome where the **Mock Bank** definitively disagrees with bank references or the **Amount** stored for a **Payment**. It is not a caller input error.
+_Avoid_: Invalid input, bank failure, payment status conflict
 
 **Order ID**:
 The identity of the order that a **Payment** belongs to. The payment gateway treats it as an external reference owned by the order service.
@@ -148,12 +152,28 @@ _Avoid_: Duplicate operation, cached request
 The 24-hour period after a payment command completes during which the gateway guarantees an **Idempotency Replay** for the same operation, **Idempotency Key**, and request values. After this window, the same key may initiate a new payment command.
 _Avoid_: Cache TTL, key lifetime, deduplication window
 
+**Payment Command Claim**:
+The gateway's exclusive hold on one operation and **Idempotency Key** for the duration of a payment command attempt. A claim is completed or released; it is never left open by a finished attempt.
+_Avoid_: Lock, reservation, transaction
+
+**Payment Command Outcome**:
+What a completed payment command did, recorded as the resulting **Payment** snapshot and, for a failed command, its **Terminal Failure**. It is protocol-agnostic and contains no HTTP status, so any public interface derives its own response from it.
+_Avoid_: Response, status code, cached response
+
+**Terminal Failure**:
+A payment command failure that persisted a **Payment Status** transition and therefore completed its **Payment Command Claim**, such as a **Capture** or **Void** meeting a **Mock Bank** confirmation that the authorization is **Expired**. An **Idempotency Replay** reproduces the same failure. Failures that changed nothing are not terminal.
+_Avoid_: Fatal error, permanent error, hard failure
+
+**Idempotency Claim Release**:
+The discarding of a **Payment Command Claim** by an attempt that persisted no **Payment Status** transition, which leaves the **Idempotency Key** free to drive a genuine new attempt rather than an **Idempotency Replay**.
+_Avoid_: Rollback, cancel, unlock
+
 **Stuck Idempotency Claim**:
 A public idempotency record still marked in progress long enough that the gateway treats the original command attempt as no longer active and may let the same operation, same **Idempotency Key**, and same request values continue recovery.
 _Avoid_: Expired claim, stale payment, timeout
 
 **Bank Operation Key**:
-A gateway-generated operation identity sent to the **Mock Bank** so retried bank calls produce one bank result.
+A gateway-generated operation identity assigned before a **Payment** operation's first call to the **Mock Bank** so retried bank calls produce one bank result. A key is discarded only when the **Payment Status** definitively makes its associated operation impossible.
 _Avoid_: Idempotency Key, request ID
 
 ## Relationships

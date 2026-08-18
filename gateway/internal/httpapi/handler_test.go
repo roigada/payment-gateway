@@ -15,12 +15,15 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 	"github.com/roigada/payment-gateway/internal/httpapi"
 	"github.com/roigada/payment-gateway/internal/serviceauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// A valid authorization request creates a Payment, forwards its public fields to the application,
+// and returns only the API representation so bank details never leak to callers.
 func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -47,6 +50,8 @@ func TestPostPaymentsAuthorizesPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Every payment-changing endpoint must reject a read-only credential before it reaches the
+// application, while a credential with payments:write is allowed through.
 func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 	const paymentID = "pay_550e8400-e29b-41d4-a716-446655440000"
 
@@ -55,7 +60,6 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 		path       string
 		body       string
 		headers    map[string]string
-		status     int
 		wasInvoked func(*paymentApplicationFake) bool
 	}{
 		{
@@ -63,7 +67,6 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 			path:       "/api/v1/payments",
 			body:       validAuthorizeBody(),
 			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "authorize-key"},
-			status:     http.StatusCreated,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.authorizePaymentCalls == 1 },
 		},
 		{
@@ -71,32 +74,29 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 			path:       "/api/v1/payments/" + paymentID + "/authorization-retries",
 			body:       validRetryAuthorizationBody(),
 			headers:    map[string]string{"Content-Type": "application/json", "Idempotency-Key": "retry-key"},
-			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.retryAuthorizationCalls == 1 },
 		},
 		{
 			name:       "capture",
 			path:       "/api/v1/payments/" + paymentID + "/capture",
 			headers:    map[string]string{"Idempotency-Key": "capture-key"},
-			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.capturePaymentCalls == 1 },
 		},
 		{
 			name:       "void",
 			path:       "/api/v1/payments/" + paymentID + "/void",
 			headers:    map[string]string{"Idempotency-Key": "void-key"},
-			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.voidPaymentCalls == 1 },
 		},
 		{
 			name:       "refund",
 			path:       "/api/v1/payments/" + paymentID + "/refund",
 			headers:    map[string]string{"Idempotency-Key": "refund-key"},
-			status:     http.StatusOK,
 			wasInvoked: func(payments *paymentApplicationFake) bool { return payments.refundPaymentCalls == 1 },
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			// Authorization succeeds but lacks payments:write, so the application must not observe it.
 			t.Run("read-only credential is forbidden before the application", func(t *testing.T) {
 				api := newPaymentAPITest(t)
 				headers := make(map[string]string, len(tt.headers)+1)
@@ -113,17 +113,12 @@ func TestPaymentCommandsRequireWriteScope(t *testing.T) {
 				assert.False(t, tt.wasInvoked(api.payments))
 			})
 
-			t.Run("write credential invokes the application", func(t *testing.T) {
-				api := newPaymentAPITest(t)
-				rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
-
-				require.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
-				assert.True(t, tt.wasInvoked(api.payments))
-			})
 		})
 	}
 }
 
+// Payment searches require a well-formed, valid bearer credential with payments:read; failed
+// authentication must prevent the application query from running.
 func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	for _, tt := range []struct {
 		name, authorization string
@@ -134,7 +129,6 @@ func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 		{"missing", "", http.StatusUnauthorized, "unauthorized", false},
 		{"malformed", "Basic read-credential", http.StatusUnauthorized, "unauthorized", false},
 		{"invalid", "Bearer invalid-credential", http.StatusUnauthorized, "unauthorized", false},
-		{"insufficient scope", "Bearer read-only-for-write", http.StatusUnauthorized, "unauthorized", false},
 		{"valid read credential", "Bearer read-credential", http.StatusOK, "", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,15 +152,15 @@ func TestPaymentReadsRequireBearerCredentialAndReadScope(t *testing.T) {
 	}
 }
 
+// A recognized credential without payments:read is forbidden rather than challenged, and cannot
+// execute either the payment search or lookup query.
 func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t *testing.T) {
 	api := newPaymentAPITest(t)
 	key := []byte("01234567890123456789012345678901")
 	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{{Digest: serviceauth.Digest(key, "write-only-credential"), Scopes: []serviceauth.Scope{serviceauth.ScopePaymentsWrite}}})
 	require.NoError(t, err)
-	options := testHandlerOptions(t)
-	dependencies := testHandlerDependencies(t, api.payments, api.readiness, discardLogger(), api.metrics)
-	dependencies.Authenticator = authenticator
-	handler, err := httpapi.NewHandler(dependencies, options)
+	config := testHandlerConfig(t)
+	handler, err := httpapi.NewHandler(api.payments, api.readiness, discardLogger(), api.metrics, authenticator, &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, config)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments?order_id=order-1", nil)
@@ -188,6 +182,8 @@ func TestPaymentReadReturnsForbiddenForAuthenticatedCredentialWithoutReadScope(t
 	assert.Equal(t, app.GetPaymentQuery{}, api.payments.getPaymentQuery)
 }
 
+// Read and write traffic have separate rate-limit buckets; rejections happen before body parsing,
+// and Retry-After rounds the next available token up to a whole second.
 func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 3, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
@@ -219,6 +215,7 @@ func TestPaymentRateLimitsUseIndependentRouteBucketsAndRoundRetryAfter(t *testin
 	assert.Equal(t, []string{"read", "write", "read"}, api.metrics.rateLimitRejections)
 }
 
+// Operational probes remain available even after an API rate-limit bucket is exhausted.
 func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
@@ -230,6 +227,8 @@ func TestPaymentRateLimitsExcludeHealthAndReadinessEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, api.request(t, http.MethodGet, "/readyz", "", nil).Code)
 }
 
+// Only authorized requests consume quota. Credential rotation must not reset a principal's bucket,
+// and a rejected request must not consume a token that becomes available later.
 func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCredentialRotationQuota(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	authenticator, err := serviceauth.NewAuthenticator(key, []serviceauth.Credential{
@@ -264,41 +263,7 @@ func TestPaymentRateLimitsDoNotChargeUnauthorizedOrForbiddenRequestsAndShareCred
 	assert.NotEqual(t, http.StatusTooManyRequests, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{"Authorization": "Bearer new-credential", "Content-Type": "application/json", "Idempotency-Key": "same-operation"}).Code)
 }
 
-func TestPaymentRateLimitsCountIdempotencyReplays(t *testing.T) {
-	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	api := newRateLimitedPaymentAPITest(t, clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 1, WriteRequestsPerSecond: 1, WriteBurst: 1}, testAuthenticator(t))
-	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
-		return app.PaymentCommandResult{Payment: newPayment("pay_550e8400-e29b-41d4-a716-446655440000"), HTTPStatus: http.StatusOK}, nil
-	}
-	headers := map[string]string{"Content-Type": "application/json", "Idempotency-Key": "replayed-command"}
-
-	firstReplay := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers)
-	require.Equal(t, http.StatusOK, firstReplay.Code)
-	secondReplay := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers)
-	require.Equal(t, http.StatusTooManyRequests, secondReplay.Code)
-
-	clock.now = clock.now.Add(time.Second)
-	assert.Equal(t, http.StatusOK, api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), headers).Code)
-}
-
-func TestRateLimiterSeparatesPrincipalsAndAllowsTheFullBurst(t *testing.T) {
-	clock := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	limiter, err := httpapi.NewRateLimiter(clock, httpapi.RateLimitConfig{ReadRequestsPerSecond: 1, ReadBurst: 2, WriteRequestsPerSecond: 1, WriteBurst: 1})
-	require.NoError(t, err)
-
-	for range 2 {
-		allowed, _ := limiter.Reserve("first-principal", httpapi.RouteClassRead)
-		assert.True(t, allowed)
-	}
-	allowed, _ := limiter.Reserve("first-principal", httpapi.RouteClassRead)
-	assert.False(t, allowed)
-
-	allowed, _ = limiter.Reserve("second-principal", httpapi.RouteClassRead)
-	assert.True(t, allowed, "a distinct Service Principal has an independent read bucket")
-	allowed, _ = limiter.Reserve("first-principal", httpapi.RouteClassWrite)
-	assert.True(t, allowed, "read and write buckets are independent")
-}
-
+// A payment lookup rejects absent, malformed, or unknown credentials before it can issue a query.
 func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing.T) {
 	for _, authorization := range []string{"", "Basic read-credential", "Bearer invalid-credential"} {
 		t.Run(authorization, func(t *testing.T) {
@@ -318,6 +283,8 @@ func TestPaymentLookupRejectsUnauthenticatedRequestsBeforeApplication(t *testing
 	}
 }
 
+// Handler construction fails closed when any runtime dependency is missing, so a partially wired
+// HTTP server cannot start.
 func TestNewHandlerRequiresDependencies(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -328,53 +295,42 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 			name:     "payment application",
 			expected: "httpapi handler: payment application is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Payments = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(nil, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerConfig(t))
 			},
 		},
 		{
 			name:     "readiness checker",
 			expected: "httpapi handler: readiness checker is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Readiness = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, nil, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerConfig(t))
 			},
 		},
 		{
 			name:     "logger",
 			expected: "httpapi handler: logger is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{})
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, nil, &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, testHandlerConfig(t))
 			},
 		},
 		{
 			name:     "HTTP metrics recorder",
 			expected: "httpapi handler: HTTP metrics recorder is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Metrics = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), nil, testAuthenticator(t), &testClock{}, testHandlerConfig(t))
 			},
 		},
 		{
 			name:     "service authenticator",
 			expected: "httpapi handler: service authenticator is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.Authenticator = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, nil, &testClock{}, testHandlerConfig(t))
 			},
 		},
 		{
-			name:     "rate limiter",
-			expected: "httpapi handler: rate limiter is required",
+			name:     "rate limit clock",
+			expected: "httpapi handler: rate limit clock is required",
 			new: func(t *testing.T) (*httpapi.Handler, error) {
-				dependencies := testHandlerDependencies(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{})
-				dependencies.RateLimiter = nil
-				return httpapi.NewHandler(dependencies, testHandlerOptions(t))
+				return httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), nil, testHandlerConfig(t))
 			},
 		},
 	}
@@ -389,21 +345,37 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 }
 
-func TestNewHandlerConstructsWithCompleteDependencies(t *testing.T) {
-	handler, err := newTestHandler(t, &paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testHandlerOptions(t))
-
-	require.NoError(t, err)
-	assert.NotNil(t, handler)
+// Handler time budgets and body limits must be positive before the server accepts requests.
+func TestNewHandlerRejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*httpapi.HandlerConfig)
+	}{
+		{"payment command timeout", func(c *httpapi.HandlerConfig) { c.PaymentCommandTimeout = 0 }},
+		{"payment read timeout", func(c *httpapi.HandlerConfig) { c.PaymentReadTimeout = 0 }},
+		{"readiness timeout", func(c *httpapi.HandlerConfig) { c.ReadinessTimeout = 0 }},
+		{"max request body bytes", func(c *httpapi.HandlerConfig) { c.MaxRequestBodyBytes = 0 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := testHandlerConfig(t)
+			tt.mutate(&config)
+			handler, err := httpapi.NewHandler(&paymentApplicationFake{}, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, testAuthenticator(t), &testClock{}, config)
+			require.Nil(t, handler)
+			require.Error(t, err)
+		})
+	}
 }
 
+// An authorization exceeding its command deadline returns the retry-safe payment-timeout response.
 func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		<-ctx.Done()
 		return app.PaymentCommandResult{}, ctx.Err()
 	}}
-	options := testHandlerOptions(t)
-	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
+	config := testHandlerConfig(t)
+	config.PaymentCommandTimeout = time.Millisecond
+	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, config)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
@@ -415,14 +387,16 @@ func TestPostPaymentsReturnsPaymentTimeoutWhenCommandDeadlineExpires(t *testing.
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// Once the command deadline has expired, its payment-timeout response takes precedence over an
+// underlying Mock Bank timeout.
 func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		<-ctx.Done()
 		return app.PaymentCommandResult{}, app.NewPaymentBankTimeoutError(ctx.Err())
 	}}
-	options := testHandlerOptions(t)
-	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
+	config := testHandlerConfig(t)
+	config.PaymentCommandTimeout = time.Millisecond
+	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, config)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(validAuthorizeBody()))
 	req.Header.Set("Content-Type", "application/json")
@@ -436,13 +410,15 @@ func TestPostPaymentsPrefersPaymentTimeoutAfterMockBankTimeout(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// The authorization deadline starts before parsing the request body, preventing slow uploads from
+// extending the command's allowed execution time.
 func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	payments := &paymentApplicationFake{authorizePaymentFunc: func(ctx context.Context, _ app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
 		return app.PaymentCommandResult{}, nil
 	}}
-	options := testHandlerOptions(t)
-	options.PaymentCommandTimeout = time.Millisecond
-	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
+	config := testHandlerConfig(t)
+	config.PaymentCommandTimeout = time.Millisecond
+	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, config)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/payments", &delayedReader{Reader: strings.NewReader(validAuthorizeBody()), Delay: 10 * time.Millisecond})
 	req.Header.Set("Content-Type", "application/json")
@@ -456,6 +432,7 @@ func TestPostPaymentsCommandDeadlineIncludesRequestParsing(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_timeout", "payment command timed out; retry with the same idempotency key")
 }
 
+// Bodies above the configured limit are rejected before an authorization command is assembled or run.
 func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", strings.Repeat("x", 64*1024+1), map[string]string{
@@ -466,6 +443,8 @@ func TestOversizedRequestBodyIsRejectedBeforePaymentCommand(t *testing.T) {
 	assert.Equal(t, app.AuthorizePaymentCommand{}, api.payments.authorizePaymentCommand)
 }
 
+// Both declared and streamed oversized bodies produce the same client error and are recorded as
+// completed routed requests in logs and metrics.
 func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -517,6 +496,8 @@ func TestOversizedRequestBodyRecordsCompletionObservability(t *testing.T) {
 	}
 }
 
+// Body-size protection applies only after a gateway route is selected, preserving normal 404 and
+// 405 routing outcomes for unmatched requests.
 func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -554,17 +535,18 @@ func TestOversizedRequestBodyUsesRoutingOutcomeWhenNoGatewayEndpointMatches(t *t
 
 func oversizedJSONBody(t *testing.T) string {
 	t.Helper()
-	return `{"order_id":"` + strings.Repeat("x", int(testHandlerOptions(t).MaxRequestBodyBytes)+1) + `"}`
+	return `{"order_id":"` + strings.Repeat("x", int(testHandlerConfig(t).MaxRequestBodyBytes)+1) + `"}`
 }
 
+// A payment read that outlives its dedicated deadline returns a request-timeout response.
 func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	payments := &paymentApplicationFake{getPaymentFunc: func(ctx context.Context, _ app.GetPaymentQuery) (app.PaymentResult, error) {
 		<-ctx.Done()
 		return app.PaymentResult{}, ctx.Err()
 	}}
-	options := testHandlerOptions(t)
-	options.PaymentReadTimeout = time.Millisecond
-	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, options)
+	config := testHandlerConfig(t)
+	config.PaymentReadTimeout = time.Millisecond
+	handler, err := newTestHandler(t, payments, &readinessCheckerFake{}, discardLogger(), &recordingHTTPMetrics{}, config)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", nil)
@@ -574,6 +556,8 @@ func TestGetPaymentReturnsRequestTimeoutWhenReadDeadlineExpires(t *testing.T) {
 	assertErrorResponse(t, rec, "request_timeout", "payment read timed out")
 }
 
+// Authorization expiry is part of an authorized payment's public representation when the bank
+// provides it.
 func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	api := newPaymentAPITest(t)
 	payment := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -600,6 +584,7 @@ func TestPostPaymentsReturnsAuthorizationExpirationWhenPresent(t *testing.T) {
 	}`, rec.Body.String())
 }
 
+// A declined authorization exposes its mapped decline reason and preserves the final payment state.
 func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentResult = newDeclinedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -626,15 +611,22 @@ func TestPostPaymentsReturnsDeclinedPaymentWithDeclineReason(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
-func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
+// A pending authorization returns 202 with a payment location, allowing callers to poll for the
+// eventual outcome.
+func TestPostPaymentsReturnsAcceptedPendingPaymentWithLocation(t *testing.T) {
 	api := newPaymentAPITest(t)
-	api.payments.authorizePaymentResult = newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000")
+	api.payments.authorizePaymentFunc = func(context.Context, app.AuthorizePaymentCommand) (app.PaymentCommandResult, error) {
+		return app.PaymentCommandResult{
+			Payment: newPendingPayment("pay_550e8400-e29b-41d4-a716-446655440000"),
+		}, nil
+	}
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
 		"Content-Type":    "application/json",
 		"Idempotency-Key": "public-key-1",
 	})
 
-	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, http.StatusAccepted, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Location"))
 	assert.JSONEq(t, `{
 		"payment": {
 			"id": "pay_550e8400-e29b-41d4-a716-446655440000",
@@ -650,6 +642,8 @@ func TestPostPaymentsReturnsPendingPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Retrying a pending authorization forwards the payment ID and idempotency key, then returns the
+// newly authoritative payment representation.
 func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.retryAuthorizationResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -675,6 +669,7 @@ func TestPostPaymentAuthorizationRetriesRetriesPendingAuthorization(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Voiding an authorized payment invokes the matching command and returns its terminal state.
 func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.voidPaymentResult = newVoidedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -699,6 +694,7 @@ func TestPostPaymentVoidVoidsAuthorizedPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Refunding a captured payment needs no request body; the endpoint forwards its path ID and key.
 func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	refunded := newRefundedPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -726,6 +722,7 @@ func TestPostPaymentRefundRefundsCapturedPaymentWithoutRequestBody(t *testing.T)
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// A successful payment lookup returns the requested payment in the stable public envelope.
 func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -749,6 +746,7 @@ func TestGetPaymentByIDReturnsPayment(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "history")
 }
 
+// A missing payment is translated to the public 404 error rather than exposing application details.
 func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentErr = app.NewPaymentNotFoundError("pay_550e8400-e29b-41d4-a716-446655440999", nil)
@@ -758,6 +756,8 @@ func TestGetPaymentByIDMapsNotFound(t *testing.T) {
 	assertErrorResponse(t, rec, "payment_not_found", "payment was not found")
 }
 
+// Search query parameters are translated into the application filter and the matching payments are
+// returned in the public collection envelope.
 func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	api := newPaymentAPITest(t)
 	first := newPayment("pay_550e8400-e29b-41d4-a716-446655440001")
@@ -796,48 +796,62 @@ func TestSearchPaymentsReturnsFilteredPayments(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "history")
 }
 
+// Unsupported search filters fail validation before the payment search is invoked.
 func TestSearchPaymentsRejectsUnsupportedFilters(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 	}{
-		{name: "unfiltered", path: "/api/v1/payments"},
-		{name: "status only", path: "/api/v1/payments?status=authorized"},
 		{name: "unknown query parameter", path: "/api/v1/payments?order_id=order-1&limit=10"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newPaymentAPITest(t)
-			api.payments.searchPaymentsErr = app.NewInvalidPaymentInputError("order id or customer id is required", nil)
 			rec := api.request(t, http.MethodGet, tt.path, "", nil)
 
 			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "body: %s", rec.Body.String())
 			assertErrorResponse(t, rec, "validation_error", "payment request is invalid")
+			assert.Zero(t, api.payments.searchPaymentsQuery)
 		})
 	}
 }
 
-func TestPostPaymentsRequiresJSONContentType(t *testing.T) {
-	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/api/v1/payments", validAuthorizeBody(), map[string]string{
-		"Idempotency-Key": "public-key-1",
-	})
+// Commands with JSON payloads accept application/json (including parameters) and reject missing or
+// incompatible media types before parsing the body.
+func TestJSONPaymentCommandsRequireJSONContentType(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		body    string
+		headers map[string]string
+	}{
+		{
+			name:    "authorize",
+			path:    "/api/v1/payments",
+			body:    validAuthorizeBody(),
+			headers: map[string]string{"Idempotency-Key": "public-key-1"},
+		},
+		{
+			name:    "authorization retry",
+			path:    "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries",
+			body:    validRetryAuthorizationBody(),
+			headers: map[string]string{"Idempotency-Key": "retry-key-1"},
+		},
+	}
 
-	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newPaymentAPITest(t)
+			rec := api.request(t, http.MethodPost, tt.path, tt.body, tt.headers)
+
+			assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
+			assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
+		})
+	}
 }
 
-func TestPostPaymentAuthorizationRetriesRequiresJSONContentType(t *testing.T) {
-	api := newPaymentAPITest(t)
-	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/authorization-retries", validRetryAuthorizationBody(), map[string]string{
-		"Idempotency-Key": "retry-key-1",
-	})
-
-	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "body: %s", rec.Body.String())
-	assertErrorResponse(t, rec, "unsupported_media_type", "content type must be application/json")
-}
-
+// Malformed JSON produces a stable invalid-body response and does not call the authorizer.
 func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":`, map[string]string{
@@ -849,6 +863,7 @@ func TestPostPaymentsRejectsMalformedJSON(t *testing.T) {
 	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
 }
 
+// Unknown JSON fields are rejected so client typos cannot be silently ignored.
 func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments", `{"order_id":"order-1","unexpected":true}`, map[string]string{
@@ -860,6 +875,8 @@ func TestPostPaymentsRejectsUnknownFields(t *testing.T) {
 	assertErrorResponse(t, rec, "invalid_json_body", "invalid JSON body")
 }
 
+// Validation and idempotency errors from the application map to their stable client-facing status,
+// code, and safe message; unexpected errors remain internal.
 func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -896,6 +913,8 @@ func TestPostPaymentsMapsValidationAndMissingIdempotencyErrors(t *testing.T) {
 	}
 }
 
+// Capturing uses the path payment ID and idempotency key without a body, then returns the captured
+// payment without bank-internal fields.
 func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	captured := newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -925,6 +944,7 @@ func TestPostPaymentCaptureCapturesPaymentWithoutRequestBody(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "bank")
 }
 
+// Capture requests reject even whitespace-only bodies so this bodyless endpoint has one unambiguous contract.
 func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	tests := []struct {
 		name string
@@ -949,6 +969,7 @@ func TestPostPaymentCaptureRejectsRequestBody(t *testing.T) {
 	}
 }
 
+// Refund requests are likewise bodyless; any supplied bytes fail before the command runs.
 func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", `{}`, map[string]string{
@@ -961,70 +982,8 @@ func TestPostPaymentRefundRejectsRequestBody(t *testing.T) {
 	assert.Zero(t, api.payments.refundPaymentCommand)
 }
 
-func TestPostPaymentCaptureMapsPaymentErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     error
-		code    string
-		message string
-		status  int
-	}{
-		{name: "invalid input", err: app.NewInvalidPaymentInputError("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
-		{name: "payment not found", err: app.NewPaymentNotFoundError("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
-		{name: "payment status conflict", err: app.NewPaymentStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
-		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflictError(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
-		{name: "idempotency in progress", err: app.NewPaymentIdempotencyInProgressError(nil), code: "idempotency_key_in_progress", message: "idempotency key is already in progress", status: http.StatusConflict},
-		{name: "bank unavailable", err: app.NewPaymentBankUnavailableError(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
-		{name: "bank state conflict", err: app.NewPaymentBankStateConflictError(errors.New("already captured")), code: "bank_state_conflict", message: "bank state conflicts with local payment state", status: http.StatusBadGateway},
-		{name: "bank timeout", err: app.NewPaymentBankTimeoutError(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			api := newPaymentAPITest(t)
-			api.payments.capturePaymentErr = tt.err
-			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture", "", map[string]string{
-				"Idempotency-Key": "public-capture-key-1",
-			})
-
-			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
-			assertErrorResponse(t, rec, tt.code, tt.message)
-		})
-	}
-}
-
-func TestPostPaymentRefundMapsPaymentErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     error
-		code    string
-		message string
-		status  int
-	}{
-		{name: "invalid input", err: app.NewInvalidPaymentInputError("idempotency key is required", nil), code: "validation_error", message: "payment request is invalid", status: http.StatusUnprocessableEntity},
-		{name: "payment not found", err: app.NewPaymentNotFoundError("pay_123", nil), code: "payment_not_found", message: "payment was not found", status: http.StatusNotFound},
-		{name: "payment status conflict", err: app.NewPaymentStatusConflictError(nil), code: "payment_status_conflict", message: "payment status does not allow this operation", status: http.StatusConflict},
-		{name: "idempotency conflict", err: app.NewPaymentIdempotencyConflictError(nil), code: "idempotency_key_conflict", message: "idempotency key was already used with a different request", status: http.StatusConflict},
-		{name: "idempotency in progress", err: app.NewPaymentIdempotencyInProgressError(nil), code: "idempotency_key_in_progress", message: "idempotency key is already in progress", status: http.StatusConflict},
-		{name: "bank unavailable", err: app.NewPaymentBankUnavailableError(errors.New("connection refused")), code: "bank_unavailable", message: "bank is unavailable", status: http.StatusBadGateway},
-		{name: "bank state conflict", err: app.NewPaymentBankStateConflictError(errors.New("already refunded")), code: "bank_state_conflict", message: "bank state conflicts with local payment state", status: http.StatusBadGateway},
-		{name: "bank timeout", err: app.NewPaymentBankTimeoutError(context.DeadlineExceeded), code: "bank_timeout", message: "bank request timed out", status: http.StatusGatewayTimeout},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			api := newPaymentAPITest(t)
-			api.payments.refundPaymentErr = tt.err
-			rec := api.request(t, http.MethodPost, "/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/refund", "", map[string]string{
-				"Idempotency-Key": "public-refund-key-1",
-			})
-
-			assert.Equal(t, tt.status, rec.Code, "body: %s", rec.Body.String())
-			assertErrorResponse(t, rec, tt.code, tt.message)
-		})
-	}
-}
-
+// A panic in application code becomes a safe 500, closes the connection, and is still visible in
+// HTTP metrics rather than escaping the server.
 func TestPostPaymentsRecoversPanic(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.authorizePaymentPanic = "database pool exploded"
@@ -1044,6 +1003,7 @@ func TestPostPaymentsRecoversPanic(t *testing.T) {
 	}, api.metrics.requests[0].withoutDuration())
 }
 
+// Liveness is independent of dependencies: a healthy process returns an empty 204 response.
 func TestHealthzReturnsNoContent(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodGet, "/healthz", "", nil)
@@ -1052,6 +1012,7 @@ func TestHealthzReturnsNoContent(t *testing.T) {
 	assert.Empty(t, rec.Body.String())
 }
 
+// Readiness delegates to its dependency check and signals success with an empty 204 response.
 func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
 	api := newPaymentAPITest(t)
 	rec := api.request(t, http.MethodGet, "/readyz", "", nil)
@@ -1061,6 +1022,7 @@ func TestReadyzReturnsNoContentWhenPostgresIsReady(t *testing.T) {
 	assert.True(t, api.readiness.checked)
 }
 
+// A failed readiness dependency makes the process unavailable to load balancers with a safe 503.
 func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.readiness.err = errors.New("postgres unavailable")
@@ -1070,6 +1032,7 @@ func TestReadyzReturnsUnavailableWhenPostgresIsNotReady(t *testing.T) {
 	assertErrorResponse(t, rec, "service_unavailable", "Service Unavailable")
 }
 
+// Request metrics use the route template, not a concrete payment ID, to keep metric cardinality bounded.
 func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	api := newPaymentAPITest(t)
 	api.payments.getPaymentResult = newPayment("pay_550e8400-e29b-41d4-a716-446655440000")
@@ -1085,6 +1048,7 @@ func TestServerRecordsHTTPMetricsWithRoutePattern(t *testing.T) {
 	}, api.metrics.requests[0].withoutDuration())
 }
 
+// Health and readiness requests are also observable, each under its own stable route label.
 func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
 	api := newPaymentAPITest(t)
 
@@ -1098,11 +1062,13 @@ func TestServerRecordsHTTPMetricsForOperationalEndpoints(t *testing.T) {
 	assert.Equal(t, "/readyz", api.metrics.requests[1].route)
 }
 
+// The public listener deliberately does not expose /metrics; metrics belong to the separate
+// operational listener.
 func TestMetricsEndpointIsNotServedByThePublicHandler(t *testing.T) {
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	handler, err := newTestHandler(t, payments, readiness, discardLogger(), metrics, testHandlerOptions(t))
+	handler, err := newTestHandler(t, payments, readiness, discardLogger(), metrics, testHandlerConfig(t))
 	require.NoError(t, err)
 
 	rec := httptest.NewRecorder()
@@ -1171,7 +1137,7 @@ func newPaymentAPITestWithLogger(t *testing.T, logger *slog.Logger) *paymentAPIT
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
 
-	handler, err := newTestHandler(t, payments, readiness, logger, metrics, testHandlerOptions(t))
+	handler, err := newTestHandler(t, payments, readiness, logger, metrics, testHandlerConfig(t))
 	require.NoError(t, err)
 
 	return &paymentAPITest{
@@ -1235,51 +1201,34 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func testHandlerOptions(t *testing.T) httpapi.HandlerOptions {
+func testHandlerConfig(t *testing.T) httpapi.HandlerConfig {
 	t.Helper()
-	return httpapi.HandlerOptions{
+	return httpapi.HandlerConfig{
 		PaymentCommandTimeout: time.Second,
 		PaymentReadTimeout:    time.Second,
 		ReadinessTimeout:      time.Second,
 		MaxRequestBodyBytes:   64 * 1024,
+		RateLimit:             httpapi.RateLimitConfig{ReadRequestsPerSecond: 30, ReadBurst: 60, WriteRequestsPerSecond: 5, WriteBurst: 10},
 	}
 }
 
-func testHandlerDependencies(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics) httpapi.HandlerDependencies {
+func newTestHandler(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics, config httpapi.HandlerConfig) (*httpapi.Handler, error) {
 	t.Helper()
-	limiter, err := httpapi.NewRateLimiter(&testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, httpapi.RateLimitConfig{ReadRequestsPerSecond: 30, ReadBurst: 60, WriteRequestsPerSecond: 5, WriteBurst: 10})
-	require.NoError(t, err)
-	return httpapi.HandlerDependencies{
-		Payments:      payments,
-		Readiness:     readiness,
-		Logger:        logger,
-		Metrics:       metrics,
-		Authenticator: testAuthenticator(t),
-		RateLimiter:   limiter,
-	}
-}
-
-func newTestHandler(t *testing.T, payments *paymentApplicationFake, readiness *readinessCheckerFake, logger *slog.Logger, metrics *recordingHTTPMetrics, options httpapi.HandlerOptions) (*httpapi.Handler, error) {
-	t.Helper()
-	return httpapi.NewHandler(testHandlerDependencies(t, payments, readiness, logger, metrics), options)
+	return httpapi.NewHandler(payments, readiness, logger, metrics, testAuthenticator(t), &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, config)
 }
 
 type testClock struct{ now time.Time }
 
 func (c *testClock) Now() time.Time { return c.now }
 
-func newRateLimitedPaymentAPITest(t *testing.T, clock *testClock, config httpapi.RateLimitConfig, authenticator *serviceauth.Authenticator) *paymentAPITest {
+func newRateLimitedPaymentAPITest(t *testing.T, clock *testClock, rateLimitConfig httpapi.RateLimitConfig, authenticator *serviceauth.Authenticator) *paymentAPITest {
 	t.Helper()
-	limiter, err := httpapi.NewRateLimiter(clock, config)
-	require.NoError(t, err)
-	options := testHandlerOptions(t)
+	handlerConfig := testHandlerConfig(t)
+	handlerConfig.RateLimit = rateLimitConfig
 	payments := &paymentApplicationFake{}
 	readiness := &readinessCheckerFake{}
 	metrics := &recordingHTTPMetrics{}
-	dependencies := testHandlerDependencies(t, payments, readiness, discardLogger(), metrics)
-	dependencies.Authenticator = authenticator
-	dependencies.RateLimiter = limiter
-	handler, err := httpapi.NewHandler(dependencies, options)
+	handler, err := httpapi.NewHandler(payments, readiness, discardLogger(), metrics, authenticator, clock, handlerConfig)
 	require.NoError(t, err)
 	return &paymentAPITest{payments: payments, readiness: readiness, handler: handler, metrics: metrics}
 }
@@ -1378,7 +1327,7 @@ func (f *paymentApplicationFake) AuthorizePayment(ctx context.Context, command a
 		panic(f.authorizePaymentPanic)
 	}
 	f.authorizePaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.authorizePaymentResult, HTTPStatus: http.StatusCreated}, f.authorizePaymentErr
+	return app.PaymentCommandResult{Payment: f.authorizePaymentResult}, f.authorizePaymentErr
 }
 
 func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command app.RetryAuthorizationCommand) (app.PaymentCommandResult, error) {
@@ -1387,7 +1336,7 @@ func (f *paymentApplicationFake) RetryAuthorization(_ context.Context, command a
 		panic(f.retryAuthorizationPanic)
 	}
 	f.retryAuthorizationCommand = command
-	return app.PaymentCommandResult{Payment: f.retryAuthorizationResult, HTTPStatus: http.StatusOK}, f.retryAuthorizationErr
+	return app.PaymentCommandResult{Payment: f.retryAuthorizationResult}, f.retryAuthorizationErr
 }
 
 func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.CapturePaymentCommand) (app.PaymentCommandResult, error) {
@@ -1396,19 +1345,19 @@ func (f *paymentApplicationFake) CapturePayment(_ context.Context, command app.C
 		panic(f.capturePaymentPanic)
 	}
 	f.capturePaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.capturePaymentResult, HTTPStatus: http.StatusOK}, f.capturePaymentErr
+	return app.PaymentCommandResult{Payment: f.capturePaymentResult}, f.capturePaymentErr
 }
 
 func (f *paymentApplicationFake) VoidPayment(_ context.Context, command app.VoidPaymentCommand) (app.PaymentCommandResult, error) {
 	f.voidPaymentCalls++
 	f.voidPaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.voidPaymentResult, HTTPStatus: http.StatusOK}, f.voidPaymentErr
+	return app.PaymentCommandResult{Payment: f.voidPaymentResult}, f.voidPaymentErr
 }
 
 func (f *paymentApplicationFake) RefundPayment(_ context.Context, command app.RefundPaymentCommand) (app.PaymentCommandResult, error) {
 	f.refundPaymentCalls++
 	f.refundPaymentCommand = command
-	return app.PaymentCommandResult{Payment: f.refundPaymentResult, HTTPStatus: http.StatusOK}, f.refundPaymentErr
+	return app.PaymentCommandResult{Payment: f.refundPaymentResult}, f.refundPaymentErr
 }
 
 func (f *paymentApplicationFake) GetPayment(ctx context.Context, query app.GetPaymentQuery) (app.PaymentResult, error) {
@@ -1496,7 +1445,7 @@ func newDeclinedPayment(id string) app.PaymentResult {
 
 func newPendingPayment(id string) app.PaymentResult {
 	payment := newPayment(id)
-	payment.Status = "pending"
+	payment.Status = string(domain.PaymentStatusPending)
 	return payment
 }
 

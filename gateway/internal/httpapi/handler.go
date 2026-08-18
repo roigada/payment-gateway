@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,23 +21,15 @@ type Handler struct {
 	readiness     readinessChecker
 	authenticator *serviceauth.Authenticator
 	rateLimiter   *RateLimiter
-	options       HandlerOptions
+	config        HandlerConfig
 }
 
-type HandlerDependencies struct {
-	Payments      paymentApplication
-	Readiness     readinessChecker
-	Logger        *slog.Logger
-	Metrics       httpMetrics
-	Authenticator *serviceauth.Authenticator
-	RateLimiter   *RateLimiter
-}
-
-type HandlerOptions struct {
+type HandlerConfig struct {
 	PaymentCommandTimeout time.Duration
 	PaymentReadTimeout    time.Duration
 	ReadinessTimeout      time.Duration
 	MaxRequestBodyBytes   int64
+	RateLimit             RateLimitConfig
 }
 
 type paymentApplication interface {
@@ -58,37 +51,57 @@ type httpMetrics interface {
 	RecordRateLimitRejection(routeClass string)
 }
 
-func NewHandler(dependencies HandlerDependencies, options HandlerOptions) (*Handler, error) {
-	if dependencies.Payments == nil {
+func NewHandler(payments paymentApplication, readiness readinessChecker, logger *slog.Logger, metrics httpMetrics, authenticator *serviceauth.Authenticator, clock Clock, config HandlerConfig) (*Handler, error) {
+	if payments == nil {
 		return nil, errors.New("httpapi handler: payment application is required")
 	}
-	if dependencies.Readiness == nil {
+	if readiness == nil {
 		return nil, errors.New("httpapi handler: readiness checker is required")
 	}
-	if dependencies.Logger == nil {
+	if logger == nil {
 		return nil, errors.New("httpapi handler: logger is required")
 	}
-	if dependencies.Metrics == nil {
+	if metrics == nil {
 		return nil, errors.New("httpapi handler: HTTP metrics recorder is required")
 	}
-	if dependencies.Authenticator == nil {
+	if authenticator == nil {
 		return nil, errors.New("httpapi handler: service authenticator is required")
 	}
-	if dependencies.RateLimiter == nil {
-		return nil, errors.New("httpapi handler: rate limiter is required")
+	if err := config.validate(); err != nil {
+		return nil, err
+	}
+	rateLimiter, err := NewRateLimiter(clock, config.RateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("httpapi handler: %w", err)
 	}
 
 	handler := &Handler{
-		logger:        dependencies.Logger,
-		metrics:       dependencies.Metrics,
-		payments:      dependencies.Payments,
-		readiness:     dependencies.Readiness,
-		authenticator: dependencies.Authenticator,
-		rateLimiter:   dependencies.RateLimiter,
-		options:       options,
+		logger:        logger,
+		metrics:       metrics,
+		payments:      payments,
+		readiness:     readiness,
+		authenticator: authenticator,
+		rateLimiter:   rateLimiter,
+		config:        config,
 	}
 	handler.handler = handler.routes()
 	return handler, nil
+}
+
+func (config HandlerConfig) validate() error {
+	if config.PaymentCommandTimeout <= 0 {
+		return errors.New("httpapi handler payment command timeout must be positive")
+	}
+	if config.PaymentReadTimeout <= 0 {
+		return errors.New("httpapi handler payment read timeout must be positive")
+	}
+	if config.ReadinessTimeout <= 0 {
+		return errors.New("httpapi handler readiness timeout must be positive")
+	}
+	if config.MaxRequestBodyBytes <= 0 {
+		return errors.New("httpapi handler max request body bytes must be positive")
+	}
+	return nil
 }
 
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +142,7 @@ func (s *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.ReadinessTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.ReadinessTimeout)
 	defer cancel()
 	if err := s.readiness.CheckReady(ctx); err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, http.StatusText(http.StatusServiceUnavailable))
@@ -140,6 +153,6 @@ func (s *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) commandRequest(r *http.Request) (*http.Request, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentCommandTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentCommandTimeout)
 	return r.WithContext(ctx), cancel
 }

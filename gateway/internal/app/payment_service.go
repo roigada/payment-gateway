@@ -21,6 +21,23 @@ const (
 	RefundPaymentOperation      = "refund_payment"
 )
 
+type PaymentOperationMetrics interface {
+	RecordPaymentOperation(operation string, outcome string, duration time.Duration)
+	RecordIdempotencyRecovery(operation string, result string)
+	RecordPaymentCommandReleaseFailure(operation string)
+}
+
+const paymentOperationOutcomeReplayed = "replayed"
+
+const idempotencyReplayWindow = 24 * time.Hour
+
+const (
+	IdempotencyRecoveryAttempted     = "attempted"
+	IdempotencyRecoveryRecovered     = "recovered"
+	IdempotencyRecoveryUnrecoverable = "unrecoverable"
+	IdempotencyRecoveryConflict      = "conflict"
+)
+
 type PaymentService struct {
 	store             PaymentStore
 	paymentIDs        PaymentIDGenerator
@@ -80,28 +97,6 @@ func NewPaymentService(
 	}
 }
 
-type PaymentOperationMetrics interface {
-	RecordPaymentOperation(operation string, outcome string, duration time.Duration)
-	RecordIdempotencyRecovery(operation string, result string)
-}
-
-const paymentOperationOutcomeReplayed = "replayed"
-
-const (
-	IdempotencyRecoveryAttempted     = "attempted"
-	IdempotencyRecoveryRecovered     = "recovered"
-	IdempotencyRecoveryUnrecoverable = "unrecoverable"
-	IdempotencyRecoveryConflict      = "conflict"
-)
-
-type BankOperationKeyKind string
-
-const (
-	BankOperationKeyCapture BankOperationKeyKind = "capture"
-	BankOperationKeyVoid    BankOperationKeyKind = "void"
-	BankOperationKeyRefund  BankOperationKeyKind = "refund"
-)
-
 type PaymentResult struct {
 	ID                     string
 	OrderID                string
@@ -115,117 +110,141 @@ type PaymentResult struct {
 	UpdatedAt              time.Time
 }
 
+// PaymentCommandResult is the protocol-agnostic outcome of a completed payment
+// command. FailureKind is empty when the command succeeded, and otherwise holds
+// the terminal failure kind that completed it.
 type PaymentCommandResult struct {
-	Payment    PaymentResult
-	HTTPStatus int
+	Payment     PaymentResult
+	FailureKind PaymentErrorKind
 }
 
 type PaymentStore interface {
-	FindByID(ctx context.Context, id domain.PaymentID, now time.Time) (*domain.Payment, error)
-	Search(ctx context.Context, query SearchPaymentsQuery, now time.Time) ([]*domain.Payment, error)
-	ClaimPaymentCommand(ctx context.Context, request PaymentCommandClaimRequest) (PaymentCommandClaim, error)
+	FindByID(ctx context.Context, id domain.PaymentID) (*domain.Payment, error)
+	Search(ctx context.Context, query SearchPaymentsQuery) ([]*domain.Payment, error)
+	ClaimAuthorizationStart(ctx context.Context, request AuthorizationStartClaimRequest) (PaymentCommandClaim, error)
+	ClaimExistingPaymentCommand(ctx context.Context, request ExistingPaymentCommandClaimRequest) (PaymentCommandClaim, error)
 	CompletePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult, completedAt time.Time) error
 	ReleasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) error
 	CleanupCompletedIdempotencyRecords(ctx context.Context, completedBefore time.Time) (int, error)
 }
 
-type PaymentCommandClaimRequest struct {
+type PaymentCommandClaimRequest interface {
+	Operation() string
+	Key() string
+	RequestFingerprint() string
+	ExpectedStatus() domain.PaymentStatus
+	Now() time.Time
+	ClaimStuckAfter() time.Duration
+}
+
+type AuthorizationStartClaimRequest struct {
+	operation          string
+	key                string
+	requestFingerprint string
+	expectedStatus     domain.PaymentStatus
+	payment            *domain.Payment
+	now                time.Time
+	claimStuckAfter    time.Duration
+}
+
+func NewAuthorizationStartClaimRequest(key string, requestFingerprint string, payment *domain.Payment, now time.Time, claimStuckAfter time.Duration) AuthorizationStartClaimRequest {
+	return AuthorizationStartClaimRequest{
+		operation:          AuthorizePaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusPending,
+		payment:            payment,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
+	}
+}
+
+func (r AuthorizationStartClaimRequest) Operation() string          { return r.operation }
+func (r AuthorizationStartClaimRequest) Key() string                { return r.key }
+func (r AuthorizationStartClaimRequest) RequestFingerprint() string { return r.requestFingerprint }
+func (r AuthorizationStartClaimRequest) ExpectedStatus() domain.PaymentStatus {
+	return r.expectedStatus
+}
+func (r AuthorizationStartClaimRequest) Now() time.Time                 { return r.now }
+func (r AuthorizationStartClaimRequest) ClaimStuckAfter() time.Duration { return r.claimStuckAfter }
+func (r AuthorizationStartClaimRequest) Payment() *domain.Payment       { return r.payment }
+
+type ExistingPaymentCommandClaimRequest struct {
 	operation                    string
 	key                          string
 	requestFingerprint           string
-	payment                      *domain.Payment
-	paymentID                    domain.PaymentID
 	expectedStatus               domain.PaymentStatus
-	bankOperationKeyKind         BankOperationKeyKind
+	paymentID                    domain.PaymentID
 	bankOperationKey             string
 	authorizationCardFingerprint string
 	now                          time.Time
 	claimStuckAfter              time.Duration
 }
 
-func NewAuthorizationStartClaim(key string, requestFingerprint string, payment *domain.Payment, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
-	return PaymentCommandClaimRequest{
-		operation:          AuthorizePaymentOperation,
-		key:                key,
-		requestFingerprint: requestFingerprint,
-		payment:            payment,
-		expectedStatus:     domain.PaymentStatusPending,
-		now:                now,
-		claimStuckAfter:    claimStuckAfter,
-	}
-}
-
-func NewAuthorizationRetryClaim(key string, requestFingerprint string, paymentID domain.PaymentID, authorizationCardFingerprint string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
-	return PaymentCommandClaimRequest{
+func NewAuthorizationRetryClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, authorizationCardFingerprint string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
+	return ExistingPaymentCommandClaimRequest{
 		operation:                    RetryAuthorizationOperation,
 		key:                          key,
 		requestFingerprint:           requestFingerprint,
-		paymentID:                    paymentID,
 		expectedStatus:               domain.PaymentStatusPending,
+		paymentID:                    paymentID,
 		authorizationCardFingerprint: authorizationCardFingerprint,
 		now:                          now,
 		claimStuckAfter:              claimStuckAfter,
 	}
 }
 
-func NewCaptureClaim(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
-	return PaymentCommandClaimRequest{
-		operation:            CapturePaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		paymentID:            paymentID,
-		expectedStatus:       domain.PaymentStatusAuthorized,
-		bankOperationKeyKind: BankOperationKeyCapture,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+func NewCaptureClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
+	return ExistingPaymentCommandClaimRequest{
+		operation:          CapturePaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusAuthorized,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
-func NewVoidClaim(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
-	return PaymentCommandClaimRequest{
-		operation:            VoidPaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		paymentID:            paymentID,
-		expectedStatus:       domain.PaymentStatusAuthorized,
-		bankOperationKeyKind: BankOperationKeyVoid,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+func NewVoidClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
+	return ExistingPaymentCommandClaimRequest{
+		operation:          VoidPaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusAuthorized,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
-func NewRefundClaim(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) PaymentCommandClaimRequest {
-	return PaymentCommandClaimRequest{
-		operation:            RefundPaymentOperation,
-		key:                  key,
-		requestFingerprint:   requestFingerprint,
-		paymentID:            paymentID,
-		expectedStatus:       domain.PaymentStatusCaptured,
-		bankOperationKeyKind: BankOperationKeyRefund,
-		bankOperationKey:     bankOperationKey,
-		now:                  now,
-		claimStuckAfter:      claimStuckAfter,
+func NewRefundClaimRequest(key string, requestFingerprint string, paymentID domain.PaymentID, bankOperationKey string, now time.Time, claimStuckAfter time.Duration) ExistingPaymentCommandClaimRequest {
+	return ExistingPaymentCommandClaimRequest{
+		operation:          RefundPaymentOperation,
+		key:                key,
+		requestFingerprint: requestFingerprint,
+		expectedStatus:     domain.PaymentStatusCaptured,
+		paymentID:          paymentID,
+		bankOperationKey:   bankOperationKey,
+		now:                now,
+		claimStuckAfter:    claimStuckAfter,
 	}
 }
 
-func (r PaymentCommandClaimRequest) Operation() string                    { return r.operation }
-func (r PaymentCommandClaimRequest) Key() string                          { return r.key }
-func (r PaymentCommandClaimRequest) RequestFingerprint() string           { return r.requestFingerprint }
-func (r PaymentCommandClaimRequest) Payment() *domain.Payment             { return r.payment }
-func (r PaymentCommandClaimRequest) PaymentID() domain.PaymentID          { return r.paymentID }
-func (r PaymentCommandClaimRequest) ExpectedStatus() domain.PaymentStatus { return r.expectedStatus }
-func (r PaymentCommandClaimRequest) BankOperationKeyKind() BankOperationKeyKind {
-	return r.bankOperationKeyKind
+func (r ExistingPaymentCommandClaimRequest) Operation() string          { return r.operation }
+func (r ExistingPaymentCommandClaimRequest) Key() string                { return r.key }
+func (r ExistingPaymentCommandClaimRequest) RequestFingerprint() string { return r.requestFingerprint }
+func (r ExistingPaymentCommandClaimRequest) ExpectedStatus() domain.PaymentStatus {
+	return r.expectedStatus
 }
-func (r PaymentCommandClaimRequest) BankOperationKey() string { return r.bankOperationKey }
-func (r PaymentCommandClaimRequest) AuthorizationCardFingerprint() string {
+func (r ExistingPaymentCommandClaimRequest) Now() time.Time                 { return r.now }
+func (r ExistingPaymentCommandClaimRequest) ClaimStuckAfter() time.Duration { return r.claimStuckAfter }
+func (r ExistingPaymentCommandClaimRequest) PaymentID() domain.PaymentID    { return r.paymentID }
+func (r ExistingPaymentCommandClaimRequest) BankOperationKey() string       { return r.bankOperationKey }
+func (r ExistingPaymentCommandClaimRequest) AuthorizationCardFingerprint() string {
 	return r.authorizationCardFingerprint
-}
-func (r PaymentCommandClaimRequest) Now() time.Time { return r.now }
-func (r PaymentCommandClaimRequest) ClaimStuckAfter() time.Duration {
-	return r.claimStuckAfter
 }
 
 type PaymentCommandClaim struct {
@@ -235,16 +254,16 @@ type PaymentCommandClaim struct {
 	expectedStatus     domain.PaymentStatus
 	payment            *domain.Payment
 	replayResult       PaymentCommandResult
-	replay             bool
+	replayed           bool
 	recovered          bool
 }
 
 func NewClaimedPaymentCommand(request PaymentCommandClaimRequest, payment *domain.Payment) PaymentCommandClaim {
 	return PaymentCommandClaim{
-		operation:          request.operation,
-		key:                request.key,
-		requestFingerprint: request.requestFingerprint,
-		expectedStatus:     request.expectedStatus,
+		operation:          request.Operation(),
+		key:                request.Key(),
+		requestFingerprint: request.RequestFingerprint(),
+		expectedStatus:     request.ExpectedStatus(),
 		payment:            payment,
 	}
 }
@@ -257,12 +276,12 @@ func NewRecoveredPaymentCommand(request PaymentCommandClaimRequest, payment *dom
 
 func NewReplayedPaymentCommand(request PaymentCommandClaimRequest, result PaymentCommandResult) PaymentCommandClaim {
 	return PaymentCommandClaim{
-		operation:          request.operation,
-		key:                request.key,
-		requestFingerprint: request.requestFingerprint,
-		expectedStatus:     request.expectedStatus,
+		operation:          request.Operation(),
+		key:                request.Key(),
+		requestFingerprint: request.RequestFingerprint(),
+		expectedStatus:     request.ExpectedStatus(),
 		replayResult:       result,
-		replay:             true,
+		replayed:           true,
 	}
 }
 
@@ -272,22 +291,9 @@ func (c PaymentCommandClaim) RequestFingerprint() string           { return c.re
 func (c PaymentCommandClaim) ExpectedStatus() domain.PaymentStatus { return c.expectedStatus }
 func (c PaymentCommandClaim) Payment() *domain.Payment             { return c.payment }
 func (c PaymentCommandClaim) ReplayResult() (PaymentCommandResult, bool) {
-	return c.replayResult, c.replay
+	return c.replayResult, c.replayed
 }
 func (c PaymentCommandClaim) Recovered() bool { return c.recovered }
-
-type IdempotencyRecoveryError struct {
-	result string
-	cause  error
-}
-
-func NewIdempotencyRecoveryError(result string, cause error) error {
-	return &IdempotencyRecoveryError{result: result, cause: cause}
-}
-
-func (e *IdempotencyRecoveryError) Result() string { return e.result }
-func (e *IdempotencyRecoveryError) Error() string  { return e.cause.Error() }
-func (e *IdempotencyRecoveryError) Unwrap() error  { return e.cause }
 
 type PaymentIDGenerator interface {
 	NewPaymentID() domain.PaymentID
@@ -355,29 +361,44 @@ type BankRefundResult struct {
 
 func (s *PaymentService) AuthorizePayment(ctx context.Context, command AuthorizePaymentCommand) (result PaymentCommandResult, err error) {
 	started := time.Now()
-	outcomeOverride := ""
+	replayed := false
 	defer func() {
-		s.operationMetrics.RecordPaymentOperation(AuthorizePaymentOperation, paymentOperationOutcome(result, err, outcomeOverride), time.Since(started))
+		s.operationMetrics.RecordPaymentOperation(AuthorizePaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := authorizePaymentRequestFingerprint(command, s.fingerprintSecret)
-	authorizationCardFingerprint := authorizationCardFingerprint(command.card, s.fingerprintSecret)
-	paymentID := s.paymentIDs.NewPaymentID()
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
 	now := s.clock.Now()
-	payment, err := domain.NewPendingPayment(paymentID, command.orderID, command.customerID, command.amountCents, bankOperationKey, authorizationCardFingerprint, now)
+	payment, err := domain.NewPendingPayment(
+		s.paymentIDs.NewPaymentID(),
+		command.orderID,
+		command.customerID,
+		command.amountCents,
+		s.bankOperationKeys.NewBankOperationKey(),
+		authorizationCardFingerprint(command.card, s.fingerprintSecret),
+		now,
+	)
 	if err != nil {
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewAuthorizationStartClaim(command.idempotencyKey, fingerprint, payment, now, s.claimStuckAfter))
+	claim, err := s.store.ClaimAuthorizationStart(ctx, NewAuthorizationStartClaimRequest(
+		command.idempotencyKey,
+		authorizePaymentRequestFingerprint(command, s.fingerprintSecret),
+		payment,
+		now,
+		s.claimStuckAfter,
+	))
 	if err != nil {
-		s.recordIdempotencyRecoveryError(AuthorizePaymentOperation, err)
+		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
+			s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
+			s.recordIdempotencyRecoveryFailure(AuthorizePaymentOperation, recoveryErr.Result())
+		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	s.recordIdempotencyRecoveryAttempt(claim)
-	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = paymentOperationOutcomeReplayed
-		return replayed, nil
+	replayResult, replayed := claim.ReplayResult()
+	if replayed {
+		return replayPaymentCommand(replayResult)
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(AuthorizePaymentOperation)
 	}
 	payment = claim.Payment()
 
@@ -393,6 +414,17 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		CardExpiryYear:  command.card.expiryYear,
 	})
 	if err != nil {
+		if isUnknownAuthorizationOutcome(err) {
+			result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+			if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+				return PaymentCommandResult{}, ensurePaymentError(err)
+			}
+			if claim.Recovered() {
+				s.recordIdempotencyRecoveryCompleted(AuthorizePaymentOperation)
+			}
+
+			return result, nil
+		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
@@ -402,43 +434,45 @@ func (s *PaymentService) AuthorizePayment(ctx context.Context, command Authorize
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 201,
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if err := s.completePaymentCommand(ctx, claim, result); err != nil {
-		return PaymentCommandResult{}, err
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryCompleted(AuthorizePaymentOperation)
 	}
-	s.recordIdempotencyRecoveryCompleted(claim)
 
 	return result, nil
 }
 
 func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAuthorizationCommand) (result PaymentCommandResult, err error) {
 	started := time.Now()
-	outcomeOverride := ""
+	replayed := false
 	defer func() {
-		s.operationMetrics.RecordPaymentOperation(RetryAuthorizationOperation, paymentOperationOutcome(result, err, outcomeOverride), time.Since(started))
+		s.operationMetrics.RecordPaymentOperation(RetryAuthorizationOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	requestFingerprint := retryAuthorizationRequestFingerprint(command, s.fingerprintSecret)
-	now := s.clock.Now()
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewAuthorizationRetryClaim(
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewAuthorizationRetryClaimRequest(
 		command.idempotencyKey,
-		requestFingerprint,
+		retryAuthorizationRequestFingerprint(command, s.fingerprintSecret),
 		command.paymentID,
 		authorizationCardFingerprint(command.card, s.fingerprintSecret),
-		now,
+		s.clock.Now(),
 		s.claimStuckAfter,
 	))
 	if err != nil {
-		s.recordIdempotencyRecoveryError(RetryAuthorizationOperation, err)
+		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
+			s.recordIdempotencyRecoveryAttempt(RetryAuthorizationOperation)
+			s.recordIdempotencyRecoveryFailure(RetryAuthorizationOperation, recoveryErr.Result())
+		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	s.recordIdempotencyRecoveryAttempt(claim)
-	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = paymentOperationOutcomeReplayed
-		return replayed, nil
+	replayResult, replayed := claim.ReplayResult()
+	if replayed {
+		return replayPaymentCommand(replayResult)
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(RetryAuthorizationOperation)
 	}
 
 	payment := claim.Payment()
@@ -464,45 +498,49 @@ func (s *PaymentService) RetryAuthorization(ctx context.Context, command RetryAu
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if err := s.completePaymentCommand(ctx, claim, result); err != nil {
-		return PaymentCommandResult{}, err
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryCompleted(RetryAuthorizationOperation)
 	}
-	s.recordIdempotencyRecoveryCompleted(claim)
 
 	return result, nil
 }
 
 func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaymentCommand) (result PaymentCommandResult, err error) {
 	started := time.Now()
-	outcomeOverride := ""
+	replayed := false
 	defer func() {
-		s.operationMetrics.RecordPaymentOperation(CapturePaymentOperation, paymentOperationOutcome(result, err, outcomeOverride), time.Since(started))
+		s.operationMetrics.RecordPaymentOperation(CapturePaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := capturePaymentRequestFingerprint(command, s.fingerprintSecret)
-	now := s.clock.Now()
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewCaptureClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewCaptureClaimRequest(
+		command.idempotencyKey,
+		capturePaymentRequestFingerprint(command, s.fingerprintSecret),
+		command.paymentID,
+		s.bankOperationKeys.NewBankOperationKey(),
+		s.clock.Now(),
+		s.claimStuckAfter,
+	))
 	if err != nil {
-		s.recordIdempotencyRecoveryError(CapturePaymentOperation, err)
-		if HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
-			outcomeOverride = string(domain.PaymentStatusExpired)
+		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
+			s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
+			s.recordIdempotencyRecoveryFailure(CapturePaymentOperation, recoveryErr.Result())
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	s.recordIdempotencyRecoveryAttempt(claim)
-	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = paymentOperationOutcomeReplayed
-		return replayed, nil
+	replayResult, replayed := claim.ReplayResult()
+	if replayed {
+		return replayPaymentCommand(replayResult)
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(CapturePaymentOperation)
 	}
 	payment := claim.Payment()
-	bankOperationKey = payment.CaptureBankOperationKey()
 	bankResult, err := s.bank.CapturePayment(ctx, BankCaptureRequest{
-		OperationKey:        bankOperationKey,
+		OperationKey:        payment.CaptureBankOperationKey(),
 		BankAuthorizationID: payment.BankAuthorizationID(),
 		AmountCents:         payment.AmountCents(),
 		Currency:            payment.Currency(),
@@ -514,64 +552,71 @@ func (s *PaymentService) CapturePayment(ctx context.Context, command CapturePaym
 				return PaymentCommandResult{}, ensurePaymentError(markErr)
 			}
 			result := PaymentCommandResult{
-				Payment:    newPaymentResult(payment),
-				HTTPStatus: 409,
+				Payment:     newPaymentResult(payment),
+				FailureKind: PaymentErrorAuthorizationExpired,
 			}
-			if completeErr := s.completePaymentCommand(ctx, claim, result); completeErr != nil {
-				return PaymentCommandResult{}, completeErr
+			if completeErr := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); completeErr != nil {
+				return PaymentCommandResult{}, ensurePaymentError(completeErr)
 			}
-			s.recordIdempotencyRecoveryCompleted(claim)
-			outcomeOverride = string(domain.PaymentStatusExpired)
-			return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(nil)
+			if claim.Recovered() {
+				s.recordIdempotencyRecoveryCompleted(CapturePaymentOperation)
+			}
+			// Built from the stored kind, exactly as a replay of this record
+			// will build it, so the two cannot drift apart.
+			return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
 		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := payment.Capture(bankResult.BankCaptureID, bankOperationKey, s.clock.Now()); err != nil {
+	if err := payment.MarkCaptured(bankResult.BankCaptureID, s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if err := s.completePaymentCommand(ctx, claim, result); err != nil {
-		return PaymentCommandResult{}, err
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryCompleted(CapturePaymentOperation)
 	}
-	s.recordIdempotencyRecoveryCompleted(claim)
 
 	return result, nil
 }
 
 func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCommand) (result PaymentCommandResult, err error) {
 	started := time.Now()
-	outcomeOverride := ""
+	replayed := false
 	defer func() {
-		s.operationMetrics.RecordPaymentOperation(VoidPaymentOperation, paymentOperationOutcome(result, err, outcomeOverride), time.Since(started))
+		s.operationMetrics.RecordPaymentOperation(VoidPaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := voidPaymentRequestFingerprint(command, s.fingerprintSecret)
-	now := s.clock.Now()
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewVoidClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewVoidClaimRequest(
+		command.idempotencyKey,
+		voidPaymentRequestFingerprint(command, s.fingerprintSecret),
+		command.paymentID,
+		s.bankOperationKeys.NewBankOperationKey(),
+		s.clock.Now(),
+		s.claimStuckAfter,
+	))
 	if err != nil {
-		s.recordIdempotencyRecoveryError(VoidPaymentOperation, err)
-		if HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
-			outcomeOverride = string(domain.PaymentStatusExpired)
+		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
+			s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
+			s.recordIdempotencyRecoveryFailure(VoidPaymentOperation, recoveryErr.Result())
 		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	s.recordIdempotencyRecoveryAttempt(claim)
-	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = paymentOperationOutcomeReplayed
-		return replayed, nil
+	replayResult, replayed := claim.ReplayResult()
+	if replayed {
+		return replayPaymentCommand(replayResult)
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(VoidPaymentOperation)
 	}
 	payment := claim.Payment()
-	bankOperationKey = payment.VoidBankOperationKey()
 	bankResult, err := s.bank.VoidPayment(ctx, BankVoidRequest{
-		OperationKey:        bankOperationKey,
+		OperationKey:        payment.VoidBankOperationKey(),
 		BankAuthorizationID: payment.BankAuthorizationID(),
 	})
 	if err != nil {
@@ -581,61 +626,71 @@ func (s *PaymentService) VoidPayment(ctx context.Context, command VoidPaymentCom
 				return PaymentCommandResult{}, ensurePaymentError(markErr)
 			}
 			result := PaymentCommandResult{
-				Payment:    newPaymentResult(payment),
-				HTTPStatus: 409,
+				Payment:     newPaymentResult(payment),
+				FailureKind: PaymentErrorAuthorizationExpired,
 			}
-			if completeErr := s.completePaymentCommand(ctx, claim, result); completeErr != nil {
-				return PaymentCommandResult{}, completeErr
+			if completeErr := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); completeErr != nil {
+				return PaymentCommandResult{}, ensurePaymentError(completeErr)
 			}
-			s.recordIdempotencyRecoveryCompleted(claim)
-			outcomeOverride = string(domain.PaymentStatusExpired)
-			return PaymentCommandResult{}, NewPaymentAuthorizationExpiredError(nil)
+			if claim.Recovered() {
+				s.recordIdempotencyRecoveryCompleted(VoidPaymentOperation)
+			}
+			// Built from the stored kind, exactly as a replay of this record
+			// will build it, so the two cannot drift apart.
+			return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
 		}
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := payment.MarkVoided(bankResult.BankVoidID, bankOperationKey, s.clock.Now()); err != nil {
+	if err := payment.MarkVoided(bankResult.BankVoidID, s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if err := s.completePaymentCommand(ctx, claim, result); err != nil {
-		return PaymentCommandResult{}, err
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryCompleted(VoidPaymentOperation)
 	}
-	s.recordIdempotencyRecoveryCompleted(claim)
 
 	return result, nil
 }
 
 func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymentCommand) (result PaymentCommandResult, err error) {
 	started := time.Now()
-	outcomeOverride := ""
+	replayed := false
 	defer func() {
-		s.operationMetrics.RecordPaymentOperation(RefundPaymentOperation, paymentOperationOutcome(result, err, outcomeOverride), time.Since(started))
+		s.operationMetrics.RecordPaymentOperation(RefundPaymentOperation, paymentOperationOutcome(result, err, replayed), time.Since(started))
 	}()
 
-	fingerprint := refundPaymentRequestFingerprint(command, s.fingerprintSecret)
-	now := s.clock.Now()
-	bankOperationKey := s.bankOperationKeys.NewBankOperationKey()
-	claim, err := s.store.ClaimPaymentCommand(ctx, NewRefundClaim(command.idempotencyKey, fingerprint, command.paymentID, bankOperationKey, now, s.claimStuckAfter))
+	claim, err := s.store.ClaimExistingPaymentCommand(ctx, NewRefundClaimRequest(
+		command.idempotencyKey,
+		refundPaymentRequestFingerprint(command, s.fingerprintSecret),
+		command.paymentID,
+		s.bankOperationKeys.NewBankOperationKey(),
+		s.clock.Now(),
+		s.claimStuckAfter,
+	))
 	if err != nil {
-		s.recordIdempotencyRecoveryError(RefundPaymentOperation, err)
+		if recoveryErr, ok := errors.AsType[*IdempotencyRecoveryError](err); ok {
+			s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
+			s.recordIdempotencyRecoveryFailure(RefundPaymentOperation, recoveryErr.Result())
+		}
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	s.recordIdempotencyRecoveryAttempt(claim)
-	if replayed, ok := claim.ReplayResult(); ok {
-		outcomeOverride = paymentOperationOutcomeReplayed
-		return replayed, nil
+	replayResult, replayed := claim.ReplayResult()
+	if replayed {
+		return replayPaymentCommand(replayResult)
+	}
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryAttempt(RefundPaymentOperation)
 	}
 	payment := claim.Payment()
-	bankOperationKey = payment.RefundBankOperationKey()
 	bankResult, err := s.bank.RefundPayment(ctx, BankRefundRequest{
-		OperationKey:  bankOperationKey,
+		OperationKey:  payment.RefundBankOperationKey(),
 		BankCaptureID: payment.BankCaptureID(),
 		AmountCents:   payment.AmountCents(),
 		Currency:      payment.Currency(),
@@ -645,25 +700,24 @@ func (s *PaymentService) RefundPayment(ctx context.Context, command RefundPaymen
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	if err := payment.Refund(bankResult.BankRefundID, bankOperationKey, s.clock.Now()); err != nil {
+	if err := payment.MarkRefunded(bankResult.BankRefundID, s.clock.Now()); err != nil {
 		s.releasePaymentCommand(ctx, claim)
 		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
 
-	result = PaymentCommandResult{
-		Payment:    newPaymentResult(payment),
-		HTTPStatus: 200,
+	result = PaymentCommandResult{Payment: newPaymentResult(payment)}
+	if err := s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()); err != nil {
+		return PaymentCommandResult{}, ensurePaymentError(err)
 	}
-	if err := s.completePaymentCommand(ctx, claim, result); err != nil {
-		return PaymentCommandResult{}, err
+	if claim.Recovered() {
+		s.recordIdempotencyRecoveryCompleted(RefundPaymentOperation)
 	}
-	s.recordIdempotencyRecoveryCompleted(claim)
 
 	return result, nil
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) (PaymentResult, error) {
-	payment, err := s.store.FindByID(ctx, query.paymentID, s.clock.Now())
+	payment, err := s.store.FindByID(ctx, query.paymentID)
 	if err != nil {
 		return PaymentResult{}, ensurePaymentError(err)
 	}
@@ -671,7 +725,7 @@ func (s *PaymentService) GetPayment(ctx context.Context, query GetPaymentQuery) 
 }
 
 func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPaymentsQuery) ([]PaymentResult, error) {
-	payments, err := s.store.Search(ctx, query, s.clock.Now())
+	payments, err := s.store.Search(ctx, query)
 	if err != nil {
 		return nil, ensurePaymentError(err)
 	}
@@ -683,37 +737,44 @@ func (s *PaymentService) SearchPayments(ctx context.Context, query SearchPayment
 	return results, nil
 }
 
-func (s *PaymentService) completePaymentCommand(ctx context.Context, claim PaymentCommandClaim, result PaymentCommandResult) error {
-	return ensurePaymentError(s.store.CompletePaymentCommand(ctx, claim, result, s.clock.Now()))
+func (s *PaymentService) CleanupCompletedIdempotencyReplays(ctx context.Context) (int, error) {
+	return s.store.CleanupCompletedIdempotencyRecords(ctx, s.clock.Now().Add(-idempotencyReplayWindow))
 }
 
 func (s *PaymentService) releasePaymentCommand(ctx context.Context, claim PaymentCommandClaim) {
-	_ = s.store.ReleasePaymentCommand(ctx, claim)
-}
-
-func (s *PaymentService) recordIdempotencyRecoveryAttempt(claim PaymentCommandClaim) {
-	if claim.Recovered() {
-		s.operationMetrics.RecordIdempotencyRecovery(claim.Operation(), IdempotencyRecoveryAttempted)
+	if err := s.store.ReleasePaymentCommand(ctx, claim); err != nil {
+		s.operationMetrics.RecordPaymentCommandReleaseFailure(claim.Operation())
 	}
 }
 
-func (s *PaymentService) recordIdempotencyRecoveryCompleted(claim PaymentCommandClaim) {
-	if claim.Recovered() {
-		s.operationMetrics.RecordIdempotencyRecovery(claim.Operation(), IdempotencyRecoveryRecovered)
-	}
+func (s *PaymentService) recordIdempotencyRecoveryAttempt(operation string) {
+	s.operationMetrics.RecordIdempotencyRecovery(operation, IdempotencyRecoveryAttempted)
 }
 
-func (s *PaymentService) recordIdempotencyRecoveryError(operation string, err error) {
-	var recoveryErr *IdempotencyRecoveryError
-	if errors.As(err, &recoveryErr) {
-		s.operationMetrics.RecordIdempotencyRecovery(operation, IdempotencyRecoveryAttempted)
-		s.operationMetrics.RecordIdempotencyRecovery(operation, recoveryErr.Result())
-	}
+func (s *PaymentService) recordIdempotencyRecoveryCompleted(operation string) {
+	s.operationMetrics.RecordIdempotencyRecovery(operation, IdempotencyRecoveryRecovered)
 }
 
-func paymentOperationOutcome(result PaymentCommandResult, err error, override string) string {
-	if override != "" {
-		return override
+func (s *PaymentService) recordIdempotencyRecoveryFailure(operation string, result string) {
+	s.operationMetrics.RecordIdempotencyRecovery(operation, result)
+}
+
+// replayPaymentCommand reproduces the stored outcome of a completed command so
+// a replay is indistinguishable from the original attempt, including a command
+// that completed as a terminal failure.
+func replayPaymentCommand(result PaymentCommandResult) (PaymentCommandResult, error) {
+	if result.FailureKind == "" {
+		return result, nil
+	}
+	return PaymentCommandResult{}, NewPaymentErrorOfKind(result.FailureKind, nil)
+}
+
+func paymentOperationOutcome(result PaymentCommandResult, err error, replayed bool) string {
+	if replayed {
+		return paymentOperationOutcomeReplayed
+	}
+	if HasPaymentErrorKind(err, PaymentErrorAuthorizationExpired) {
+		return string(domain.PaymentStatusExpired)
 	}
 	if err != nil {
 		if kind, ok := PaymentErrorKindOf(err); ok {
@@ -727,20 +788,16 @@ func paymentOperationOutcome(result PaymentCommandResult, err error, override st
 	return string(PaymentErrorInternal)
 }
 
-func isValidPaymentStatus(status domain.PaymentStatus) bool {
-	switch status {
-	case domain.PaymentStatusPending, domain.PaymentStatusAuthorized, domain.PaymentStatusExpired, domain.PaymentStatusDeclined, domain.PaymentStatusCaptured, domain.PaymentStatusVoided, domain.PaymentStatusRefunded:
-		return true
-	default:
-		return false
-	}
-}
-
 func applyAuthorizationOutcome(payment *domain.Payment, bankResult BankAuthorizationResult, now time.Time) error {
 	if bankResult.DeclineReason != "" {
-		return ensurePaymentError(payment.MarkDeclined(bankResult.DeclineReason, now))
+		return payment.MarkDeclined(bankResult.DeclineReason, now)
 	}
-	return ensurePaymentError(payment.MarkAuthorized(bankResult.BankAuthorizationID, bankResult.AuthorizationExpiresAt, now))
+	return payment.MarkAuthorized(bankResult.BankAuthorizationID, bankResult.AuthorizationExpiresAt, now)
+}
+
+func isUnknownAuthorizationOutcome(err error) bool {
+	return HasPaymentErrorKind(err, PaymentErrorBankTimeout) ||
+		HasPaymentErrorKind(err, PaymentErrorBankUnavailable)
 }
 
 func authorizePaymentRequestFingerprint(command AuthorizePaymentCommand, secret string) string {

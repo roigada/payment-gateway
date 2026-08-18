@@ -33,7 +33,7 @@ func NewSearchPaymentsQuery(orderID string, customerID string, status string) (S
 	if query.orderID == "" && query.customerID == "" {
 		return SearchPaymentsQuery{}, NewInvalidPaymentInputError("order id or customer id is required", nil)
 	}
-	if query.status != "" && !isValidPaymentStatus(query.status) {
+	if query.status != "" && !domain.IsValidPaymentStatus(query.status) {
 		return SearchPaymentsQuery{}, NewInvalidPaymentInputError("payment status is invalid", nil)
 	}
 	return query, nil

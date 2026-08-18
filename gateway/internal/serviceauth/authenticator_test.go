@@ -1,14 +1,13 @@
 package serviceauth
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that authenticator authenticates overlapping credentials and scopes.
 func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	readCredential := "read-credential"
@@ -20,21 +19,19 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
-		name, header              string
+		name, credential          string
 		scope                     Scope
 		authenticated, authorized bool
 	}{
-		{"read credential", "Bearer " + readCredential, ScopePaymentsRead, true, true},
-		{"read credential lacks write", "Bearer " + readCredential, ScopePaymentsWrite, true, false},
-		{"rotated credential", "Bearer " + writeCredential, ScopePaymentsWrite, true, true},
+		{"read credential", readCredential, ScopePaymentsRead, true, true},
+		{"read credential lacks write", readCredential, ScopePaymentsWrite, true, false},
+		{"rotated credential", writeCredential, ScopePaymentsWrite, true, true},
 		{"missing", "", ScopePaymentsRead, false, false},
-		{"malformed", "Basic " + readCredential, ScopePaymentsRead, false, false},
-		{"invalid", "Bearer not-configured", ScopePaymentsRead, false, false},
+		{"invalid", "not-configured", ScopePaymentsRead, false, false},
 	} {
+		// Verifies the table-defined scenario for this case.
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/payments", nil)
-			req.Header.Set("Authorization", tt.header)
-			principal, authenticated := authenticator.Authenticate(req)
+			principal, authenticated := authenticator.Authenticate(tt.credential)
 			authorized := authenticated && principal.HasScope(tt.scope)
 			assert.Equal(t, tt.authenticated, authenticated)
 			assert.Equal(t, tt.authorized, authorized)
@@ -42,6 +39,7 @@ func TestAuthenticatorAuthenticatesOverlappingCredentialsAndScopes(t *testing.T)
 	}
 }
 
+// Verifies that authenticator rejects invalid configuration.
 func TestAuthenticatorRejectsInvalidConfiguration(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	for _, configured := range [][]Credential{nil, {{Digest: "not-base64", Scopes: []Scope{ScopePaymentsRead}}}, {{Digest: Digest(key, "credential")}}} {
@@ -50,6 +48,7 @@ func TestAuthenticatorRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// Verifies that generate credential produces opaque high entropy value.
 func TestGenerateCredentialProducesOpaqueHighEntropyValue(t *testing.T) {
 	credential, err := GenerateCredential()
 	require.NoError(t, err)

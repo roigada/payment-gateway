@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM golang:1.26.1-alpine AS build
 
 WORKDIR /src
@@ -7,14 +5,16 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/payment-gateway ./cmd/payment-gateway
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /payment-gateway ./cmd/payment-gateway
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.22
 
-COPY --chown=nonroot:nonroot --from=build /out/payment-gateway /payment-gateway
-COPY --chown=nonroot:nonroot --from=build /src/migrations /migrations
+RUN adduser -D -H -u 10001 gateway
 
-USER nonroot:nonroot
+USER gateway
+COPY --from=build /payment-gateway /payment-gateway
+
+EXPOSE 8080 9091
 
 ENTRYPOINT ["/payment-gateway"]

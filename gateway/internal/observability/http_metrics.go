@@ -24,6 +24,7 @@ var httpRequestDurationBuckets = []float64{
 type HTTPMetrics struct {
 	requestsTotal   *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
+	rejectionsTotal *prometheus.CounterVec
 }
 
 func NewHTTPMetrics(registry *prometheus.Registry) (*HTTPMetrics, error) {
@@ -41,6 +42,10 @@ func NewHTTPMetrics(registry *prometheus.Registry) (*HTTPMetrics, error) {
 			Help:    "Duration of HTTP requests handled by the payment gateway.",
 			Buckets: httpRequestDurationBuckets,
 		}, []string{"method", "route", "code"}),
+		rejectionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "payment_gateway_rate_limit_rejections_total",
+			Help: "Total number of Payment API requests rejected by principal rate limits.",
+		}, []string{"route_class"}),
 	}
 
 	if err := registry.Register(metrics.requestsTotal); err != nil {
@@ -49,8 +54,18 @@ func NewHTTPMetrics(registry *prometheus.Registry) (*HTTPMetrics, error) {
 	if err := registry.Register(metrics.requestDuration); err != nil {
 		return nil, err
 	}
+	if err := registry.Register(metrics.rejectionsTotal); err != nil {
+		return nil, err
+	}
 
 	return metrics, nil
+}
+
+func (m *HTTPMetrics) RecordRateLimitRejection(routeClass string) {
+	if routeClass != "read" && routeClass != "write" {
+		return
+	}
+	m.rejectionsTotal.WithLabelValues(routeClass).Inc()
 }
 
 func (m *HTTPMetrics) RecordHTTPRequest(method string, route string, status int, duration time.Duration) {

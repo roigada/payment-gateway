@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that mock bank metrics records request count and duration.
 func TestMockBankMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewMockBankMetrics(registry)
@@ -37,6 +38,7 @@ func TestMockBankMetricsRecordsRequestCountAndDuration(t *testing.T) {
 	})
 }
 
+// Verifies that mock bank metrics records retry outcomes.
 func TestMockBankMetricsRecordsRetryOutcomes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewMockBankMetrics(registry)

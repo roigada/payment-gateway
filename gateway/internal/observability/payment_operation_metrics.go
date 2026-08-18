@@ -12,6 +12,7 @@ type PaymentOperationMetrics struct {
 	operationsTotal   *prometheus.CounterVec
 	operationDuration *prometheus.HistogramVec
 	recoveryTotal     *prometheus.CounterVec
+	releaseFailures   *prometheus.CounterVec
 }
 
 func NewPaymentOperationMetrics(registry *prometheus.Registry) (*PaymentOperationMetrics, error) {
@@ -33,6 +34,10 @@ func NewPaymentOperationMetrics(registry *prometheus.Registry) (*PaymentOperatio
 			Name: "payment_gateway_idempotency_recovery_total",
 			Help: "Total number of stuck idempotency claim recovery events.",
 		}, []string{"operation", "result"}),
+		releaseFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "payment_gateway_payment_command_release_failures_total",
+			Help: "Total number of failed payment command idempotency claim releases.",
+		}, []string{"operation"}),
 	}
 
 	if err := registry.Register(metrics.operationsTotal); err != nil {
@@ -42,6 +47,9 @@ func NewPaymentOperationMetrics(registry *prometheus.Registry) (*PaymentOperatio
 		return nil, err
 	}
 	if err := registry.Register(metrics.recoveryTotal); err != nil {
+		return nil, err
+	}
+	if err := registry.Register(metrics.releaseFailures); err != nil {
 		return nil, err
 	}
 
@@ -58,6 +66,13 @@ func (m *PaymentOperationMetrics) RecordIdempotencyRecovery(operation string, re
 		return
 	}
 	m.recoveryTotal.WithLabelValues(operation, result).Inc()
+}
+
+func (m *PaymentOperationMetrics) RecordPaymentCommandReleaseFailure(operation string) {
+	if !isPaymentOperation(operation) {
+		return
+	}
+	m.releaseFailures.WithLabelValues(operation).Inc()
 }
 
 func isPaymentOperation(operation string) bool {

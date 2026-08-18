@@ -1,0 +1,5 @@
+# Payment gateway package layout
+
+The payment gateway keeps a small layer-first hexagonal layout in Payment language: `cmd/payment-gateway` wires startup, `internal/domain` owns Payment invariants and state transitions, `internal/app` owns use cases and ports, `internal/httpapi` exposes the public gateway API, `internal/postgres` persists Payments and public idempotency records, `internal/mockbank` implements the outbound Mock Bank HTTP adapter, and `internal/uuidgen` generates gateway-owned Payment IDs and bank operation keys. This preserves dependency direction while making the Mock Bank a real project adapter.
+
+Three further packages joined this layout as the gateway grew, each an adapter or runtime concern rather than a new layer: `internal/serviceauth` verifies Service Credentials and Payment Scopes, `internal/observability` owns the Prometheus registry, metrics, and collectors, and `internal/idempotencycleanup` runs the periodic completed Idempotency Replay cleanup worker. They depend inward on the application and domain, which continue to depend on none of them.

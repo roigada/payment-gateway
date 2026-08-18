@@ -1,45 +1,24 @@
-.PHONY: demo demo-down demo-reset demo-smoke demo-tls demo-tls-down demo-tls-reset demo-tls-smoke image-smoke observability-check test validate-openapi
+.PHONY: help up down logs reset ps
 
-TLS_COMPOSE = docker compose -f compose.yaml -f compose.tls-demo.yaml
+COMPOSE := docker compose -f compose.yaml
 
-demo:
-	./scripts/ensure-demo-credentials.sh
-	docker compose up --build
+help: ## Show available commands
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-demo-down:
-	docker compose down
+up: ## Build and start the full local stack in the background
+	@$(COMPOSE) up --build -d
 
-demo-reset:
-	docker compose down -v
+down: ## Stop the full local stack while keeping its data volumes
+	@$(COMPOSE) down --remove-orphans
 
-demo-smoke:
-	./scripts/ensure-demo-credentials.sh
-	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./demo/smoke.sh
+logs: ## Stream logs from every service in the local stack
+	@$(COMPOSE) logs -f
 
-demo-tls:
-	./scripts/ensure-demo-credentials.sh
-	$(TLS_COMPOSE) up --build
+ps: ## Show the local stack's service status
+	@$(COMPOSE) ps
 
-demo-tls-down:
-	$(TLS_COMPOSE) down
+reset: ## Remove the full local stack and all of its volumes, then start clean
+	@$(COMPOSE) down --volumes --remove-orphans
+	@$(COMPOSE) up --build -d
 
-demo-tls-reset:
-	$(TLS_COMPOSE) down -v
-
-demo-tls-smoke:
-	./scripts/ensure-demo-credentials.sh
-	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./demo/tls-smoke.sh
-
-image-smoke:
-	./scripts/ensure-demo-credentials.sh
-	if [ -z "$$ORDER_SERVICE_CREDENTIAL" ]; then set -a; . ./.env; set +a; fi; ./scripts/image-smoke.sh
-
-observability-check:
-	jq -e 'any(.panels[]; .title == "Rate-limit rejections by route class" and any(.targets[]; .expr == "sum by (route_class) (rate(payment_gateway_rate_limit_rejections_total[1m]))"))' observability/grafana/dashboards/gateway-overview.json
-	docker compose run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
-
-test:
-	cd gateway && go test ./...
-
-validate-openapi:
-	cd gateway && go run ./cmd/openapi-validator
+.DEFAULT_GOAL := help

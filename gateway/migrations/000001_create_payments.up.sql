@@ -41,14 +41,19 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     request_fingerprint text NOT NULL CHECK (length(trim(request_fingerprint)) > 0),
     payment_id text CHECK (payment_id IS NULL OR payment_id ~ '^pay_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'),
     status text NOT NULL CHECK (status IN ('in_progress', 'completed')),
-    http_status integer CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+    failure_kind text CHECK (failure_kind IS NULL OR failure_kind IN ('authorization_expired')),
     payment_result jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     claimed_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
     PRIMARY KEY (operation, key),
     CONSTRAINT idempotency_records_completion_check CHECK (
-        (status = 'in_progress' AND http_status IS NULL AND payment_result IS NULL)
+        (status = 'in_progress' AND failure_kind IS NULL AND payment_result IS NULL AND completed_at IS NULL)
         OR
-        (status = 'completed' AND http_status IS NOT NULL AND payment_result IS NOT NULL AND jsonb_typeof(payment_result) = 'object')
+        (status = 'completed' AND payment_result IS NOT NULL AND jsonb_typeof(payment_result) = 'object' AND completed_at IS NOT NULL)
     )
 );
+
+CREATE INDEX idempotency_records_completed_at_idx
+    ON idempotency_records (completed_at)
+ WHERE status = 'completed';

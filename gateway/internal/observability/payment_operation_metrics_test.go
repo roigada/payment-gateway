@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that payment operation metrics records operation count and duration.
 func TestPaymentOperationMetricsRecordsOperationCountAndDuration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)
@@ -37,6 +38,7 @@ func TestPaymentOperationMetricsRecordsOperationCountAndDuration(t *testing.T) {
 	})
 }
 
+// Verifies that payment operation metrics records idempotency recovery.
 func TestPaymentOperationMetricsRecordsIdempotencyRecovery(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)
@@ -56,6 +58,26 @@ func TestPaymentOperationMetricsRecordsIdempotencyRecovery(t *testing.T) {
 	})
 }
 
+// Verifies that payment operation metrics records payment command release failure.
+func TestPaymentOperationMetricsRecordsPaymentCommandReleaseFailure(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewPaymentOperationMetrics(registry)
+	require.NoError(t, err)
+
+	metrics.RecordPaymentCommandReleaseFailure("capture_payment")
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	releaseFailures := metricFamilyByName(t, families, "payment_gateway_payment_command_release_failures_total")
+	require.Len(t, releaseFailures.GetMetric(), 1)
+	assert.Equal(t, float64(1), releaseFailures.GetMetric()[0].GetCounter().GetValue())
+	assertMetricLabels(t, releaseFailures.GetMetric()[0].GetLabel(), map[string]string{
+		"operation": "capture_payment",
+	})
+}
+
+// Verifies that payment operation metrics only records bounded idempotency recovery labels.
 func TestPaymentOperationMetricsOnlyRecordsBoundedIdempotencyRecoveryLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewPaymentOperationMetrics(registry)

@@ -1,11 +1,6 @@
 .git
 .gitignore
-Dockerfile
-README.md
-CONTEXT.md
-docs
-internal/**/*_test.go
-cmd/**/*_test.go
-**/*.test
-**/*.out
-**/coverage.*
+bin
+coverage.*
+*.out
+*.test

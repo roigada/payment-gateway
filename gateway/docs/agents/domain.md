@@ -11,7 +11,7 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ## File structure
 
-Gateway context inside the demo repo:
+Gateway context:
 
 ```
 /
@@ -36,4 +36,4 @@ If the concept you need isn't in the glossary yet, that's a signal: either you'r
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
-> Contradicts ADR-0007 (example decision), but worth reopening because...
+> Contradicts ADR-0001 (example decision), but worth reopening because...

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/roigada/payment-gateway/internal/app"
+	"github.com/roigada/payment-gateway/internal/domain"
 )
 
 const (
@@ -48,7 +49,7 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.config.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return
@@ -86,8 +87,16 @@ func (s *Handler) authorizePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A Payment left pending means the authorization outcome is not yet known
+	// and the command was accepted for later resolution; any other status is a
+	// created Payment.
+	status := http.StatusCreated
+	if result.Payment.Status == string(domain.PaymentStatusPending) {
+		status = http.StatusAccepted
+	}
+
 	w.Header().Set("Location", "/api/v1/payments/"+url.PathEscape(result.Payment.ID))
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, status, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +116,7 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 			ExpiryYear  int    `json:"expiry_year"`
 		} `json:"card"`
 	}
-	if err := decodeJSONRequest(w, r, &request, s.options.MaxRequestBodyBytes); err != nil {
+	if err := decodeJSONRequest(w, r, &request, s.config.MaxRequestBodyBytes); err != nil {
 		if errors.Is(err, errOversizedJSONBody) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
 			return
@@ -143,7 +152,7 @@ func (s *Handler) retryAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +188,7 @@ func (s *Handler) capturePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +224,7 @@ func (s *Handler) voidPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +260,7 @@ func (s *Handler) refundPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, result.HTTPStatus, newPaymentEnvelope(result.Payment))
+	writeJSON(w, http.StatusOK, newPaymentEnvelope(result.Payment))
 }
 
 func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +269,7 @@ func (s *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentReadTimeout)
 	defer cancel()
 	payment, err := s.payments.GetPayment(ctx, query)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -291,7 +300,7 @@ func (s *Handler) searchPayments(w http.ResponseWriter, r *http.Request) {
 		writePaymentServiceError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), s.options.PaymentReadTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.PaymentReadTimeout)
 	defer cancel()
 	payments, err := s.payments.SearchPayments(ctx, searchQuery)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

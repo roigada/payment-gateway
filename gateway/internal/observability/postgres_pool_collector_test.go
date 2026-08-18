@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that postgres pool collector reports database stats.
 func TestPostgresPoolCollectorReportsDatabaseStats(t *testing.T) {
 	db, err := sql.Open("pgx", "postgres://payment_gateway:payment_gateway@localhost:5432/payment_gateway?sslmode=disable")
 	require.NoError(t, err)
@@ -37,6 +38,7 @@ func TestPostgresPoolCollectorReportsDatabaseStats(t *testing.T) {
 	assert.NotNil(t, metricFamilyByName(t, families, "payment_gateway_postgres_pool_max_idle_time_closed_total"))
 }
 
+// Verifies that new postgres pool collector requires database.
 func TestNewPostgresPoolCollectorRequiresDatabase(t *testing.T) {
 	collector, err := NewPostgresPoolCollector(nil)
 

@@ -1,3 +1,0 @@
-# Retain completed idempotency replays for 24 hours
-
-The gateway guarantees an Idempotency Replay for 24 hours after a payment command completes. An application-owned hourly, best-effort worker deletes only completed idempotency records whose `completed_at` is older than that window; cleanup failures are observable and retried on the next run without affecting payment commands. In-progress claims are never deleted by this worker because they protect recovery of potentially ambiguous Mock Bank side effects through the existing Stuck Idempotency Claim path. Once a completed record is removed, the same Idempotency Key may start a new payment command.

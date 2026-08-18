@@ -40,18 +40,6 @@ func allDigits(value string) bool {
 	return true
 }
 
-func parsePaymentOperationInput(paymentID string, idempotencyKey string) (domain.PaymentID, string, error) {
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
-	if idempotencyKey == "" {
-		return "", "", NewInvalidPaymentInputError("idempotency key is required", nil)
-	}
-	parsedPaymentID, err := parsePaymentID(paymentID)
-	if err != nil {
-		return "", "", err
-	}
-	return parsedPaymentID, idempotencyKey, nil
-}
-
 func parsePaymentID(value string) (domain.PaymentID, error) {
 	paymentID, err := domain.ParsePaymentID(strings.TrimSpace(value))
 	if err != nil {

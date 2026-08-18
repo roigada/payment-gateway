@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Verifies that idempotency replay cleanup metrics record bounded outcomes and deleted records.
 func TestIdempotencyReplayCleanupMetricsRecordBoundedOutcomesAndDeletedRecords(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewIdempotencyReplayCleanupMetrics(registry)
