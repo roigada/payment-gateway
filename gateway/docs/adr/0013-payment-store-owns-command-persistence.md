@@ -16,6 +16,6 @@ The store also exposes payment query methods because queries and non-command lif
 
 The application layer must not know about `sql.Tx`, `*sql.DB`, table names, row locks, transaction mechanics, or which persistence fields must be combined for each command claim. Those details are Postgres adapter concerns. This keeps the use case code focused on Payment rules, public replay behavior, and Mock Bank calls.
 
-This decision does not contradict ADR-0012. The Postgres adapter may use short internal database transactions around local persistence, but it must not hold a transaction across a Mock Bank call. Payment commands therefore use one transaction before the bank call to persist the claim and recovery facts, then a separate transaction after the bank result to persist the Payment transition and replay snapshot atomically.
+This decision does not contradict ADR-0007. The Postgres adapter may use short internal database transactions around local persistence, but it must not hold a transaction across a Mock Bank call. Payment commands therefore use one transaction before the bank call to persist the claim and recovery facts, then a separate transaction after the bank result to persist the Payment transition and replay snapshot atomically.
 
 The key reliability rule is that a completed bank/business outcome must not leave the Payment row changed while the public idempotency record remains `in_progress`. If `CompletePaymentCommand` cannot complete the idempotency snapshot, the Payment transition rolls back with it.

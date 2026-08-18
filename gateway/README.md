@@ -7,13 +7,17 @@ The public API authorizes, retries unknown authorization outcomes, captures, voi
 ## Structure
 
 ```text
-cmd/payment-gateway application wiring and HTTP server startup
-internal/domain      domain model and invariants
-internal/app         use cases, ports, and application-owned time
-internal/httpapi     JSON HTTP adapter
-internal/postgres    Postgres adapter
-internal/uuidgen     UUID-backed ID generator adapter
-migrations           plain SQL database migrations
+cmd/payment-gateway         application wiring and HTTP server startup
+internal/domain             domain model and invariants
+internal/app                use cases, ports, and application-owned time
+internal/httpapi            JSON HTTP adapter
+internal/postgres           Postgres adapter
+internal/mockbank           outbound Mock Bank HTTP adapter
+internal/serviceauth        Service Credential verification and Payment Scopes
+internal/observability      Prometheus registry, metrics, and collectors
+internal/idempotencycleanup completed Idempotency Replay cleanup worker
+internal/uuidgen            UUID-backed ID generator adapter
+migrations                  plain SQL database migrations
 ```
 
 The dependency direction is inward: adapters depend on the application and domain, while the domain does not depend on HTTP, Postgres, UUID libraries, or JSON.
@@ -25,7 +29,7 @@ The dependency direction is inward: adapters depend on the application and domai
 - A Payment has one `amount` in cents and the fixed `USD` currency.
 - Public statuses are `pending`, `authorized`, `expired`, `declined`, `captured`, `voided`, and `refunded`.
 - `pending` only means the Mock Bank authorization outcome is unknown. It is not used for capture, void, or refund processing.
-- `expired` means an approved authorization can no longer be captured or voided. Authorized responses include `authorization_expires_at`.
+- `expired` means the Mock Bank has definitively confirmed that an approved authorization can no longer be captured or voided. Authorized responses include `authorization_expires_at`, which predicts that outcome but does not itself transition the Payment.
 - Capture, Void, and Refund are client-driven operations and always apply to the full Payment Amount. Partial capture, partial void, and partial refund are not supported.
 - Bank References, including Mock Bank authorization, capture, void, refund, and operation keys, are stored internally so the gateway can continue provider communication and recover retries. They are never returned in public API responses.
 
@@ -50,6 +54,7 @@ DATABASE_STARTUP_TIMEOUT           optional initial database connectivity deadli
 LOG_LEVEL                          optional JSON log level: debug, info, warn, or error; defaults to info
 PAYMENT_COMMAND_TIMEOUT            optional synchronous Payment command deadline, defaults to 10s
 PAYMENT_READ_TIMEOUT               optional Payment read deadline, defaults to 3s
+READINESS_CHECK_TIMEOUT            optional readiness database-check deadline, defaults to 2s
 MOCK_BANK_INITIAL_ATTEMPT_TIMEOUT  optional initial Mock Bank attempt deadline, defaults to 2s
 MOCK_BANK_RETRY_DELAY              optional cancellable delay before one Mock Bank retry, defaults to 250ms
 MOCK_BANK_RETRY_ATTEMPT_TIMEOUT    optional second Mock Bank attempt deadline, defaults to 5s
@@ -78,6 +83,7 @@ FINGERPRINT_SECRET                 required HMAC secret for request and authoriz
 SERVICE_CREDENTIAL_HMAC_KEY         required base64url-encoded HMAC key (at least 32 bytes) for Service Credential verification
 ORDER_SERVICE_CREDENTIALS           required active credentials as digest=scope+scope entries, separated by commas
 ADDR                              optional HTTP listen address, defaults to :8080
+METRICS_ADDR                      optional operational metrics listen address, defaults to :9091; must differ from ADDR
 ```
 
 Example:
@@ -103,6 +109,7 @@ export MOCK_BANK_RESPONSE_HEADER_TIMEOUT='6s'
 export MOCK_BANK_IDLE_CONNECTION_TIMEOUT='60s'
 export PAYMENT_COMMAND_TIMEOUT='10s'
 export PAYMENT_READ_TIMEOUT='3s'
+export READINESS_CHECK_TIMEOUT='2s'
 export HTTP_READ_HEADER_TIMEOUT='5s'
 export HTTP_READ_TIMEOUT='15s'
 export HTTP_WRITE_TIMEOUT='15s'
@@ -116,11 +123,12 @@ export FINGERPRINT_SECRET='local-development-secret'
 export SERVICE_CREDENTIAL_HMAC_KEY='replace-with-a-base64url-encoded-32-byte-key'
 export ORDER_SERVICE_CREDENTIALS='replace-with-a-configured-credential-digest=payments:read+payments:write'
 export ADDR=':8080'
+export METRICS_ADDR=':9091'
 ```
 
 The service validates that the Mock Bank base URL is configured and absolute. Mock Bank unavailability does not prevent startup, but payment commands that need the bank will return gateway-owned bank error responses while it is unavailable.
 
-Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks have a fixed two-second database-check deadline. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
+Payment reads use the configurable `PAYMENT_READ_TIMEOUT` deadline; readiness checks use the configurable `READINESS_CHECK_TIMEOUT` database-check deadline, which defaults to two seconds. A Payment Command Timeout is an unresolved API outcome, not a failed Payment: retry it with the same Idempotency Key so the gateway can recover through its stored Bank Operation Key.
 
 ## Service credentials
 
@@ -197,6 +205,15 @@ payment_gateway_idempotency_recovery_total{operation,result}
 ```
 
 `operation` is one of `authorize_payment`, `retry_authorization`, `capture_payment`, `void_payment`, or `refund_payment`; `result` is one of `attempted`, `recovered`, `unrecoverable`, or `conflict`. The metric never labels public Idempotency Keys, Payment IDs, card data, bank IDs, or raw errors.
+
+Aging Pending Payment visibility, collected at scrape time:
+
+```text
+payment_gateway_pending_payments_total
+payment_gateway_oldest_pending_payment_age_seconds
+```
+
+Both are unlabelled gauges. The first is the current number of `pending` Payments; the second is the age in seconds of the oldest one, or zero when none exist. They carry no Payment, Order, Customer, or bank identifiers. A rising oldest age means Payments are not being resolved through Authorization Retry. A failed collection is skipped rather than reported as zero, so the gauges go absent instead of falsely reading empty.
 
 Best-effort failed releases of an in-progress Idempotency Claim export:
 
@@ -319,7 +336,7 @@ curl -i http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655
 
 ### Capture, Void, and Refund
 
-Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client. Capture and Void are rejected after `authorization_expires_at`.
+Capture, Void, and Refund take no request body. Each operation is full-amount only and must be explicitly requested by the client. Capture and Void always call the Mock Bank, including after `authorization_expires_at` has passed; the gateway transitions the Payment to `expired` and rejects the command only when the bank confirms the authorization can no longer be used.
 
 ```sh
 curl -i -X POST http://localhost:8080/api/v1/payments/pay_550e8400-e29b-41d4-a716-446655440000/capture \
