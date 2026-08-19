@@ -1,6 +1,7 @@
 package serviceauth
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,9 +49,26 @@ func TestAuthenticatorRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
-// Verifies that generate credential produces opaque high entropy value.
+// Verifies that generate credential produces an opaque, URL-safe value carrying
+// the full credential entropy, and that successive values do not repeat.
 func TestGenerateCredentialProducesOpaqueHighEntropyValue(t *testing.T) {
-	credential, err := GenerateCredential()
-	require.NoError(t, err)
-	assert.Len(t, credential, 43)
+	const generated = 100
+
+	seen := make(map[string]struct{}, generated)
+	for range generated {
+		credential, err := GenerateCredential()
+		require.NoError(t, err)
+
+		raw, err := base64.RawURLEncoding.DecodeString(credential)
+		require.NoError(t, err, "credential must decode as unpadded base64url")
+		assert.Len(t, raw, credentialBytes, "credential must carry the full random payload")
+		assert.NotEqual(t, make([]byte, credentialBytes), raw, "credential must not be all zero bytes")
+		assert.Len(t, credential, base64.RawURLEncoding.EncodedLen(credentialBytes))
+
+		_, repeated := seen[credential]
+		assert.False(t, repeated, "credentials must not repeat")
+		seen[credential] = struct{}{}
+	}
+
+	assert.Len(t, seen, generated)
 }
